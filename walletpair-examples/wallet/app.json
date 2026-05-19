@@ -8,7 +8,12 @@
     "scheme": "wallet",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "WalletPair uses Bluetooth to connect directly with dApps",
+        "NSBluetoothPeripheralUsageDescription": "WalletPair uses Bluetooth to advertise as a wallet"
+      },
+      "bundleIdentifier": "com.shelchin.wallet"
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +23,15 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.shelchin.wallet"
+      "package": "com.shelchin.wallet",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.BLUETOOTH_ADVERTISE",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",

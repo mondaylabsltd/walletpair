@@ -9,6 +9,23 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { bytesToHex, hexToBytes } from './walletpair';
 
 const KEY = 'wp_wallet_session';
+const ETH_KEY = 'wp_eth_key';
+
+// ---------------------------------------------------------------------------
+// ETH key persistence (independent of session — survives navigation/remount)
+// ---------------------------------------------------------------------------
+
+export async function saveEthKey(hex: string): Promise<void> {
+  await AsyncStorage.setItem(ETH_KEY, hex);
+}
+
+export async function loadEthKey(): Promise<string | null> {
+  return AsyncStorage.getItem(ETH_KEY);
+}
+
+export async function clearEthKey(): Promise<void> {
+  await AsyncStorage.removeItem(ETH_KEY);
+}
 
 export interface SessionData {
   channelId: string;

@@ -129,6 +129,7 @@ export function unsealPayload(
 export interface PairingParams {
   ch: string;
   pubkey: string;
+  /** Empty string = BLE mode (no relay). */
   relay: string;
   name?: string;
 }
@@ -138,9 +139,13 @@ export function parsePairingUri(uri: string): PairingParams {
   const params = new URLSearchParams(qs);
   const ch = params.get('ch');
   const pubkey = params.get('pubkey');
-  const relay = params.get('relay');
-  if (!ch || !pubkey || !relay) {
-    throw new Error('Invalid pairing URI: missing ch, pubkey, or relay');
+  if (!ch || !pubkey) {
+    throw new Error('Invalid pairing URI: missing ch or pubkey');
   }
-  return { ch, pubkey, relay, name: params.get('name') ?? undefined };
+  return {
+    ch,
+    pubkey,
+    relay: params.get('relay') ?? '',
+    name: params.get('name') ?? undefined,
+  };
 }

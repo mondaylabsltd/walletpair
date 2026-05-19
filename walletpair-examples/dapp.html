@@ -63,12 +63,25 @@ button.danger { background: var(--red); color: #fff; }
   </header>
 
   <section>
-    <h3>Relay Connection</h3>
-    <div class="row">
-      <input id="relayUrl" value="ws://localhost:8080/v1" placeholder="ws://...">
-      <button id="btnConnect" class="primary">Connect</button>
-      <button id="btnReset" class="danger hidden">Reset</button>
+    <h3>Transport</h3>
+    <div class="row" id="transportPicker">
+      <button id="btnModeWs" class="primary">WebSocket</button>
+      <button id="btnModeBle">Bluetooth</button>
     </div>
+    <div id="wsConfig" class="mt">
+      <div class="row">
+        <input id="relayUrl" value="ws://localhost:8080/v1" placeholder="ws://...">
+        <button id="btnConnect" class="primary">Connect</button>
+      </div>
+    </div>
+    <div id="bleConfig" class="hidden mt">
+      <div class="row">
+        <button id="btnBleCreate" class="primary">Create Channel</button>
+        <button id="btnBleScan" class="primary" disabled>Scan for Wallet</button>
+      </div>
+      <div id="bleStatus" style="color:var(--muted);font-size:12px;margin-top:6px"></div>
+    </div>
+    <button id="btnReset" class="danger hidden mt">Reset</button>
   </section>
 
   <section id="secPairing">
@@ -165,6 +178,44 @@ function unsealPayload(sessionKey, channelIdHex, sealed) {
 }
 
 // ---------------------------------------------------------------------------
+// BLE constants and framing (Section 19.3 / 19.5)
+// ---------------------------------------------------------------------------
+const BLE_SERVICE_UUID     = 'e3a10001-7770-4270-8000-000077700001';
+const BLE_WRITE_CHAR_UUID  = 'e3a10002-7770-4270-8000-000077700001';
+const BLE_NOTIFY_CHAR_UUID = 'e3a10003-7770-4270-8000-000077700001';
+const MAX_BLE_FRAGMENT = 182;
+
+function bleFrameMessage(jsonStr) {
+  const payload = new TextEncoder().encode(jsonStr);
+  const frames = [];
+  if (!payload.length) { const f = new Uint8Array(3); f[0] = 0x03; return [f]; }
+  for (let off = 0; off < payload.length; off += MAX_BLE_FRAGMENT) {
+    const isFirst = off === 0, end = Math.min(off + MAX_BLE_FRAGMENT, payload.length), isLast = end === payload.length;
+    const frag = payload.slice(off, end), frame = new Uint8Array(3 + frag.length);
+    frame[0] = (isFirst ? 1 : 0) | (isLast ? 2 : 0);
+    if (isFirst) { frame[1] = (payload.length >> 8) & 0xff; frame[2] = payload.length & 0xff; }
+    frame.set(frag, 3);
+    frames.push(frame);
+  }
+  return frames;
+}
+
+class BleDefragmenter {
+  constructor() { this.chunks = []; }
+  push(data) {
+    if (data.byteLength < 3) return null;
+    const view = new Uint8Array(data.buffer ?? data);
+    const isFirst = !!(view[0] & 1), isLast = !!(view[0] & 2);
+    if (isFirst) this.chunks = [view.slice(3)]; else this.chunks.push(view.slice(3));
+    if (isLast) { const total = this.chunks.reduce((s, c) => s + c.length, 0); const buf = new Uint8Array(total); let o = 0; for (const c of this.chunks) { buf.set(c, o); o += c.length; } this.chunks = []; return new TextDecoder().decode(buf); }
+    return null;
+  }
+  reset() { this.chunks = []; }
+}
+
+const WEB_BLE_SUPPORTED = typeof navigator !== 'undefined' && !!navigator.bluetooth;
+
+// ---------------------------------------------------------------------------
 // State persistence (sessionStorage)
 // ---------------------------------------------------------------------------
 const STORE_KEY = 'wp_dapp';
@@ -224,6 +275,13 @@ const S = {
   reqCounter: 0,
   paired: false,        // true after first successful accept (enables auto-accept)
   intentionalClose: false,
+  // Transport mode
+  transport: 'ws',      // 'ws' | 'ble'
+  // BLE state (Web Bluetooth Central)
+  bleDevice: null,
+  bleWriteChar: null,
+  bleNotifyChar: null,
+  bleDefrag: new BleDefragmenter(),
 };
 
 const BACKOFF = [1000, 2000, 5000, 10000, 30000];
@@ -235,6 +293,13 @@ const $ = (id) => document.getElementById(id);
 const relayUrlEl = $('relayUrl');
 const btnConnect = $('btnConnect');
 const btnReset = $('btnReset');
+const btnModeWs = $('btnModeWs');
+const btnModeBle = $('btnModeBle');
+const wsConfig = $('wsConfig');
+const bleConfig = $('bleConfig');
+const btnBleCreate = $('btnBleCreate');
+const btnBleScan = $('btnBleScan');
+const bleStatusEl = $('bleStatus');
 const dot = $('dot');
 const statusText = $('statusText');
 const pairingUriEl = $('pairingUri');
@@ -315,15 +380,119 @@ function openWs(onOpen) {
 }
 
 function sendRaw(msg) {
-  if (!S.ws || S.ws.readyState !== WebSocket.OPEN) return;
-  S.ws.send(JSON.stringify(msg));
+  if (S.transport === 'ble') {
+    sendViaBle(msg);
+  } else {
+    if (!S.ws || S.ws.readyState !== WebSocket.OPEN) return;
+    S.ws.send(JSON.stringify(msg));
+  }
   const type = msg.t;
   const detail = type === 'req' ? `id=${msg.id} method=${msg.method}` : type === 'close' ? `reason=${msg.reason}` : '';
   log('out', type, detail);
 }
 
 // ---------------------------------------------------------------------------
-// Fresh connect (first time)
+// BLE Central: Web Bluetooth (dApp connects TO wallet's GATT server)
+// ---------------------------------------------------------------------------
+
+async function sendViaBle(msg) {
+  if (!S.bleWriteChar) return;
+  const frames = bleFrameMessage(JSON.stringify(msg));
+  for (const frame of frames) {
+    await S.bleWriteChar.writeValueWithoutResponse(frame);
+  }
+}
+
+async function bleConnect() {
+  bleStatusEl.textContent = 'Scanning...';
+  try {
+    log('out', 'ble', '1. requesting device...');
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'WalletPair' }],
+      optionalServices: [BLE_SERVICE_UUID],
+    });
+    log('in', 'ble', `2. device selected: ${device.name} (${device.id})`);
+    S.bleDevice = device;
+    device.addEventListener('gattserverdisconnected', onBleDisconnect);
+
+    bleStatusEl.textContent = 'Connecting GATT...';
+    log('out', 'ble', '3. connecting GATT...');
+    const server = await device.gatt.connect();
+    log('in', 'ble', '4. GATT connected');
+
+    bleStatusEl.textContent = 'Discovering service...';
+    log('out', 'ble', `5. getPrimaryService(${BLE_SERVICE_UUID.slice(0,8)}...)`);
+    const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+    log('in', 'ble', '6. service found');
+
+    log('out', 'ble', '7. getting write characteristic...');
+    S.bleWriteChar = await service.getCharacteristic(BLE_WRITE_CHAR_UUID);
+    log('in', 'ble', '8. write char OK');
+
+    log('out', 'ble', '9. getting notify characteristic...');
+    S.bleNotifyChar = await service.getCharacteristic(BLE_NOTIFY_CHAR_UUID);
+    log('in', 'ble', '10. notify char OK');
+
+    log('out', 'ble', '11. subscribing to notifications...');
+    await S.bleNotifyChar.startNotifications();
+    S.bleNotifyChar.addEventListener('characteristicvaluechanged', onBleNotification);
+    log('in', 'ble', '12. subscribed — waiting for wallet join');
+
+    bleStatusEl.textContent = 'BLE connected — waiting for wallet join';
+  } catch (err) {
+    bleStatusEl.textContent = `BLE error: ${err.message}`;
+    log('err', 'ble', `failed at step: ${err.message}`);
+  }
+}
+
+function onBleNotification(event) {
+  const data = new Uint8Array(event.target.value.buffer);
+  const json = S.bleDefrag.push(data);
+  if (json) {
+    try { handleMessage(JSON.parse(json), null); } catch {}
+  }
+}
+
+function onBleDisconnect() {
+  if (S.intentionalClose) return;
+  log('err', 'ble', 'disconnected');
+  bleStatusEl.textContent = 'BLE disconnected';
+  setPhase('closed');
+}
+
+// ---------------------------------------------------------------------------
+// BLE: create channel locally (dApp is its own adapter in BLE mode)
+// ---------------------------------------------------------------------------
+
+function freshConnectBle() {
+  S.intentionalClose = false;
+  S.transport = 'ble';
+  S.privKey = x25519.utils.randomPrivateKey();
+  S.pubKey = x25519.getPublicKey(S.privKey);
+  S.pubKeyB64 = b64urlEncode(S.pubKey);
+  S.channelId = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+  S.sendSeq = 0;
+  S.remotePubKey = null;
+  S.sessionKey = null;
+  S.reqCounter = 0;
+  S.paired = false;
+  S.resumeToken = null;
+
+  // Local adapter: self-generate ready.waiting
+  setPhase('waiting');
+  log('in', 'ready', 'state=waiting (BLE local adapter)');
+
+  // Show QR without relay param (signals BLE mode to wallet)
+  const uri = `walletpair:?ch=${S.channelId}&pubkey=${S.pubKeyB64}`;
+  pairingUriEl.textContent = uri;
+  renderQR(uri);
+  btnBleScan.disabled = false;
+  bleStatusEl.textContent = 'Show QR to wallet, then click Scan';
+  saveState();
+}
+
+// ---------------------------------------------------------------------------
+// Fresh connect via WebSocket (first time)
 // ---------------------------------------------------------------------------
 function freshConnect() {
   S.intentionalClose = false;
@@ -455,10 +624,15 @@ function handleMessage(msg, ws) {
       const shared = x25519.getSharedSecret(S.privKey, S.remotePubKey);
       S.sessionKey = deriveSessionKey(shared, S.channelId);
 
+      // BLE adapter duty: send ready.waiting to the wallet
+      if (S.transport === 'ble') {
+        sendViaBle({ v: 1, t: 'ready', ch: S.channelId, state: 'waiting', role: 'wallet', self: joinPubKey, resume: crypto.randomUUID() });
+      }
+
       if (knownWallet) {
         // Auto-accept: same wallet reconnected after relay restart
         log('in', 'auto_accept', 'known wallet, skipping pairing code');
-        sendRaw({ v: 1, t: 'accept', ch: S.channelId, from: S.pubKeyB64, target: joinPubKey });
+        doAccept();
       } else {
         // First time: show pairing code for manual verification
         const code = computePairingCode(S.sessionKey, S.channelId);
@@ -522,7 +696,18 @@ function handleMessage(msg, ws) {
 function doAccept() {
   if (S.phase !== 'pending_accept' || !S.remotePubKey) return;
   S.paired = true;
-  sendRaw({ v: 1, t: 'accept', ch: S.channelId, from: S.pubKeyB64, target: b64urlEncode(S.remotePubKey) });
+  const walletPubB64 = b64urlEncode(S.remotePubKey);
+
+  if (S.transport === 'ble') {
+    // BLE mode: dApp IS the adapter. Generate ready.connected for both sides.
+    // Send ready.connected to wallet via BLE
+    sendViaBle({ v: 1, t: 'ready', ch: S.channelId, state: 'connected', role: 'wallet', self: walletPubB64, remote: S.pubKeyB64, resume: crypto.randomUUID() });
+    // Self-process ready.connected (local adapter → dApp)
+    handleMessage({ t: 'ready', state: 'connected', role: 'dapp', self: S.pubKeyB64, remote: walletPubB64, resume: crypto.randomUUID(), ch: S.channelId, v: 1 }, null);
+  } else {
+    // WS mode: relay handles ready generation, just send accept
+    sendRaw({ v: 1, t: 'accept', ch: S.channelId, from: S.pubKeyB64, target: walletPubB64 });
+  }
   saveState();
 }
 
@@ -555,9 +740,15 @@ function doPing() {
 function doFullClose() {
   S.intentionalClose = true;
   stopReconnect();
-  if (S.ws && S.ws.readyState === WebSocket.OPEN) {
+  if (S.channelId) {
     sendRaw({ v: 1, t: 'close', ch: S.channelId, from: S.pubKeyB64, reason: 'normal' });
   }
+  // BLE cleanup
+  if (S.bleDevice && S.bleDevice.gatt?.connected) {
+    S.bleDevice.gatt.disconnect();
+  }
+  S.bleDevice = null; S.bleWriteChar = null; S.bleNotifyChar = null;
+  S.bleDefrag.reset();
   setPhase('closed');
   clearState();
 }
@@ -566,14 +757,35 @@ function doReset() {
   doFullClose();
   S.channelId = null;
   S.paired = false;
+  S.transport = 'ws';
   setPhase('idle');
   pairingUriEl.textContent = '--';
+  qrCanvas.style.display = 'none';
+  bleStatusEl.textContent = '';
+  btnBleScan.disabled = true;
 }
 
 // ---------------------------------------------------------------------------
 // Event bindings
 // ---------------------------------------------------------------------------
+// Transport mode switching
+function setTransportMode(mode) {
+  S.transport = mode;
+  btnModeWs.className = mode === 'ws' ? 'primary' : '';
+  btnModeBle.className = mode === 'ble' ? 'primary' : '';
+  wsConfig.classList.toggle('hidden', mode !== 'ws');
+  bleConfig.classList.toggle('hidden', mode !== 'ble');
+  if (mode === 'ble' && !WEB_BLE_SUPPORTED) {
+    bleStatusEl.textContent = 'Web Bluetooth not supported in this browser (use Chrome)';
+    btnBleCreate.disabled = true;
+  }
+}
+btnModeWs.onclick = () => setTransportMode('ws');
+btnModeBle.onclick = () => setTransportMode('ble');
+
 btnConnect.onclick = freshConnect;
+btnBleCreate.onclick = freshConnectBle;
+btnBleScan.onclick = bleConnect;
 btnReset.onclick = doReset;
 btnCopy.onclick = () => { navigator.clipboard.writeText(pairingUriEl.textContent); btnCopy.textContent = 'Copied!'; setTimeout(() => btnCopy.textContent = 'Copy URI', 1500); };
 btnAccept.onclick = doAccept;
@@ -587,14 +799,14 @@ methodSel.onchange = () => {
 };
 
 // ---------------------------------------------------------------------------
-// On page load: restore session if available
+// On page load: restore session if available (WS only — BLE is not resumable)
 // ---------------------------------------------------------------------------
 if (loadState()) {
   log('in', 'restore', `restored session ch=${S.channelId.slice(0, 12)}... paired=${S.paired}`);
   const restoredUri = `walletpair:?ch=${S.channelId}&pubkey=${S.pubKeyB64}&relay=${encodeURIComponent(relayUrlEl.value)}`;
   pairingUriEl.textContent = restoredUri;
   renderQR(restoredUri);
-  // Auto-reconnect
+  setTransportMode('ws');
   startReconnect();
 }
 </script>
