@@ -23,6 +23,7 @@ describe('WalletPairProvider', () => {
   let sessionKey: Uint8Array;
 
   async function setupConnectedSession(chainId = 1) {
+    walletSendSeq = 0;
     transport = new MockTransport();
     session = new DAppSession({ transport });
     provider = new WalletPairProvider({ session, chainId });
@@ -49,13 +50,15 @@ describe('WalletPairProvider', () => {
     } as ProtocolMessage);
   }
 
+  let walletSendSeq = 0;
+
   function respondToLatestReq(result: unknown, ok = true) {
     const reqMsg = [...transport.sent].reverse().find(m => m.t === 'req') as any;
     if (!reqMsg) throw new Error('No req found');
     transport.receive({
       v: 1, t: 'res', ch: session.channelId,
       id: reqMsg.id, from: walletKp.publicKeyB64, ok,
-      sealed: sealPayload(sessionKey, session.channelId, 0, result),
+      sealed: sealPayload(sessionKey, session.channelId, walletSendSeq++, result),
     } as ProtocolMessage);
   }
 
@@ -150,9 +153,10 @@ describe('WalletPairProvider', () => {
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
       expect(reqMsg.method).toBe('wallet_signMessage');
 
+      // Wallet responds with { signature }, mapResponse unwraps to just the string
       respondToLatestReq({ signature: '0xsig...' });
       const result = await promise;
-      expect(result).toEqual({ signature: '0xsig...' });
+      expect(result).toBe('0xsig...');
     });
   });
 
@@ -161,7 +165,7 @@ describe('WalletPairProvider', () => {
   // -----------------------------------------------------------------------
 
   describe('eth_sendTransaction', () => {
-    it('maps to wallet_signTransaction', async () => {
+    it('maps to wallet_sendTransaction', async () => {
       await setupConnectedSession();
 
       const tx = { to: '0x123', value: '0x0', data: '0x' };
@@ -172,11 +176,12 @@ describe('WalletPairProvider', () => {
       await flushMicrotasks();
 
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.method).toBe('wallet_signTransaction');
+      expect(reqMsg.method).toBe('wallet_sendTransaction');
 
+      // mapResponse unwraps { txHash } to just the hash string
       respondToLatestReq({ txHash: '0xtx...' });
       const result = await promise;
-      expect(result).toEqual({ txHash: '0xtx...' });
+      expect(result).toBe('0xtx...');
     });
   });
 

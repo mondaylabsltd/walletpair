@@ -169,22 +169,40 @@ export class WalletPairProvider implements EIP1193Provider {
 
     this.session.on('event', ({ event, data }) => {
       if (event === 'accountsChanged') {
-        // Sub-protocol format: { accounts: [{ address, chains }] }
-        const payload = data as { accounts?: { address: string; chains?: string[] }[] };
-        if (payload?.accounts && Array.isArray(payload.accounts)) {
-          this.accounts = payload.accounts.map((a) => a.address);
+        // Handle both formats:
+        // - Simple: { accounts: ['0x...'] } or just ['0x...']
+        // - Sub-protocol: { accounts: [{ address: '0x...', chains?: [...] }] }
+        const payload = data as { accounts?: (string | { address: string })[] } | string[];
+        const rawAccounts = Array.isArray(payload) ? payload : (payload as any)?.accounts;
+        if (Array.isArray(rawAccounts)) {
+          this.accounts = rawAccounts.map((a: string | { address: string }) =>
+            typeof a === 'string' ? a : a.address,
+          );
           this.emitter.emit('accountsChanged', this.accounts);
         }
       } else if (event === 'chainChanged') {
-        // Sub-protocol format: { chain: "eip155:137" }
-        const payload = data as { chain?: string };
-        const caip2 = payload?.chain;
-        if (caip2 && typeof caip2 === 'string') {
-          const newChainId = evmNumericChainId(caip2) ?? this.chainId;
-          if (newChainId !== this.chainId) {
-            this.chainId = newChainId;
-            this.emitter.emit('chainChanged', `0x${newChainId.toString(16)}`);
+        // Handle multiple formats:
+        // - { chainId: 'eip155:137' } or { chainId: '0x89' } or { chainId: 137 }
+        // - { chain: 'eip155:137' }
+        // - raw string 'eip155:137' or '0x89'
+        const raw = typeof data === 'object' && data !== null
+          ? (data as any).chainId ?? (data as any).chain
+          : data;
+        let newChainId: number | null = null;
+        if (typeof raw === 'string') {
+          if (raw.startsWith('eip155:')) {
+            newChainId = evmNumericChainId(raw);
+          } else if (raw.startsWith('0x')) {
+            newChainId = Number.parseInt(raw, 16);
+          } else {
+            newChainId = Number.parseInt(raw, 10) || null;
           }
+        } else if (typeof raw === 'number') {
+          newChainId = raw;
+        }
+        if (newChainId != null && newChainId !== this.chainId) {
+          this.chainId = newChainId;
+          this.emitter.emit('chainChanged', `0x${newChainId.toString(16)}`);
         }
       }
     });
