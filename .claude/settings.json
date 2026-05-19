@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:wagmi.sh)",
+      "Bash(./gradlew :ble-peripheral:compileDebugKotlin)",
+      "Bash(cargo clippy:*)"
+    ]
+  }
+}
