@@ -264,8 +264,9 @@ Mapping:
 | `res` with `ok=false` | `error` | yes, always required |
 | `evt` | `data` | yes, if data exists |
 
-A `req` with no params, or an `evt` with no data, may omit `sealed`. A `res`
-with `ok=false` must always include `sealed` (the encrypted error object).
+A `req` with no params, a `res` with `ok=true` and no return value, or an
+`evt` with no data, may omit `sealed`. A `res` with `ok=false` must always
+include `sealed` (the encrypted error object).
 
 Encryption uses ChaCha20-Poly1305:
 
@@ -280,13 +281,18 @@ its own send counter, starting at 0 and incrementing by 1 for each message
 that carries a `sealed` field. Messages without `sealed` (e.g., a `req` with
 no params) do not consume a sequence number.
 
-The receiver tracks the remote peer's sequence counter. On receiving a message
-with `sealed`, the receiver reads the 4-byte sequence prefix and must reject
-the message if the sequence number is not strictly equal to the expected next
-value (last accepted + 1). This makes replay and reorder detection trivial.
+The receiver tracks the highest accepted sequence number from the remote peer
+(initially -1, meaning no message received yet). On receiving a message with
+`sealed`, the receiver reads the 4-byte sequence prefix and must reject the
+message if the sequence number is not strictly greater than the last accepted
+value. After accepting, the receiver updates its tracking value.
 
-Sequence counters are persisted across reconnects and never reset. See
-Section 14 for details.
+During normal operation on an ordered transport, sequence numbers will arrive
+consecutively (0, 1, 2, ...). After a reconnect, there may be gaps due to
+in-flight messages lost during the transport drop; these gaps are expected and
+valid (see Section 14).
+
+Sequence counters are persisted across reconnects and never reset.
 
 Example `req` with encrypted params:
 
@@ -765,10 +771,10 @@ send and receive sequence counters across reconnects and continue from the
 persisted values. **Sequence counters must never be reset**, because doing so
 would cause nonce reuse and break AEAD security.
 
-After reconnect, the receiver must accept any sequence number that is greater
-than the last accepted value (allowing gaps, because in-flight messages may
-have been lost when the transport dropped). This is the only case where
-non-consecutive sequence numbers are valid.
+After reconnect, there may be gaps in the sequence numbers (in-flight messages
+lost when the transport dropped). The sequence validation rule in Section 7.4
+(must be strictly greater than last accepted) already handles this correctly
+without special-case logic.
 
 If the token is invalid, the relay rejects with:
 
@@ -1009,15 +1015,16 @@ Service UUID: to be assigned
 
 ### 19.4 Flow
 
-1. DApp creates `ch` and exposes pairing URI via QR, NFC, or BLE advertisement.
-2. Wallet discovers the pairing URI and obtains the dApp's public key.
-3. Wallet connects via BLE and sends `join` with public key and capabilities.
-4. BLE stack sends `ready.waiting` to both sides.
-5. Both sides compute session key and display pairing code.
-6. User confirms. DApp sends `accept`.
-7. BLE stack locally generates `ready.connected` for both sides.
-8. DApp sends `req`. Wallet sends `res` and optional `evt`.
-9. All payloads are encrypted with the session key.
+1. DApp creates `ch`. BLE adapter returns `ready.waiting` to the dApp.
+2. DApp exposes pairing URI via QR, NFC, or BLE advertisement.
+3. Wallet discovers the pairing URI and obtains the dApp's public key.
+4. Wallet connects via BLE and sends `join` with public key and capabilities.
+5. BLE adapter forwards `join` to dApp and sends `ready.waiting` to wallet.
+6. Both sides compute session key and display pairing code.
+7. User confirms. DApp sends `accept`.
+8. BLE adapter generates `ready.connected` for both sides.
+9. DApp sends `req`. Wallet sends `res` and optional `evt`.
+10. All payloads are encrypted with the session key.
 
 ### 19.5 Message Framing
 
@@ -1069,7 +1076,8 @@ The relay operator, network attacker, or eavesdropper should not be able to:
 3. `resume` is secret and must be stored like a session token.
 4. User confirmation of pairing code proves absence of MITM, not identity.
 5. Ephemeral key pairs must be generated per channel.
-6. Implementations must reject messages with unexpected sequence numbers.
+6. Implementations must reject messages with sequence numbers that are not
+   strictly greater than the last accepted value.
 7. The relay must not log or store `sealed` content beyond delivery.
 8. Sequence counters must never be reset for a given session key.
 
@@ -1144,7 +1152,7 @@ walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.exam
 }
 ```
 
-### Relay confirms wallet joined (new)
+### Relay confirms wallet joined
 
 ```json
 {
