@@ -19,4 +19,5 @@ export const STORAGE_KEYS = {
   SESSION_STATE: 'sessionState',
   CONNECTED_WALLET: 'connectedWallet',
   SETTINGS: 'settings',
+  PERMISSIONS: 'permissions',
 } as const;

@@ -12,6 +12,13 @@ export interface ConnectedWallet {
   icon?: string;
 }
 
+/** Per-origin permission record */
+export interface OriginPermission {
+  origin: string;
+  granted: boolean;
+  grantedAt: number; // timestamp
+}
+
 /** Extension settings */
 export interface ExtensionSettings {
   relayUrl: string;
@@ -36,7 +43,9 @@ export type BackgroundMessage =
   | { action: 'accept-wallet' }
   | { action: 'reject-wallet' }
   | { action: 'disconnect' }
-  | { action: 'get-pairing-uri' };
+  | { action: 'get-pairing-uri' }
+  | { action: 'get-permissions' }
+  | { action: 'revoke-permission'; origin: string };
 
 /** State shared from background to popup/content */
 export interface ExtensionState {

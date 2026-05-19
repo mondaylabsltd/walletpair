@@ -13,31 +13,15 @@ import {
   saveSessionState,
   saveConnectedWallet,
   getConnectedWallet,
+  isPermitted,
+  grantPermission,
+  revokePermission,
+  getPermissions,
 } from '@/lib/storage';
+import { READ_ONLY_METHODS, proxyRpcCall } from '@/lib/rpc-proxy';
 import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request } from '@/lib/types';
 
 // ── Constants ───────────────────────────────────────────────────────────
-
-const DEFAULT_RPC: Record<number, string> = {
-  1: 'https://eth.llamarpc.com',
-  10: 'https://mainnet.optimism.io',
-  56: 'https://bsc-dataseed.binance.org',
-  137: 'https://polygon-rpc.com',
-  42161: 'https://arb1.arbitrum.io/rpc',
-  8453: 'https://mainnet.base.org',
-  43114: 'https://api.avax.network/ext/bc/C/rpc',
-};
-
-/** Read-only methods routed to a public RPC node, NOT the wallet */
-const READ_ONLY_METHODS = new Set([
-  'eth_blockNumber', 'eth_call', 'eth_estimateGas', 'eth_feeHistory',
-  'eth_gasPrice', 'eth_maxPriorityFeePerGas',
-  'eth_getBalance', 'eth_getCode', 'eth_getStorageAt', 'eth_getTransactionCount',
-  'eth_getTransactionByHash', 'eth_getTransactionReceipt', 'eth_getLogs',
-  'eth_getBlockByNumber', 'eth_getBlockByHash',
-  'eth_newFilter', 'eth_newBlockFilter', 'eth_getFilterChanges', 'eth_uninstallFilter',
-  'eth_sendRawTransaction', 'eth_syncing',
-]);
 
 /** Deferred request timeout (5 minutes) */
 const DEFERRED_TIMEOUT_MS = 5 * 60 * 1000;
@@ -55,6 +39,7 @@ let pairingInProgress = false;
 const deferredRequests: Array<{
   id: string;
   payload: EIP1193Request;
+  origin?: string;
   resolve: (v: { result?: unknown; error?: { code: number; message: string } }) => void;
   timer: ReturnType<typeof setTimeout>;
 }> = [];
@@ -77,39 +62,6 @@ function broadcastEvent(event: string, data: unknown) {
   }
 }
 
-// ── RPC Proxy for read-only methods ─────────────────────────────────────
-
-async function proxyRpcCall(chainId: number, method: string, params: unknown): Promise<unknown> {
-  const settings = await getSettings();
-  const rpcUrl = settings.rpcUrls?.[chainId] ?? DEFAULT_RPC[chainId];
-  if (!rpcUrl) {
-    throw Object.assign(new Error(`No RPC URL configured for chain ${chainId}`), { code: -32601 });
-  }
-
-  const body = JSON.stringify({
-    jsonrpc: '2.0',
-    id: 1,
-    method,
-    params: params ?? [],
-  });
-
-  const res = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-  });
-
-  if (!res.ok) {
-    throw Object.assign(new Error(`RPC HTTP ${res.status}: ${res.statusText}`), { code: -32603 });
-  }
-
-  const json = await res.json();
-  if (json.error) {
-    throw Object.assign(new Error(json.error.message ?? 'RPC error'), { code: json.error.code ?? -32603 });
-  }
-  return json.result;
-}
-
 // ── Deferred Request Helpers ────────────────────────────────────────────
 
 function rejectAllDeferred(code: number, message: string) {
@@ -124,6 +76,7 @@ function addDeferredRequest(
   id: string,
   payload: EIP1193Request,
   resolve: (v: { result?: unknown; error?: { code: number; message: string } }) => void,
+  origin?: string,
 ) {
   const timer = setTimeout(() => {
     const idx = deferredRequests.findIndex((r) => r.id === id);
@@ -133,7 +86,7 @@ function addDeferredRequest(
     }
   }, DEFERRED_TIMEOUT_MS);
 
-  deferredRequests.push({ id, payload, resolve, timer });
+  deferredRequests.push({ id, payload, origin, resolve, timer });
 }
 
 // ── Session Management ───────────────────────────────────────────────────
@@ -288,8 +241,10 @@ async function tryReconnect(): Promise<boolean> {
 async function handleRpcRequest(
   id: string,
   payload: EIP1193Request,
+  origin?: string,
 ): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
   const { method, params } = payload;
+  const permitted = origin ? await isPermitted(origin) : true;
 
   // ── Local methods (always answerable) ──────────────────────────────────
   if (method === 'eth_chainId') {
@@ -300,12 +255,14 @@ async function handleRpcRequest(
     return { result: String(connectedWallet?.chainId ?? 1) };
   }
   if (method === 'eth_accounts') {
+    // Only return accounts if the origin is permitted
+    if (!permitted) return { result: [] };
     return { result: connectedWallet ? [connectedWallet.address] : [] };
   }
 
   // ── wallet_getPermissions (local) ──────────────────────────────────────
   if (method === 'wallet_getPermissions') {
-    if (connectedWallet && session?.phase === 'connected') {
+    if (permitted && connectedWallet && session?.phase === 'connected') {
       return { result: [{ parentCapability: 'eth_accounts' }] };
     }
     return { result: [] };
@@ -329,15 +286,22 @@ async function handleRpcRequest(
 
   if (!session || session.phase !== 'connected') {
     if (effectiveMethod === 'eth_requestAccounts') {
-      // Race condition guard: only one pairing at a time
+      // If already permitted, skip the popup approval — just start pairing if needed
       if (!pairingInProgress && (!session || session.phase === 'idle' || session.phase === 'closed')) {
         pairingInProgress = true;
         await createSession();
+        // Always open popup so user can see pairing QR / approve wallet
         openPopup();
       }
-      // Defer until connected (with timeout)
+      // Defer until connected (with timeout); grant permission on resolve
       return new Promise((resolve) => {
-        addDeferredRequest(id, payload, resolve);
+        addDeferredRequest(id, payload, (response) => {
+          // On successful connection, grant the origin permission
+          if (origin && response.result && !response.error) {
+            grantPermission(origin).catch(() => {});
+          }
+          resolve(response);
+        }, origin);
       });
     }
 
@@ -380,6 +344,8 @@ async function handleRpcRequest(
         };
         saveConnectedWallet(connectedWallet).catch(() => {});
         updateState({ wallet: { ...connectedWallet } });
+        // Grant permission on successful eth_requestAccounts
+        if (origin) grantPermission(origin).catch(() => {});
       }
     }
 
@@ -395,7 +361,7 @@ function flushDeferredRequests() {
   while (deferredRequests.length > 0) {
     const req = deferredRequests.shift()!;
     clearTimeout(req.timer);
-    handleRpcRequest(req.id, req.payload).then((response) => {
+    handleRpcRequest(req.id, req.payload, req.origin).then((response) => {
       req.resolve(response);
     });
   }
@@ -425,7 +391,7 @@ export default defineBackground(() => {
 
     port.onMessage.addListener(async (msg) => {
       if (msg.action === 'rpc-request') {
-        const response = await handleRpcRequest(msg.id, msg.payload);
+        const response = await handleRpcRequest(msg.id, msg.payload, msg.origin);
         try {
           port.postMessage({
             action: 'rpc-response',
@@ -481,13 +447,25 @@ export default defineBackground(() => {
           break;
 
         case 'rpc-request': {
-          const response = await handleRpcRequest(msg.id, msg.payload);
+          const response = await handleRpcRequest(msg.id, msg.payload, msg.origin);
           sendResponse({
             action: 'rpc-response',
             id: msg.id,
             method: msg.payload.method,
             ...response,
           });
+          break;
+        }
+
+        case 'get-permissions': {
+          const perms = await getPermissions();
+          sendResponse(perms);
+          break;
+        }
+
+        case 'revoke-permission': {
+          await revokePermission(msg.origin);
+          sendResponse({ ok: true });
           break;
         }
 

@@ -1,5 +1,5 @@
 import { STORAGE_KEYS, DEFAULT_RELAY_URL } from './constants';
-import type { ConnectedWallet, ExtensionSettings } from './types';
+import type { ConnectedWallet, ExtensionSettings, OriginPermission } from './types';
 
 const defaults: ExtensionSettings = {
   relayUrl: DEFAULT_RELAY_URL,
@@ -58,4 +58,32 @@ export async function saveConnectedWallet(wallet: ConnectedWallet | null): Promi
   } else {
     await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_WALLET);
   }
+}
+
+// ── Per-origin permissions ──────────────────────────────────────────────
+
+/** Get all origin permissions */
+export async function getPermissions(): Promise<Record<string, OriginPermission>> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.PERMISSIONS);
+  return result[STORAGE_KEYS.PERMISSIONS] ?? {};
+}
+
+/** Grant permission for an origin */
+export async function grantPermission(origin: string): Promise<void> {
+  const perms = await getPermissions();
+  perms[origin] = { origin, granted: true, grantedAt: Date.now() };
+  await chrome.storage.local.set({ [STORAGE_KEYS.PERMISSIONS]: perms });
+}
+
+/** Revoke permission for an origin */
+export async function revokePermission(origin: string): Promise<void> {
+  const perms = await getPermissions();
+  delete perms[origin];
+  await chrome.storage.local.set({ [STORAGE_KEYS.PERMISSIONS]: perms });
+}
+
+/** Check if an origin is permitted */
+export async function isPermitted(origin: string): Promise<boolean> {
+  const perms = await getPermissions();
+  return perms[origin]?.granted === true;
 }
