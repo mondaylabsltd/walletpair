@@ -1,0 +1,52 @@
+import { STORAGE_KEYS, DEFAULT_RELAY_URL } from './constants';
+import type { ConnectedWallet, ExtensionSettings } from './types';
+
+const defaults: ExtensionSettings = {
+  relayUrl: DEFAULT_RELAY_URL,
+  autoConnect: true,
+  enabledChains: ['eip155:1', 'eip155:137', 'eip155:42161', 'eip155:10', 'eip155:8453'],
+};
+
+/** Get extension settings from chrome.storage.local */
+export async function getSettings(): Promise<ExtensionSettings> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
+  return { ...defaults, ...result[STORAGE_KEYS.SETTINGS] };
+}
+
+/** Save extension settings */
+export async function saveSettings(settings: Partial<ExtensionSettings>): Promise<void> {
+  const current = await getSettings();
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.SETTINGS]: { ...current, ...settings },
+  });
+}
+
+/** Get saved session state (for reconnection) */
+export async function getSessionState(): Promise<string | null> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.SESSION_STATE);
+  return result[STORAGE_KEYS.SESSION_STATE] ?? null;
+}
+
+/** Save session state */
+export async function saveSessionState(state: string | null): Promise<void> {
+  if (state) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.SESSION_STATE]: state });
+  } else {
+    await chrome.storage.local.remove(STORAGE_KEYS.SESSION_STATE);
+  }
+}
+
+/** Get connected wallet info */
+export async function getConnectedWallet(): Promise<ConnectedWallet | null> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.CONNECTED_WALLET);
+  return result[STORAGE_KEYS.CONNECTED_WALLET] ?? null;
+}
+
+/** Save connected wallet info */
+export async function saveConnectedWallet(wallet: ConnectedWallet | null): Promise<void> {
+  if (wallet) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.CONNECTED_WALLET]: wallet });
+  } else {
+    await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_WALLET);
+  }
+}

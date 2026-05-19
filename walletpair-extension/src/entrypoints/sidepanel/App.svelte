@@ -10,7 +10,6 @@
   let loading = $state(false);
   let page = $state<'main' | 'settings'>('main');
 
-  // Fetch initial state
   $effect(() => {
     getExtensionState().then((s) => {
       state = s;
@@ -43,17 +42,14 @@
   }
 </script>
 
-<div class="popup">
-  <!-- Header -->
+<div class="panel">
   <header class="header">
     <div class="header-left">
-      <div class="logo">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
-          <rect width="24" height="24" rx="6" fill="#6366f1" />
-          <path d="M7 12L12 7L17 12L12 17Z" fill="white" opacity="0.9" />
-          <circle cx="12" cy="12" r="2.2" fill="#6366f1" />
-        </svg>
-      </div>
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <rect width="24" height="24" rx="6" fill="#6366f1" />
+        <path d="M7 12L12 7L17 12L12 17Z" fill="white" opacity="0.9" />
+        <circle cx="12" cy="12" r="2.2" fill="#6366f1" />
+      </svg>
       <span class="header-title">WalletPair</span>
     </div>
     {#if page === 'main'}
@@ -65,14 +61,13 @@
     {/if}
   </header>
 
-  <!-- Content -->
   <main class="content">
     {#if page === 'settings'}
       <SettingsView onBack={() => (page = 'main')} />
     {:else if state.phase === 'idle' || state.phase === 'error'}
       <div class="idle-view">
         <div class="hero-icon">
-          <svg viewBox="0 0 64 64" width="80" height="80" fill="none">
+          <svg viewBox="0 0 64 64" width="96" height="96" fill="none">
             <rect width="64" height="64" rx="20" fill="var(--accent-dim)" />
             <path d="M18 32L32 18L46 32L32 46Z" fill="var(--accent)" opacity="0.6" />
             <circle cx="32" cy="32" r="8" fill="var(--accent)" />
@@ -119,10 +114,10 @@
 </div>
 
 <style>
-  .popup {
+  .panel {
     display: flex;
     flex-direction: column;
-    min-height: 480px;
+    min-height: 100vh;
   }
 
   .header {
@@ -131,16 +126,16 @@
     justify-content: space-between;
     padding: 14px 16px;
     border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
   }
 
   .header-left {
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .logo {
-    display: flex;
   }
 
   .header-title {
@@ -185,7 +180,7 @@
   }
 
   .title {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 600;
     letter-spacing: -0.02em;
   }
@@ -193,7 +188,7 @@
   .subtitle {
     font-size: 13px;
     color: var(--text-dim);
-    max-width: 260px;
+    max-width: 300px;
     line-height: 1.5;
   }
 
@@ -204,6 +199,7 @@
     padding: 8px 14px;
     border-radius: var(--radius-sm);
     width: 100%;
+    max-width: 320px;
   }
 
   .btn-primary {
@@ -214,7 +210,7 @@
     padding: 12px 32px;
     border-radius: var(--radius);
     width: 100%;
-    max-width: 280px;
+    max-width: 300px;
     display: flex;
     align-items: center;
     justify-content: center;

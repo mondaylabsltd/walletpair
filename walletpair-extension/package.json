@@ -1,8 +1,8 @@
 {
-  "name": "wxt-svelte-starter",
-  "description": "manifest.json description",
+  "name": "walletpair-extension",
+  "description": "WalletPair - Bridge any dApp to your wallet via WalletPair protocol",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -14,8 +14,13 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "postinstall": "wxt prepare"
   },
+  "dependencies": {
+    "walletpair-sdk": "file:../walletpair-sdk",
+    "qrcode": "^1.5.4"
+  },
   "devDependencies": {
     "@tsconfig/svelte": "^5.0.8",
+    "@types/qrcode": "^1.5.5",
     "@wxt-dev/module-svelte": "^2.0.4",
     "svelte": "^5.53.7",
     "svelte-check": "^4.4.4",
