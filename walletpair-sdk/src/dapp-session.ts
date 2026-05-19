@@ -82,8 +82,13 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   // Public API
   // -------------------------------------------------------------------------
 
-  /** Create a new pairing channel and return the pairing URI for QR display. */
-  async createPairing(): Promise<string> {
+  /**
+   * Create a new pairing channel and return the pairing URI for QR display.
+   *
+   * @param options.deferTransport - If true, don't connect the transport yet.
+   *   Call `connectTransport()` later (e.g. after user scans QR in BLE mode).
+   */
+  async createPairing(options?: { deferTransport?: boolean | undefined }): Promise<string> {
     this.intentionalClose = false;
     const kp = generateX25519KeyPair();
     this.privKey = kp.privateKey;
@@ -96,16 +101,9 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     this.paired = false;
     this.resumeToken = null;
 
-    await this.transport.connect();
-    this.setPhase('waiting');
-    this.sendRaw({
-      v: 1, t: 'create', ch: this.channelId,
-      from: this.pubKeyB64, pubkey: this.pubKeyB64,
-    });
-
-    // Build pairing URI
+    // Build pairing URI first (before transport connect, so BLE can show QR first)
     let relayUrl: string | undefined;
-    if (this.transport.constructor.name === 'WebSocketTransport') {
+    if ('url' in this.transport) {
       relayUrl = (this.transport as any).url as string | undefined;
     }
     this.pairingUri = buildPairingUri({
@@ -115,7 +113,28 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       name: this.name,
     });
     this.emit('pairingUri', this.pairingUri);
+
+    if (!options?.deferTransport) {
+      await this.connectTransport();
+    } else {
+      this.setPhase('waiting');
+    }
+
     return this.pairingUri;
+  }
+
+  /**
+   * Connect the transport and send the `create` message.
+   * Call this after `createPairing({ deferTransport: true })` when the user
+   * is ready (e.g. after showing QR and before BLE scan).
+   */
+  async connectTransport(): Promise<void> {
+    await this.transport.connect();
+    this.setPhase('waiting');
+    this.sendRaw({
+      v: 1, t: 'create', ch: this.channelId,
+      from: this.pubKeyB64, pubkey: this.pubKeyB64,
+    });
   }
 
   /** Accept the wallet after pairing code verification. */

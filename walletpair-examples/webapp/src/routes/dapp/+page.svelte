@@ -97,20 +97,18 @@
 	}
 
 	// ---------------------------------------------------------------------------
-	// BLE Connect
+	// BLE Connect (two-phase: create channel first, scan later)
 	// ---------------------------------------------------------------------------
 	async function connectBleCreate() {
-		// For BLE, the dApp creates a channel locally (no relay), then scans for the wallet
 		const transport = new WebBleCentralTransport();
 		const s = new DAppSession({ transport, name: 'WalletPair dApp' });
 		session = s;
 		setupSessionEvents(s);
 
-		// BLE mode: we generate the channel/keys but don't connect transport yet
-		// The session will build a URI without relay param
 		try {
-			await s.createPairing();
-			addLog('out', 'create', `ch=${s.channelId.slice(0, 12)}... (BLE)`);
+			// Phase 1: create channel + keys, show QR, but DON'T connect BLE yet
+			await s.createPairing({ deferTransport: true });
+			addLog('out', 'create', `ch=${s.channelId.slice(0, 12)}... (BLE, deferred)`);
 			bleStatus = 'Channel created. Show QR to wallet, then click Scan.';
 		} catch (e: any) {
 			addLog('err', 'ble_create', e.message);
@@ -121,23 +119,12 @@
 	async function bleScan() {
 		if (!session) return;
 		bleStatus = 'Scanning for wallet...';
-		addLog('out', 'ble', 'Requesting BLE device...');
+		addLog('out', 'ble', 'Opening BLE device picker...');
 
-		// The transport's connect() triggers the browser's BLE device picker
 		try {
-			// Re-create session with BLE transport and scan
-			const transport = new WebBleCentralTransport();
-			const s = new DAppSession({ transport, name: 'WalletPair dApp' });
-
-			// Copy the existing channel state
-			const serialized = session.serialize();
-			session.destroy();
-			session = s;
-			s.restore(serialized);
-			setupSessionEvents(s);
-
-			await transport.connect();
-			bleStatus = 'BLE connected - waiting for wallet join';
+			// Phase 2: now connect transport (triggers browser BLE device picker)
+			await session.connectTransport();
+			bleStatus = 'BLE connected — waiting for wallet join';
 			addLog('in', 'ble', 'Connected to wallet peripheral');
 		} catch (e: any) {
 			bleStatus = `BLE error: ${e.message}`;

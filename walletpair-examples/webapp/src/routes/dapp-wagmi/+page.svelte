@@ -1,10 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { createConfig, http, connect, disconnect, getAccount, signMessage, getChainId, switchChain, watchAccount, watchChainId, type Config, type Connector } from '@wagmi/core';
+	import {
+		createConfig,
+		http,
+		connect,
+		disconnect,
+		signMessage,
+		switchChain,
+		watchAccount,
+		watchChainId,
+		type Config
+	} from '@wagmi/core';
 	import { mainnet, sepolia, polygon } from 'viem/chains';
-	import { WebSocketTransport } from 'walletpair-sdk';
 	import { walletPair } from 'walletpair-sdk/evm/wagmi';
 	import { WebBleCentralTransport, isWebBleSupported } from 'walletpair-sdk/ble';
+	import type { WalletPairProvider } from 'walletpair-sdk/evm';
 	import QRCode from 'qrcode';
 	import MessageLog from '$lib/components/MessageLog.svelte';
 
@@ -14,10 +24,12 @@
 	let transportMode: 'ws' | 'ble' = $state('ws');
 	let relayUrl = $state('ws://localhost:8080/v1');
 	let bleSupported = $state(false);
+	let bleStatus = $state('');
 
 	let config: Config | null = $state(null);
-	let connector: Connector | null = $state(null);
-	let status: 'idle' | 'pairing' | 'confirming' | 'connected' | 'error' = $state('idle');
+	let eip1193Provider: WalletPairProvider | null = $state(null);
+	let status: 'idle' | 'pairing' | 'ble_scan' | 'pending_accept' | 'connected' | 'error' =
+		$state('idle');
 
 	let pairingUri = $state('');
 	let pairingCode = $state('');
@@ -25,11 +37,23 @@
 
 	let account = $state<{ address: string; chainId: number } | null>(null);
 	let currentChainId = $state(0);
+
+	// Request section
+	let method = $state('wallet_getAccounts');
+	let params = $state('{}');
+
+	// Sign message section
 	let signInput = $state('Hello from WalletPair + wagmi!');
 	let signResult = $state('');
-	let targetChainId = $state(11155111); // sepolia
+
+	// Switch chain
+	let targetChainId = $state(11155111);
 
 	let log = $state<{ dir: 'out' | 'in' | 'err'; type: string; detail: string }[]>([]);
+
+	// Promise resolvers for bridging UI clicks → connector flow
+	let confirmResolve: ((accept: boolean) => void) | null = $state(null);
+	let bleScanResolve: (() => void) | null = $state(null);
 
 	// ---------------------------------------------------------------------------
 	// Helpers
@@ -50,6 +74,10 @@
 		}
 	}
 
+	function copyUri() {
+		navigator.clipboard.writeText(pairingUri);
+	}
+
 	onMount(() => {
 		bleSupported = isWebBleSupported();
 	});
@@ -63,33 +91,51 @@
 		pairingCode = '';
 		qrDataUrl = '';
 		signResult = '';
+		bleStatus = '';
+		confirmResolve = null;
+		bleScanResolve = null;
 
-		// Build transport based on mode
-		const transport =
-			transportMode === 'ble'
-				? new WebBleCentralTransport()
-				: undefined; // undefined = use relayUrl
+		const isBle = transportMode === 'ble';
+		const transport = isBle ? new WebBleCentralTransport() : undefined;
 
-		// Create wagmi config with our walletPair connector
 		const wpConnector = walletPair({
-			relayUrl: transportMode === 'ws' ? relayUrl : undefined,
+			relayUrl: !isBle ? relayUrl : undefined,
 			transport,
 			name: 'WalletPair wagmi dApp',
+
+			// 1) QR generated
 			onPairingUri: (uri) => {
 				pairingUri = uri;
 				renderQR(uri);
 				addLog('in', 'pairing_uri', uri.slice(0, 60) + '...');
+
+				if (isBle) {
+					status = 'ble_scan';
+					bleStatus = 'Channel created. Show QR to wallet, then click Scan.';
+				}
 			},
+
+			// 2) Wallet joined → show pairing code
 			onPairingCode: (code) => {
 				pairingCode = code;
-				status = 'confirming';
+				status = 'pending_accept';
 				addLog('in', 'pairing_code', code);
 			},
-			onPairingConfirm: async (code) => {
-				// Auto-accept for demo (in production, show confirmation UI)
-				addLog('out', 'accept', `code=${code}`);
-				return true;
-			}
+
+			// 3) Wait for user Accept/Reject
+			onPairingConfirm: (_code) => {
+				return new Promise<boolean>((resolve) => {
+					confirmResolve = resolve;
+				});
+			},
+
+			// 4) BLE only: wait for user to click "Scan for Wallet"
+			onBeforeTransportConnect: isBle
+				? () =>
+						new Promise<void>((resolve) => {
+							bleScanResolve = resolve;
+						})
+				: undefined
 		});
 
 		const cfg = createConfig({
@@ -103,14 +149,15 @@
 		});
 		config = cfg;
 
-		// Watch account changes
+		// Watch account and chain changes (from wallet push events)
 		watchAccount(cfg, {
 			onChange: (acc) => {
 				if (acc.address) {
 					account = { address: acc.address, chainId: acc.chainId ?? 1 };
-					addLog('in', 'account', `${acc.address.slice(0, 10)}... chain=${acc.chainId}`);
-				} else {
+					addLog('in', 'accountsChanged', `${acc.address.slice(0, 10)}... chain=${acc.chainId}`);
+				} else if (account) {
 					account = null;
+					addLog('in', 'disconnected', '');
 				}
 			}
 		});
@@ -122,18 +169,26 @@
 			}
 		});
 
-		// Connect!
+		// Connect
 		try {
 			addLog('out', 'connect', `mode=${transportMode}`);
 			const result = await connect(cfg, { connector: cfg.connectors[0]! });
 
-			account = {
-				address: result.accounts[0] ?? '',
-				chainId: result.chainId
-			};
+			account = { address: result.accounts[0] ?? '', chainId: result.chainId };
 			currentChainId = result.chainId;
 			status = 'connected';
-			connector = cfg.connectors[0] ?? null;
+
+			// Get the EIP-1193 provider for raw requests + event listening
+			const provider = (await cfg.connectors[0]!.getProvider()) as WalletPairProvider;
+			eip1193Provider = provider;
+
+			// Listen to wallet push events via EIP-1193
+			provider.on('accountsChanged', (accounts: string[]) => {
+				addLog('in', 'evt', `accountsChanged ${JSON.stringify(accounts)}`);
+			});
+			provider.on('chainChanged', (chainId: string) => {
+				addLog('in', 'evt', `chainChanged ${chainId}`);
+			});
 
 			addLog(
 				'in',
@@ -147,8 +202,61 @@
 	}
 
 	// ---------------------------------------------------------------------------
-	// Wagmi actions
+	// UI button handlers — bridge clicks into the connector's Promise flow
 	// ---------------------------------------------------------------------------
+	function acceptWallet() {
+		if (confirmResolve) {
+			addLog('out', 'accept', `code=${pairingCode}`);
+			confirmResolve(true);
+			confirmResolve = null;
+		}
+	}
+
+	function rejectWallet() {
+		if (confirmResolve) {
+			addLog('out', 'reject', 'user_rejected');
+			confirmResolve(false);
+			confirmResolve = null;
+		}
+	}
+
+	function triggerBleScan() {
+		if (bleScanResolve) {
+			addLog('out', 'ble_scan', 'Opening BLE device picker...');
+			bleStatus = 'Scanning...';
+			bleScanResolve();
+			bleScanResolve = null;
+		}
+	}
+
+	// ---------------------------------------------------------------------------
+	// wagmi actions (post-connect)
+	// ---------------------------------------------------------------------------
+
+	/** Send arbitrary request via the underlying EIP-1193 provider. */
+	async function sendRequest() {
+		if (!eip1193Provider) return;
+		const m = method === 'custom' ? prompt('Method name:') : method;
+		if (!m) return;
+		let p;
+		try {
+			p = JSON.parse(params);
+		} catch {
+			alert('Invalid JSON params');
+			return;
+		}
+		addLog('out', 'req', `method=${m}`);
+		try {
+			const result = await eip1193Provider.request({
+				method: m,
+				params: Object.keys(p).length > 0 ? p : undefined
+			});
+			addLog('in', 'res', `ok=true ${JSON.stringify(result)}`);
+		} catch (e: any) {
+			addLog('err', 'res', `ok=false ${e.message}`);
+		}
+	}
+
 	async function doSignMessage() {
 		if (!config || !account) return;
 		addLog('out', 'signMessage', signInput);
@@ -173,6 +281,24 @@
 		}
 	}
 
+	function sendPing() {
+		if (!eip1193Provider) return;
+		const session = eip1193Provider.getSession();
+		session.ping();
+		addLog('out', 'ping', '');
+	}
+
+	function closeSession() {
+		if (!eip1193Provider) return;
+		const session = eip1193Provider.getSession();
+		session.close();
+		addLog('out', 'close', 'normal');
+		status = 'idle';
+		account = null;
+		config = null;
+		eip1193Provider = null;
+	}
+
 	async function doDisconnect() {
 		if (!config) return;
 		addLog('out', 'disconnect', '');
@@ -187,8 +313,16 @@
 		pairingCode = '';
 		qrDataUrl = '';
 		signResult = '';
+		bleStatus = '';
 		config = null;
-		connector = null;
+		eip1193Provider = null;
+		confirmResolve = null;
+		bleScanResolve = null;
+	}
+
+	function onMethodChange() {
+		if (method === 'wallet_signMessage') params = '{"message": "Hello WalletPair!"}';
+		else params = '{}';
 	}
 
 	function chainName(id: number): string {
@@ -206,13 +340,14 @@
 			<span
 				class="dot"
 				class:connected={status === 'connected'}
-				class:waiting={status === 'pairing' || status === 'confirming'}
+				class:waiting={status === 'pairing' || status === 'ble_scan' || status === 'pending_accept'}
 				class:closed={status === 'error'}
 			></span>
-			<span>{status.charAt(0).toUpperCase() + status.slice(1)}</span>
+			<span>{status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ')}</span>
 		</span>
 	</header>
 
+	<!-- Step 1: Transport + Connect -->
 	{#if status === 'idle'}
 		<section>
 			<h3>Transport</h3>
@@ -243,7 +378,8 @@
 		</section>
 	{/if}
 
-	{#if status === 'pairing' || status === 'confirming'}
+	<!-- Step 2: Pairing -->
+	{#if status === 'pairing' || status === 'ble_scan' || status === 'pending_accept'}
 		<section>
 			<h3>Pairing</h3>
 			{#if qrDataUrl}
@@ -253,21 +389,35 @@
 			{/if}
 			{#if pairingUri}
 				<div class="uri-box">{pairingUri}</div>
+				<button onclick={copyUri}>Copy URI</button>
 			{/if}
-			{#if pairingCode}
-				<span class="field-label mt">Pairing Code</span>
-				<div class="code">{pairingCode}</div>
-				<div style="text-align:center;color:var(--muted);font-size:12px">
-					Auto-accepting for demo...
+
+			<!-- BLE: wallet scans QR first, then user clicks Scan -->
+			{#if status === 'ble_scan'}
+				<div style="color:var(--muted);font-size:12px;margin-top:6px">{bleStatus}</div>
+				<button class="primary mt" onclick={triggerBleScan}>Scan for Wallet</button>
+			{/if}
+
+			<!-- WS: waiting for wallet to join -->
+			{#if status === 'pairing' && !pairingCode}
+				<div style="color:var(--muted);font-size:13px;padding:8px 0;text-align:center">
+					Waiting for wallet to scan QR and join...
 				</div>
-			{:else}
-				<div style="text-align:center;color:var(--muted);font-size:13px;padding:8px 0">
-					Scan the QR code with your WalletPair wallet...
+			{/if}
+
+			<!-- Pairing code → Accept / Reject -->
+			{#if status === 'pending_accept' && pairingCode}
+				<span class="field-label mt">Pairing Code (verify with wallet)</span>
+				<div class="code">{pairingCode}</div>
+				<div class="row mt">
+					<button class="primary" onclick={acceptWallet}>Accept Wallet</button>
+					<button class="danger" onclick={rejectWallet}>Reject</button>
 				</div>
 			{/if}
 		</section>
 	{/if}
 
+	<!-- Step 3: Connected -->
 	{#if status === 'connected' && account}
 		<section>
 			<h3>Account</h3>
@@ -279,8 +429,27 @@
 			</div>
 		</section>
 
+		<!-- Raw request (like dApp version) -->
 		<section>
-			<h3>Sign Message</h3>
+			<h3>Send Request</h3>
+			<label for="method-select">Method</label>
+			<select id="method-select" bind:value={method} onchange={onMethodChange}>
+				<option value="wallet_getAccounts">wallet_getAccounts</option>
+				<option value="wallet_signMessage">wallet_signMessage</option>
+				<option value="custom">custom...</option>
+			</select>
+			<label for="params-input" class="mt">Params (JSON)</label>
+			<textarea id="params-input" bind:value={params}></textarea>
+			<div class="row mt">
+				<button class="primary" onclick={sendRequest}>Send Request</button>
+				<button onclick={sendPing}>Ping</button>
+				<button class="danger" onclick={closeSession}>Close</button>
+			</div>
+		</section>
+
+		<!-- wagmi signMessage -->
+		<section>
+			<h3>Sign Message (wagmi)</h3>
 			<label for="sign-input">Message</label>
 			<input id="sign-input" bind:value={signInput} />
 			<button class="primary mt" onclick={doSignMessage}>Sign</button>
@@ -290,8 +459,9 @@
 			{/if}
 		</section>
 
+		<!-- wagmi switchChain -->
 		<section>
-			<h3>Switch Chain</h3>
+			<h3>Switch Chain (wagmi)</h3>
 			<div class="row">
 				<select bind:value={targetChainId}>
 					<option value={1}>Ethereum (1)</option>

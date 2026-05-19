@@ -97,6 +97,13 @@ export interface WalletPairConnectorOptions {
   onPairingCode?: ((code: string) => void) | undefined;
   /** Called to confirm pairing. Returns true to accept. Auto-accepts if not provided. */
   onPairingConfirm?: ((code: string) => Promise<boolean>) | undefined;
+  /**
+   * Called after QR is shown but before transport connects (BLE mode).
+   * The returned Promise must resolve when the user is ready to scan.
+   * This gives the wallet time to scan the QR before the BLE device picker opens.
+   * Only relevant when using a custom transport (e.g. WebBleCentralTransport).
+   */
+  onBeforeTransportConnect?: (() => Promise<void>) | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,8 +169,16 @@ export function walletPair(options: WalletPairConnectorOptions): CreateConnector
         });
 
         // Start pairing flow
-        const uri = await s.createPairing();
+        // If onBeforeTransportConnect is set (BLE mode), defer transport connection
+        // so the wallet can scan the QR before the BLE device picker opens.
+        const deferTransport = !!options.onBeforeTransportConnect;
+        const uri = await s.createPairing({ deferTransport });
         options.onPairingUri?.(uri);
+
+        if (deferTransport && options.onBeforeTransportConnect) {
+          await options.onBeforeTransportConnect();
+          await s.connectTransport();
+        }
 
         // Wait for wallet to join and confirm pairing
         const accounts = await new Promise<readonly string[]>((resolve, reject) => {
