@@ -6,7 +6,7 @@ export default defineConfig({
   manifest: {
     name: 'WalletPair',
     description: 'Bridge any dApp to your wallet via WalletPair protocol',
-    permissions: ['storage', 'sidePanel'],
+    permissions: ['storage', 'sidePanel', 'alarms'],
     host_permissions: ['<all_urls>'],
     side_panel: {
       default_path: 'sidepanel.html',

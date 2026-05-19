@@ -34,6 +34,14 @@ export type InjectMessage =
   | { type: 'wp-event'; event: string; data: unknown }
   | { type: 'wp-provider-ready' };
 
+/** Pending tx/sign confirmation details sent to the confirm popup */
+export interface PendingConfirmationInfo {
+  id: string;
+  method: string;
+  params: unknown;
+  origin: string;
+}
+
 /** Message types between content script <-> background */
 export type BackgroundMessage =
   | { action: 'rpc-request'; id: string; payload: EIP1193Request; origin: string }
@@ -45,7 +53,10 @@ export type BackgroundMessage =
   | { action: 'disconnect' }
   | { action: 'get-pairing-uri' }
   | { action: 'get-permissions' }
-  | { action: 'revoke-permission'; origin: string };
+  | { action: 'revoke-permission'; origin: string }
+  | { action: 'get-confirmation'; id: string }
+  | { action: 'approve-confirmation'; id: string }
+  | { action: 'reject-confirmation'; id: string };
 
 /** State shared from background to popup/content */
 export interface ExtensionState {

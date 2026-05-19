@@ -19,7 +19,7 @@ import {
   getPermissions,
 } from '@/lib/storage';
 import { READ_ONLY_METHODS, proxyRpcCall } from '@/lib/rpc-proxy';
-import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request } from '@/lib/types';
+import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request, PendingConfirmationInfo } from '@/lib/types';
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -43,6 +43,24 @@ const deferredRequests: Array<{
   resolve: (v: { result?: unknown; error?: { code: number; message: string } }) => void;
   timer: ReturnType<typeof setTimeout>;
 }> = [];
+
+// Pending tx/sign confirmations awaiting user approval
+interface PendingConfirmation {
+  id: string;
+  method: string;
+  params: unknown;
+  origin: string;
+  resolve: (v: { result?: unknown; error?: { code: number; message: string } }) => void;
+  windowId?: number;
+}
+const pendingConfirmations = new Map<string, PendingConfirmation>();
+
+/** Methods that require user confirmation before forwarding to wallet */
+const CONFIRMATION_METHODS = new Set([
+  'eth_sendTransaction',
+  'personal_sign',
+  'eth_signTypedData_v4',
+]);
 
 // Map of connected content script ports
 const contentPorts = new Map<number, chrome.runtime.Port>();
@@ -106,6 +124,8 @@ function attachSessionListeners(autoAccepted: boolean) {
         updateState({ phase: 'connected' });
         pairingInProgress = false;
         saveSessionState(session!.serialize()).catch(() => {});
+        // Start keepalive alarm (survives SW termination)
+        chrome.alarms.create('walletpair-keepalive', { periodInMinutes: 0.33 });
         flushDeferredRequests();
         break;
       case 'disconnected':
@@ -164,6 +184,9 @@ function handleSessionClosed() {
   pairingInProgress = false;
   // Reject all deferred requests since session is gone
   rejectAllDeferred(4001, 'Session closed');
+
+  // Clear keepalive alarm
+  chrome.alarms.clear('walletpair-keepalive');
 
   updateState({
     phase: 'idle',
@@ -233,6 +256,50 @@ async function tryReconnect(): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+// ── Confirmation Popup ──────────────────────────────────────────────────
+
+function requestUserConfirmation(
+  method: string,
+  params: unknown,
+  origin: string,
+): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
+  const confirmId = `confirm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  return new Promise((resolve) => {
+    pendingConfirmations.set(confirmId, { id: confirmId, method, params, origin, resolve });
+
+    chrome.windows.create({
+      url: chrome.runtime.getURL(`/confirm.html?id=${confirmId}`),
+      type: 'popup',
+      width: 400,
+      height: 520,
+      focused: true,
+    }).then(
+      (win: { id?: number }) => {
+        const pending = pendingConfirmations.get(confirmId);
+        if (pending) pending.windowId = win?.id;
+      },
+      () => {
+        // If popup fails to open, reject the request
+        pendingConfirmations.delete(confirmId);
+        resolve({ error: { code: -32603, message: 'Failed to open confirmation popup' } });
+      },
+    );
+  });
+}
+
+async function forwardToWallet(
+  method: string,
+  params: unknown,
+): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
+  try {
+    const result = await evmProvider!.request({ method, params });
+    return { result };
+  } catch (err: any) {
+    return { error: { code: err.code ?? -32603, message: err.message ?? 'Request failed' } };
   }
 }
 
@@ -476,13 +543,20 @@ export default defineBackground(() => {
     return true; // Keep channel open for async
   });
 
-  // Reconnect on startup
-  tryReconnect().then((ok) => {
-    if (ok) console.log('[WalletPair] Reconnected to previous session');
+  // Handle keepalive alarm (fires even after SW restart)
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'walletpair-keepalive') {
+      if (session?.phase === 'connected') {
+        session.ping();
+      }
+    }
   });
 
-  // Keep alive while connected
-  setInterval(() => {
-    if (session?.phase === 'connected') session.ping();
-  }, 20_000);
+  // On SW start, try to restore session
+  tryReconnect().then((ok) => {
+    if (ok) {
+      console.log('[WalletPair] Session restored after SW wake');
+      chrome.alarms.create('walletpair-keepalive', { periodInMinutes: 0.33 });
+    }
+  });
 });
