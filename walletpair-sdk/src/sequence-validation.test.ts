@@ -1,301 +1,805 @@
 /**
- * Tests for receive sequence number validation (replay protection),
- * send sequence overflow, capabilities validation, and pending_accept timeout.
+ * Sequence number validation tests for DAppSession and WalletSession.
+ *
+ * Covers: replay rejection, sequence gaps, persistence of recvSeq,
+ * send sequence overflow, pending accept timeout, and capabilities validation.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DAppSession } from './dapp-session.js';
 import { WalletSession } from './wallet-session.js';
 import { MockTransport, MockRelay } from './test-helpers.js';
 import {
   generateX25519KeyPair,
+  generateChannelId,
+  buildPairingUri,
+  computeSharedSecret,
+  deriveSessionKey,
+  computePairingCode,
+  sealPayload,
+  unsealPayload,
   b64urlEncode,
+  b64urlDecode,
 } from './crypto.js';
 import type { ProtocolMessage } from './types.js';
 
-function flush(ms = 50): Promise<void> {
+function wait(ms = 50): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-/** Set up a fully connected DApp + Wallet pair via MockRelay. */
-async function setupConnectedPair() {
+// ---------------------------------------------------------------------------
+// Helpers to set up connected DApp + Wallet sessions
+// ---------------------------------------------------------------------------
+
+interface ConnectedPair {
+  dappSession: DAppSession;
+  walletSession: WalletSession;
+  dappTransport: MockTransport;
+  walletTransport: MockTransport;
+  /** Session key derived from the dApp side (same key both sides share). */
+  sessionKey: Uint8Array;
+  /** The wallet's key pair (for crafting raw messages from wallet side). */
+  walletKp: ReturnType<typeof generateX25519KeyPair>;
+  /** The dApp's key pair (for crafting raw messages from dApp side). */
+  dappKp: { publicKeyB64: string };
+  channelId: string;
+}
+
+async function setupConnectedPair(): Promise<ConnectedPair> {
   const dappTransport = new MockTransport();
   const walletTransport = new MockTransport();
   const _relay = new MockRelay(dappTransport, walletTransport);
 
-  const dapp = new DAppSession({ transport: dappTransport, name: 'Test' });
-  const wallet = new WalletSession({
+  const dappSession = new DAppSession({ transport: dappTransport, name: 'Test dApp' });
+  const walletSession = new WalletSession({
     transport: walletTransport,
-    capabilities: { methods: ['wallet_getAccounts'], events: ['accountsChanged'], chains: ['eip155:1'] },
-    meta: { name: 'TestWallet' },
+    capabilities: {
+      methods: ['wallet_getAccounts', 'wallet_signMessage'],
+      events: ['accountsChanged'],
+      chains: ['eip155:1'],
+    },
+    meta: { name: 'Test Wallet' },
   });
 
-  // Step-by-step (matching integration.test.ts pattern)
-  const uri = await dapp.createPairing();
-  await flush();
-  await wallet.joinFromUri(uri);
-  await flush();
-  await flush(); // ensure join is forwarded to dApp
+  const uri = await dappSession.createPairing();
+  await walletSession.joinFromUri(uri);
+  await wait();
 
-  // DApp should be pending_accept now
-  dapp.acceptWallet();
-  await flush();
+  dappSession.acceptWallet();
+  await wait();
 
-  if (dapp.phase !== 'connected' || wallet.phase !== 'connected') {
-    throw new Error(`Setup failed: dapp=${dapp.phase}, wallet=${wallet.phase}`);
-  }
+  // Derive session key from the dApp side perspective.
+  // We need the wallet's pubkey and dApp's private key — but those are internal.
+  // Instead, we extract from what the relay forwarded.
+  // The walletTransport.sent has the join message with from = wallet pubkey.
+  const walletJoinMsg = walletTransport.sent.find(m => m.t === 'join')!;
+  const walletPubB64 = walletJoinMsg.from!;
+  // The dappTransport.sent has the create message with from = dApp pubkey.
+  const dappCreateMsg = dappTransport.sent.find(m => m.t === 'create')!;
+  const dappPubB64 = dappCreateMsg.from!;
 
-  return { dapp, wallet, dappTransport, walletTransport };
+  return {
+    dappSession,
+    walletSession,
+    dappTransport,
+    walletTransport,
+    sessionKey: null as any, // We use sessions directly; raw key only needed for manual message tests
+    walletKp: null as any,
+    dappKp: { publicKeyB64: dappPubB64 },
+    channelId: dappSession.channelId,
+  };
 }
 
-describe('Sequence validation — DAppSession', () => {
-  it('exchanges messages and tracks recvSeq', async () => {
-    const { dapp, wallet } = await setupConnectedPair();
+/**
+ * Set up a DAppSession with a direct MockTransport (no relay), manually
+ * driving the handshake so we can craft raw messages with specific seq numbers.
+ */
+function setupDAppWithManualWallet() {
+  const transport = new MockTransport();
+  const session = new DAppSession({ transport, name: 'Test dApp' });
+  const walletKp = generateX25519KeyPair();
 
-    wallet.on('request', ({ id }) => wallet.approve(id, ['0x1234']));
+  return { transport, session, walletKp };
+}
 
-    const result = await dapp.request('wallet_getAccounts');
-    expect(result).toEqual(['0x1234']);
+async function connectDAppManually(ctx: ReturnType<typeof setupDAppWithManualWallet>) {
+  const { transport, session, walletKp } = ctx;
+  await session.createPairing();
 
-    // recvSeq should have been updated
-    const serialized = JSON.parse(dapp.serialize());
-    expect(serialized.recvSeq).toBeGreaterThanOrEqual(0);
+  // Simulate wallet join
+  transport.receive({
+    v: 1, t: 'join', ch: session.channelId,
+    from: walletKp.publicKeyB64, pubkey: walletKp.publicKeyB64,
+    capabilities: { methods: ['wallet_getAccounts'], events: [], chains: ['eip155:1'] },
+  } as ProtocolMessage);
+
+  // Derive session key from wallet side
+  const dappPubB64 = transport.sent[0]!.from!;
+  const dappPub = b64urlDecode(dappPubB64);
+  const shared = computeSharedSecret(walletKp.privateKey, dappPub);
+  const sessionKey = deriveSessionKey(shared, session.channelId);
+
+  // Accept and connect
+  session.acceptWallet();
+  transport.receive({
+    v: 1, t: 'ready', ch: session.channelId,
+    state: 'connected', resume: 'tok',
+  } as ProtocolMessage);
+
+  return { sessionKey, dappPubB64 };
+}
+
+/**
+ * Set up a WalletSession with a direct MockTransport, manually driving the handshake.
+ */
+function setupWalletWithManualDApp() {
+  const transport = new MockTransport();
+  const dappKp = generateX25519KeyPair();
+  const channelId = generateChannelId();
+
+  const session = new WalletSession({
+    transport,
+    capabilities: {
+      methods: ['wallet_getAccounts'],
+      events: [],
+      chains: ['eip155:1'],
+    },
   });
 
-  it('persists recvSeq across serialize/restore', async () => {
-    const { dapp, wallet } = await setupConnectedPair();
+  return { transport, session, dappKp, channelId };
+}
 
-    wallet.on('request', ({ id }) => wallet.approve(id, 'ok'));
-    // Pass params so sealed payload is used (increments sendSeq)
-    const result = await dapp.request('wallet_signMessage', { message: 'hello' });
-    await flush();
-    expect(result).toBe('ok');
+async function connectWalletManually(ctx: ReturnType<typeof setupWalletWithManualDApp>) {
+  const { transport, session, dappKp, channelId } = ctx;
 
-    const json = dapp.serialize();
-    const parsed = JSON.parse(json);
-    // recvSeq >= 0 because wallet's response was sealed
-    expect(parsed.recvSeq).toBeGreaterThanOrEqual(0);
-    // sendSeq >= 1 because request had sealed params
-    expect(parsed.sendSeq).toBeGreaterThanOrEqual(1);
-
-    // Restore into new session
-    const newTransport = new MockTransport();
-    const newDapp = new DAppSession({ transport: newTransport, name: 'Restored' });
-    expect(newDapp.restore(json)).toBe(true);
-
-    const restored = JSON.parse(newDapp.serialize());
-    expect(restored.recvSeq).toBe(parsed.recvSeq);
-    expect(restored.sendSeq).toBe(parsed.sendSeq);
-  });
-});
-
-describe('Sequence validation — WalletSession', () => {
-  it('persists recvSeq in WalletSession', async () => {
-    const { wallet } = await setupConnectedPair();
-
-    const json = wallet.serialize();
-    const parsed = JSON.parse(json);
-    expect(parsed).toHaveProperty('recvSeq');
-    expect(typeof parsed.recvSeq).toBe('number');
+  const uri = buildPairingUri({
+    channelId,
+    pubkeyB64: dappKp.publicKeyB64,
+    relayUrl: 'ws://localhost:8080/v1',
   });
 
-  it('processes requests and tracks sequence', async () => {
-    const { dapp, wallet } = await setupConnectedPair();
+  await session.joinFromUri(uri);
 
-    const requests: string[] = [];
-    wallet.on('request', (req) => {
-      requests.push(req.method);
-      wallet.approve(req.id, 'ok');
+  // Derive session key from dApp side
+  const walletPubB64 = transport.sent.find(m => m.t === 'join')!.from!;
+  const walletPub = b64urlDecode(walletPubB64);
+  const shared = computeSharedSecret(dappKp.privateKey, walletPub);
+  const sessionKey = deriveSessionKey(shared, channelId);
+
+  // Connect
+  transport.receive({
+    v: 1, t: 'ready', ch: channelId,
+    state: 'connected', resume: 'tok',
+  } as ProtocolMessage);
+
+  return { sessionKey, walletPubB64 };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('Sequence validation', () => {
+
+  // -----------------------------------------------------------------------
+  // 1. Replay rejection on DAppSession
+  // -----------------------------------------------------------------------
+  describe('replay rejection on DAppSession', () => {
+    it('accepts seq=0, rejects replay seq=0, accepts seq=1', async () => {
+      const ctx = setupDAppWithManualWallet();
+      const { transport, session, walletKp } = ctx;
+      const { sessionKey } = await connectDAppManually(ctx);
+
+      // Send request so we have a pending request for seq=0 response
+      const p0 = session.request('wallet_getAccounts');
+      await wait(20);
+      const req0 = transport.sent.find(m => m.t === 'req') as any;
+
+      // Wallet responds with seq=0 -> should be accepted
+      transport.receive({
+        v: 1, t: 'res', ch: session.channelId,
+        id: req0.id, from: walletKp.publicKeyB64,
+        ok: true,
+        sealed: sealPayload(sessionKey, session.channelId, 0, ['0xabc']),
+      } as ProtocolMessage);
+
+      const result0 = await p0;
+      expect(result0).toEqual(['0xabc']);
+
+      // Send another request for seq=0 replay test
+      const p1 = session.request('wallet_getAccounts');
+      await wait(20);
+      const req1 = transport.sent.filter(m => m.t === 'req')[1] as any;
+
+      // Wallet responds with seq=0 again (replay) -> should be rejected
+      transport.receive({
+        v: 1, t: 'res', ch: session.channelId,
+        id: req1.id, from: walletKp.publicKeyB64,
+        ok: true,
+        sealed: sealPayload(sessionKey, session.channelId, 0, ['0xreplay']),
+      } as ProtocolMessage);
+
+      await expect(p1).rejects.toThrow('Replay detected');
+
+      // Send another request for seq=1 test
+      const p2 = session.request('wallet_getAccounts');
+      await wait(20);
+      const req2 = transport.sent.filter(m => m.t === 'req')[2] as any;
+
+      // Wallet responds with seq=1 -> should be accepted
+      transport.receive({
+        v: 1, t: 'res', ch: session.channelId,
+        id: req2.id, from: walletKp.publicKeyB64,
+        ok: true,
+        sealed: sealPayload(sessionKey, session.channelId, 1, ['0xdef']),
+      } as ProtocolMessage);
+
+      const result2 = await p2;
+      expect(result2).toEqual(['0xdef']);
     });
 
-    // Use params so sealed payloads are used
-    const result = await dapp.request('wallet_signMessage', { msg: 'test' });
-    expect(result).toBe('ok');
-    await flush();
+    it('silently drops replayed events', async () => {
+      const ctx = setupDAppWithManualWallet();
+      const { transport, session, walletKp } = ctx;
+      const { sessionKey } = await connectDAppManually(ctx);
 
-    expect(requests).toContain('wallet_signMessage');
+      const eventHandler = vi.fn();
+      session.on('event', eventHandler);
 
-    // Both sides should have advanced sequence counters
-    const walletState = JSON.parse(wallet.serialize());
-    expect(walletState.recvSeq).toBeGreaterThanOrEqual(0); // received sealed request
-    expect(walletState.sendSeq).toBeGreaterThanOrEqual(1); // sent sealed response
+      // First event with seq=0 -> accepted
+      transport.receive({
+        v: 1, t: 'evt', ch: session.channelId,
+        from: walletKp.publicKeyB64, event: 'accountsChanged',
+        sealed: sealPayload(sessionKey, session.channelId, 0, { accounts: ['0xa'] }),
+      } as ProtocolMessage);
 
-    const dappState = JSON.parse(dapp.serialize());
-    expect(dappState.sendSeq).toBeGreaterThanOrEqual(1); // sent sealed request
-    expect(dappState.recvSeq).toBeGreaterThanOrEqual(0); // received sealed response
-  });
-});
+      expect(eventHandler).toHaveBeenCalledTimes(1);
 
-describe('Send sequence overflow', () => {
-  it('emits error when dapp sendSeq wraps to 0', async () => {
-    const { dapp } = await setupConnectedPair();
+      // Replay same event with seq=0 -> silently dropped
+      transport.receive({
+        v: 1, t: 'evt', ch: session.channelId,
+        from: walletKp.publicKeyB64, event: 'accountsChanged',
+        sealed: sealPayload(sessionKey, session.channelId, 0, { accounts: ['0xa'] }),
+      } as ProtocolMessage);
 
-    // Set sendSeq near overflow
-    (dapp as any).sendSeq = 0xFFFFFFFF;
+      expect(eventHandler).toHaveBeenCalledTimes(1); // still 1
 
-    const errorHandler = vi.fn();
-    dapp.on('error', errorHandler);
+      // New event with seq=1 -> accepted
+      transport.receive({
+        v: 1, t: 'evt', ch: session.channelId,
+        from: walletKp.publicKeyB64, event: 'accountsChanged',
+        sealed: sealPayload(sessionKey, session.channelId, 1, { accounts: ['0xb'] }),
+      } as ProtocolMessage);
 
-    try {
-      await dapp.request('test', { data: 1 });
-    } catch (err: any) {
-      expect(err.message).toContain('overflow');
-    }
-
-    expect(errorHandler).toHaveBeenCalled();
-  });
-
-  it('emits error when wallet sendSeq wraps to 0', async () => {
-    const { wallet } = await setupConnectedPair();
-
-    (wallet as any).sendSeq = 0xFFFFFFFF;
-
-    const errorHandler = vi.fn();
-    wallet.on('error', errorHandler);
-
-    wallet.approve('fake-id', 'result');
-    expect(errorHandler).toHaveBeenCalled();
-  });
-});
-
-describe('Capabilities validation', () => {
-  it('rejects join with malformed capabilities (string instead of object)', async () => {
-    const transport = new MockTransport();
-    const dapp = new DAppSession({ transport, name: 'Test', autoAccept: false });
-
-    const errorHandler = vi.fn();
-    dapp.on('error', errorHandler);
-
-    await dapp.createPairing();
-    await flush();
-
-    const kp = generateX25519KeyPair();
-    transport.receive({
-      v: 1, t: 'join', ch: dapp.channelId,
-      from: kp.publicKeyB64, pubkey: kp.publicKeyB64,
-      capabilities: 'invalid' as any,
-    } as ProtocolMessage);
-    await flush();
-
-    expect(errorHandler).toHaveBeenCalled();
-    expect(dapp.phase).not.toBe('pending_accept');
+      expect(eventHandler).toHaveBeenCalledTimes(2);
+    });
   });
 
-  it('rejects join with capabilities.methods not an array', async () => {
-    const transport = new MockTransport();
-    const dapp = new DAppSession({ transport, name: 'Test', autoAccept: false });
+  // -----------------------------------------------------------------------
+  // 2. Replay rejection on WalletSession
+  // -----------------------------------------------------------------------
+  describe('replay rejection on WalletSession', () => {
+    it('accepts seq=0, drops replay seq=0, accepts seq=1', async () => {
+      const ctx = setupWalletWithManualDApp();
+      const { transport, session, dappKp, channelId } = ctx;
+      const { sessionKey } = await connectWalletManually(ctx);
 
-    const errorHandler = vi.fn();
-    dapp.on('error', errorHandler);
+      const requestHandler = vi.fn();
+      session.on('request', requestHandler);
 
-    await dapp.createPairing();
-    await flush();
+      // Request with seq=0 -> accepted
+      transport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'req-1', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+        sealed: sealPayload(sessionKey, channelId, 0, { foo: 'bar' }),
+      } as ProtocolMessage);
 
-    const kp = generateX25519KeyPair();
-    transport.receive({
-      v: 1, t: 'join', ch: dapp.channelId,
-      from: kp.publicKeyB64, pubkey: kp.publicKeyB64,
-      capabilities: { methods: 'not-array', events: [], chains: [] } as any,
-    } as ProtocolMessage);
-    await flush();
+      expect(requestHandler).toHaveBeenCalledTimes(1);
+      expect(requestHandler).toHaveBeenCalledWith({
+        id: 'req-1',
+        method: 'wallet_getAccounts',
+        params: { foo: 'bar' },
+      });
 
-    expect(errorHandler).toHaveBeenCalled();
+      // Replay same request with seq=0 -> silently dropped
+      transport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'req-1-replay', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+        sealed: sealPayload(sessionKey, channelId, 0, { foo: 'bar' }),
+      } as ProtocolMessage);
+
+      expect(requestHandler).toHaveBeenCalledTimes(1); // still 1
+
+      // Request with seq=1 -> accepted
+      transport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'req-2', from: dappKp.publicKeyB64,
+        method: 'wallet_signMessage',
+        sealed: sealPayload(sessionKey, channelId, 1, { message: 'hello' }),
+      } as ProtocolMessage);
+
+      expect(requestHandler).toHaveBeenCalledTimes(2);
+      expect(requestHandler).toHaveBeenLastCalledWith({
+        id: 'req-2',
+        method: 'wallet_signMessage',
+        params: { message: 'hello' },
+      });
+    });
   });
 
-  it('accepts valid capabilities', async () => {
-    const transport = new MockTransport();
-    const dapp = new DAppSession({ transport, name: 'Test', autoAccept: false });
+  // -----------------------------------------------------------------------
+  // 3. Sequence gaps accepted
+  // -----------------------------------------------------------------------
+  describe('sequence gaps accepted', () => {
+    it('accepts seq=0 then seq=5 (gap), rejects seq=3 (below high watermark)', async () => {
+      const ctx = setupDAppWithManualWallet();
+      const { transport, session, walletKp } = ctx;
+      const { sessionKey } = await connectDAppManually(ctx);
 
-    const joinHandler = vi.fn();
-    dapp.on('walletJoined', joinHandler);
+      // Request 1: seq=0
+      const p0 = session.request('wallet_getAccounts');
+      await wait(20);
+      const req0 = transport.sent.find(m => m.t === 'req') as any;
 
-    await dapp.createPairing();
-    await flush();
+      transport.receive({
+        v: 1, t: 'res', ch: session.channelId,
+        id: req0.id, from: walletKp.publicKeyB64,
+        ok: true,
+        sealed: sealPayload(sessionKey, session.channelId, 0, 'first'),
+      } as ProtocolMessage);
 
-    const kp = generateX25519KeyPair();
-    transport.receive({
-      v: 1, t: 'join', ch: dapp.channelId,
-      from: kp.publicKeyB64, pubkey: kp.publicKeyB64,
-      capabilities: { methods: ['wallet_getAccounts'], events: [], chains: ['eip155:1'] },
-    } as ProtocolMessage);
-    await flush();
+      expect(await p0).toBe('first');
 
-    expect(joinHandler).toHaveBeenCalled();
-    expect(dapp.phase).toBe('pending_accept');
+      // Request 2: seq=5 (gap of 4) -> should be accepted
+      const p1 = session.request('wallet_getAccounts');
+      await wait(20);
+      const req1 = transport.sent.filter(m => m.t === 'req')[1] as any;
+
+      transport.receive({
+        v: 1, t: 'res', ch: session.channelId,
+        id: req1.id, from: walletKp.publicKeyB64,
+        ok: true,
+        sealed: sealPayload(sessionKey, session.channelId, 5, 'second'),
+      } as ProtocolMessage);
+
+      expect(await p1).toBe('second');
+
+      // Request 3: seq=3 (less than current high watermark of 5) -> rejected
+      const p2 = session.request('wallet_getAccounts');
+      await wait(20);
+      const req2 = transport.sent.filter(m => m.t === 'req')[2] as any;
+
+      transport.receive({
+        v: 1, t: 'res', ch: session.channelId,
+        id: req2.id, from: walletKp.publicKeyB64,
+        ok: true,
+        sealed: sealPayload(sessionKey, session.channelId, 3, 'replay-attempt'),
+      } as ProtocolMessage);
+
+      await expect(p2).rejects.toThrow('Replay detected');
+    });
+
+    it('wallet session also accepts gaps and rejects below watermark', async () => {
+      const ctx = setupWalletWithManualDApp();
+      const { transport, session, dappKp, channelId } = ctx;
+      const { sessionKey } = await connectWalletManually(ctx);
+
+      const requestHandler = vi.fn();
+      session.on('request', requestHandler);
+
+      // seq=0 -> accepted
+      transport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'r1', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+        sealed: sealPayload(sessionKey, channelId, 0, {}),
+      } as ProtocolMessage);
+      expect(requestHandler).toHaveBeenCalledTimes(1);
+
+      // seq=5 (gap) -> accepted
+      transport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'r2', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+        sealed: sealPayload(sessionKey, channelId, 5, {}),
+      } as ProtocolMessage);
+      expect(requestHandler).toHaveBeenCalledTimes(2);
+
+      // seq=3 (below 5) -> dropped
+      transport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'r3', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+        sealed: sealPayload(sessionKey, channelId, 3, {}),
+      } as ProtocolMessage);
+      expect(requestHandler).toHaveBeenCalledTimes(2); // still 2
+    });
   });
 
-  it('accepts join without capabilities (optional)', async () => {
-    const transport = new MockTransport();
-    const dapp = new DAppSession({ transport, name: 'Test', autoAccept: false });
+  // -----------------------------------------------------------------------
+  // 4. Sequence persistence through serialize/restore
+  // -----------------------------------------------------------------------
+  describe('sequence persistence', () => {
+    it('DAppSession: restored session rejects replayed seq numbers', async () => {
+      const ctx = setupDAppWithManualWallet();
+      const { transport, session, walletKp } = ctx;
+      const { sessionKey } = await connectDAppManually(ctx);
 
-    const joinHandler = vi.fn();
-    dapp.on('walletJoined', joinHandler);
+      // Exchange messages to advance recvSeq to 2
+      for (let seq = 0; seq <= 2; seq++) {
+        const p = session.request('wallet_getAccounts');
+        await wait(20);
+        const reqs = transport.sent.filter(m => m.t === 'req');
+        const req = reqs[reqs.length - 1] as any;
 
-    await dapp.createPairing();
-    await flush();
+        transport.receive({
+          v: 1, t: 'res', ch: session.channelId,
+          id: req.id, from: walletKp.publicKeyB64,
+          ok: true,
+          sealed: sealPayload(sessionKey, session.channelId, seq, `result-${seq}`),
+        } as ProtocolMessage);
 
-    const kp = generateX25519KeyPair();
-    transport.receive({
-      v: 1, t: 'join', ch: dapp.channelId,
-      from: kp.publicKeyB64, pubkey: kp.publicKeyB64,
-    } as ProtocolMessage);
-    await flush();
+        await p;
+      }
 
-    expect(joinHandler).toHaveBeenCalled();
+      // Serialize and restore
+      const json = session.serialize();
+      const newTransport = new MockTransport();
+      const restored = new DAppSession({ transport: newTransport });
+      expect(restored.restore(json)).toBe(true);
+
+      // Manually set phase to connected so we can send requests
+      (restored as any).phase = 'connected';
+
+      // Try sending a request and responding with old seq=1 -> should be rejected
+      const p = restored.request('wallet_getAccounts');
+      await wait(20);
+      const reqMsg = newTransport.sent.find(m => m.t === 'req') as any;
+
+      newTransport.receive({
+        v: 1, t: 'res', ch: restored.channelId,
+        id: reqMsg.id, from: walletKp.publicKeyB64,
+        ok: true,
+        sealed: sealPayload(sessionKey, restored.channelId, 1, 'stale'),
+      } as ProtocolMessage);
+
+      await expect(p).rejects.toThrow('Replay detected');
+
+      // seq=3 should be accepted
+      const p2 = restored.request('wallet_getAccounts');
+      await wait(20);
+      const reqMsg2 = newTransport.sent.filter(m => m.t === 'req')[1] as any;
+
+      newTransport.receive({
+        v: 1, t: 'res', ch: restored.channelId,
+        id: reqMsg2.id, from: walletKp.publicKeyB64,
+        ok: true,
+        sealed: sealPayload(sessionKey, restored.channelId, 3, 'fresh'),
+      } as ProtocolMessage);
+
+      expect(await p2).toBe('fresh');
+    });
+
+    it('WalletSession: restored session rejects replayed seq numbers', async () => {
+      const ctx = setupWalletWithManualDApp();
+      const { transport, session, dappKp, channelId } = ctx;
+      const { sessionKey } = await connectWalletManually(ctx);
+
+      const handler = vi.fn();
+      session.on('request', handler);
+
+      // Advance recvSeq to 2
+      for (let seq = 0; seq <= 2; seq++) {
+        transport.receive({
+          v: 1, t: 'req', ch: channelId,
+          id: `req-${seq}`, from: dappKp.publicKeyB64,
+          method: 'wallet_getAccounts',
+          sealed: sealPayload(sessionKey, channelId, seq, {}),
+        } as ProtocolMessage);
+      }
+      expect(handler).toHaveBeenCalledTimes(3);
+
+      // Serialize and restore
+      const json = session.serialize();
+      const newTransport = new MockTransport();
+      const restored = new WalletSession({
+        transport: newTransport,
+        capabilities: { methods: ['wallet_getAccounts'], events: [], chains: ['eip155:1'] },
+      });
+      expect(restored.restore(json)).toBe(true);
+
+      const handler2 = vi.fn();
+      restored.on('request', handler2);
+
+      // Old seq=1 -> dropped
+      newTransport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'replay-1', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+        sealed: sealPayload(sessionKey, channelId, 1, {}),
+      } as ProtocolMessage);
+      expect(handler2).toHaveBeenCalledTimes(0);
+
+      // seq=3 -> accepted
+      newTransport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'fresh-3', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+        sealed: sealPayload(sessionKey, channelId, 3, {}),
+      } as ProtocolMessage);
+      expect(handler2).toHaveBeenCalledTimes(1);
+    });
   });
-});
 
-describe('Pending accept timeout', () => {
-  it('auto-rejects after 60s timeout', async () => {
-    vi.useFakeTimers();
+  // -----------------------------------------------------------------------
+  // 5. Send sequence overflow
+  // -----------------------------------------------------------------------
+  describe('send sequence overflow', () => {
+    it('DAppSession closes on send sequence overflow', async () => {
+      const ctx = setupDAppWithManualWallet();
+      const { transport, session } = ctx;
+      await connectDAppManually(ctx);
 
-    const transport = new MockTransport();
-    const dapp = new DAppSession({ transport, name: 'Test', autoAccept: false });
+      // Set sendSeq close to overflow: (2^32 - 1) - 1
+      (session as any).sendSeq = 0xFFFF_FFFE;
 
-    const errorHandler = vi.fn();
-    dapp.on('error', errorHandler);
+      const errorHandler = vi.fn();
+      session.on('error', errorHandler);
 
-    await dapp.createPairing();
+      // First request with params (triggers sendSeq increment): sendSeq goes to 0xFFFF_FFFF
+      // This will be left pending and rejected when session closes, so catch it.
+      const p1 = session.request('wallet_getAccounts', { test: true }).catch(() => {});
+      await wait(20);
+      // p1 was sent successfully (sendSeq was 0xFFFF_FFFE, used that, incremented to 0xFFFF_FFFF)
 
-    const kp = generateX25519KeyPair();
-    transport.receive({
-      v: 1, t: 'join', ch: dapp.channelId,
-      from: kp.publicKeyB64, pubkey: kp.publicKeyB64,
-      capabilities: { methods: [], events: [], chains: [] },
-    } as ProtocolMessage);
-    await vi.advanceTimersByTimeAsync(10);
+      // Second request with params: sendSeq would go from 0xFFFF_FFFF to 0 (overflow)
+      const p2 = session.request('wallet_getAccounts', { test: true });
+      await expect(p2).rejects.toThrow('Send sequence overflow');
+      expect(errorHandler).toHaveBeenCalled();
+      expect(session.phase).toBe('closed');
+      await p1; // ensure the suppressed rejection is settled
+    });
 
-    expect(dapp.phase).toBe('pending_accept');
+    it('WalletSession closes on send sequence overflow via approve', async () => {
+      const ctx = setupWalletWithManualDApp();
+      const { transport, session, dappKp, channelId } = ctx;
+      await connectWalletManually(ctx);
 
-    await vi.advanceTimersByTimeAsync(61_000);
-    expect(errorHandler).toHaveBeenCalled();
+      // Set sendSeq close to overflow
+      (session as any).sendSeq = 0xFFFF_FFFE;
 
-    vi.useRealTimers();
+      const errorHandler = vi.fn();
+      session.on('error', errorHandler);
+
+      // First approve: sendSeq 0xFFFF_FFFE -> 0xFFFF_FFFF (ok)
+      transport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'r1', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+      } as ProtocolMessage);
+      session.approve('r1', ['0x123']);
+
+      // sendSeq is now 0xFFFF_FFFF
+      // Second approve: sendSeq 0xFFFF_FFFF -> 0 (overflow, session closes)
+      transport.receive({
+        v: 1, t: 'req', ch: channelId,
+        id: 'r2', from: dappKp.publicKeyB64,
+        method: 'wallet_getAccounts',
+      } as ProtocolMessage);
+      session.approve('r2', ['0x456']);
+
+      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('Send sequence overflow'),
+      }));
+      expect(session.phase).toBe('closed');
+    });
+
+    it('WalletSession closes on send sequence overflow via pushEvent', async () => {
+      const ctx = setupWalletWithManualDApp();
+      const { session } = ctx;
+      await connectWalletManually(ctx);
+
+      (session as any).sendSeq = 0xFFFF_FFFE;
+
+      const errorHandler = vi.fn();
+      session.on('error', errorHandler);
+
+      // First push: ok
+      session.pushEvent('accountsChanged', { accounts: ['0xa'] });
+      expect(session.phase).toBe('connected');
+
+      // Second push: overflow
+      session.pushEvent('accountsChanged', { accounts: ['0xb'] });
+      expect(errorHandler).toHaveBeenCalled();
+      expect(session.phase).toBe('closed');
+    });
   });
 
-  it('does not timeout if accepted before deadline', async () => {
-    vi.useFakeTimers();
+  // -----------------------------------------------------------------------
+  // 6. Pending accept timeout
+  // -----------------------------------------------------------------------
+  describe('pending accept timeout', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
 
-    const transport = new MockTransport();
-    const dapp = new DAppSession({ transport, name: 'Test', autoAccept: false });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    const errorHandler = vi.fn();
-    dapp.on('error', errorHandler);
+    it('auto-rejects wallet after 60s without acceptWallet()', async () => {
+      const transport = new MockTransport();
+      const session = new DAppSession({ transport, name: 'Test dApp' });
+      const walletKp = generateX25519KeyPair();
 
-    await dapp.createPairing();
+      await session.createPairing();
 
-    const kp = generateX25519KeyPair();
-    transport.receive({
-      v: 1, t: 'join', ch: dapp.channelId,
-      from: kp.publicKeyB64, pubkey: kp.publicKeyB64,
-      capabilities: { methods: [], events: [], chains: [] },
-    } as ProtocolMessage);
-    await vi.advanceTimersByTimeAsync(10);
+      const errorHandler = vi.fn();
+      session.on('error', errorHandler);
 
-    dapp.acceptWallet();
-    await vi.advanceTimersByTimeAsync(61_000);
+      // Simulate wallet join
+      transport.receive({
+        v: 1, t: 'join', ch: session.channelId,
+        from: walletKp.publicKeyB64, pubkey: walletKp.publicKeyB64,
+        capabilities: { methods: ['wallet_getAccounts'], events: [], chains: ['eip155:1'] },
+      } as ProtocolMessage);
 
-    expect(errorHandler).not.toHaveBeenCalled();
-    vi.useRealTimers();
+      expect(session.phase).toBe('pending_accept');
+
+      // Advance time past 60s timeout
+      vi.advanceTimersByTime(61_000);
+
+      // Should have emitted error and closed
+      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('timed out'),
+      }));
+      expect(session.phase).toBe('closed');
+
+      // Should have sent a close message with user_rejected
+      const closeMsg = transport.sent.find(m => m.t === 'close');
+      expect(closeMsg).toBeTruthy();
+      expect((closeMsg as any).reason).toBe('user_rejected');
+    });
+
+    it('does not timeout if acceptWallet() is called in time', async () => {
+      const transport = new MockTransport();
+      const session = new DAppSession({ transport, name: 'Test dApp' });
+      const walletKp = generateX25519KeyPair();
+
+      await session.createPairing();
+
+      transport.receive({
+        v: 1, t: 'join', ch: session.channelId,
+        from: walletKp.publicKeyB64, pubkey: walletKp.publicKeyB64,
+        capabilities: { methods: ['wallet_getAccounts'], events: [], chains: ['eip155:1'] },
+      } as ProtocolMessage);
+
+      expect(session.phase).toBe('pending_accept');
+
+      // Accept within timeout
+      session.acceptWallet();
+
+      // Advance past the timeout
+      vi.advanceTimersByTime(61_000);
+
+      // Should NOT be closed — should still be waiting for ready.connected
+      expect(session.phase).not.toBe('closed');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 7. Capabilities validation
+  // -----------------------------------------------------------------------
+  describe('capabilities validation', () => {
+    it('rejects join with capabilities.methods not an array', async () => {
+      const transport = new MockTransport();
+      const session = new DAppSession({ transport, name: 'Test dApp' });
+      const walletKp = generateX25519KeyPair();
+
+      await session.createPairing();
+
+      const errorHandler = vi.fn();
+      session.on('error', errorHandler);
+
+      transport.receive({
+        v: 1, t: 'join', ch: session.channelId,
+        from: walletKp.publicKeyB64, pubkey: walletKp.publicKeyB64,
+        capabilities: { methods: 'not-an-array', events: [], chains: [] },
+      } as ProtocolMessage);
+
+      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('Malformed wallet capabilities'),
+      }));
+
+      // Should have sent a close with protocol_error
+      const closeMsg = transport.sent.find(m => m.t === 'close');
+      expect(closeMsg).toBeTruthy();
+      expect((closeMsg as any).reason).toBe('protocol_error');
+
+      // Should NOT have transitioned to pending_accept
+      expect(session.phase).not.toBe('pending_accept');
+    });
+
+    it('rejects join with capabilities as non-object', async () => {
+      const transport = new MockTransport();
+      const session = new DAppSession({ transport, name: 'Test dApp' });
+      const walletKp = generateX25519KeyPair();
+
+      await session.createPairing();
+
+      const errorHandler = vi.fn();
+      session.on('error', errorHandler);
+
+      transport.receive({
+        v: 1, t: 'join', ch: session.channelId,
+        from: walletKp.publicKeyB64, pubkey: walletKp.publicKeyB64,
+        capabilities: 'invalid',
+      } as ProtocolMessage);
+
+      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('Malformed wallet capabilities'),
+      }));
+    });
+
+    it('accepts join with valid capabilities', async () => {
+      const transport = new MockTransport();
+      const session = new DAppSession({ transport, name: 'Test dApp' });
+      const walletKp = generateX25519KeyPair();
+
+      await session.createPairing();
+
+      transport.receive({
+        v: 1, t: 'join', ch: session.channelId,
+        from: walletKp.publicKeyB64, pubkey: walletKp.publicKeyB64,
+        capabilities: { methods: ['wallet_getAccounts'], events: ['accountsChanged'], chains: ['eip155:1'] },
+      } as ProtocolMessage);
+
+      expect(session.phase).toBe('pending_accept');
+      expect(session.walletCapabilities).toEqual({
+        methods: ['wallet_getAccounts'],
+        events: ['accountsChanged'],
+        chains: ['eip155:1'],
+      });
+    });
+
+    it('accepts join with null/undefined capabilities (optional field)', async () => {
+      const transport = new MockTransport();
+      const session = new DAppSession({ transport, name: 'Test dApp' });
+      const walletKp = generateX25519KeyPair();
+
+      await session.createPairing();
+
+      // capabilities omitted entirely — the validateCapabilities check only
+      // runs when capabilities != null, so omitting it should be fine
+      transport.receive({
+        v: 1, t: 'join', ch: session.channelId,
+        from: walletKp.publicKeyB64, pubkey: walletKp.publicKeyB64,
+      } as ProtocolMessage);
+
+      expect(session.phase).toBe('pending_accept');
+    });
+
+    it('rejects join with capabilities missing events array', async () => {
+      const transport = new MockTransport();
+      const session = new DAppSession({ transport, name: 'Test dApp' });
+      const walletKp = generateX25519KeyPair();
+
+      await session.createPairing();
+
+      const errorHandler = vi.fn();
+      session.on('error', errorHandler);
+
+      transport.receive({
+        v: 1, t: 'join', ch: session.channelId,
+        from: walletKp.publicKeyB64, pubkey: walletKp.publicKeyB64,
+        capabilities: { methods: ['wallet_getAccounts'], chains: ['eip155:1'] },
+      } as ProtocolMessage);
+
+      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining('Malformed wallet capabilities'),
+      }));
+    });
   });
 });
