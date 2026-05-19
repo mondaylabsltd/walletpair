@@ -1,0 +1,25 @@
+[package]
+name = "walletpair-websocket-relay"
+version = "0.1.0"
+edition = "2021"
+description = "WalletPair Protocol v1 WebSocket Relay"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+futures-util = "0.3"
+prometheus = { version = "0.13", features = ["process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+tokio-tungstenite = "0.26"

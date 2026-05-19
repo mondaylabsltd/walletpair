@@ -1,0 +1,103 @@
+//! HTTP routes and WebSocket upgrade handler.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::Router;
+use prometheus::Encoder;
+use tokio::sync::broadcast;
+
+use crate::config::Config;
+use crate::metrics::Metrics;
+use crate::session;
+use crate::store::ChannelStore;
+
+/// Shared application state.
+#[derive(Clone)]
+pub struct AppState {
+    pub store: Arc<Mutex<ChannelStore>>,
+    pub config: Arc<Config>,
+    pub metrics: Metrics,
+    pub shutdown_tx: broadcast::Sender<()>,
+    pub conn_counter: Arc<AtomicU64>,
+}
+
+pub fn router(state: AppState) -> Router {
+    let ws_path = state.config.websocket_path.clone();
+    Router::new()
+        .route(&ws_path, get(ws_upgrade))
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/metrics", get(metrics_handler))
+        .with_state(state)
+}
+
+async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+    // Connection limit
+    let current = state.metrics.active_connections.get();
+    if current >= state.config.max_connections as i64 {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+
+    // Negotiate subprotocol
+    let ws = ws.protocols(["walletpair.v1"]);
+
+    let conn_id = state.conn_counter.fetch_add(1, Ordering::Relaxed);
+
+    ws.on_upgrade(move |socket| {
+        state.metrics.active_connections.inc();
+        tracing::debug!(conn_id = conn_id, "new websocket connection");
+
+        let shutdown_rx = state.shutdown_tx.subscribe();
+        session::handle_ws(
+            socket,
+            conn_id,
+            state.store.clone(),
+            state.config.clone(),
+            state.metrics.clone(),
+            shutdown_rx,
+        )
+    })
+}
+
+async fn healthz() -> &'static str {
+    "ok"
+}
+
+async fn readyz(State(state): State<AppState>) -> Response {
+    let store = state.store.lock().unwrap();
+    let channels = store.channel_count();
+    drop(store);
+
+    if channels < state.config.max_channels {
+        (StatusCode::OK, "ready").into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "at channel capacity").into_response()
+    }
+}
+
+async fn metrics_handler(State(state): State<AppState>) -> Response {
+    if !state.config.metrics_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let encoder = prometheus::TextEncoder::new();
+    let metric_families = state.metrics.registry.gather();
+    let mut buffer = Vec::new();
+
+    if encoder.encode(&metric_families, &mut buffer).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, prometheus::TEXT_FORMAT)],
+        buffer,
+    )
+        .into_response()
+}

@@ -1,0 +1,203 @@
+//! WebSocket connection lifecycle.
+//!
+//! Each WebSocket connection is handled by a single task. The connection is
+//! bound to at most one channel (established by the first create/join message).
+
+use std::sync::{Arc, Mutex};
+
+use axum::extract::ws::{Message, WebSocket};
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
+
+use crate::config::Config;
+use crate::metrics::Metrics;
+use crate::protocol::{self, ClientMessage};
+use crate::relay::{self, ProcessResult};
+use crate::store::ChannelStore;
+
+/// Binding established by the first message on this connection.
+struct SessionBinding {
+    channel_id: String,
+}
+
+/// Handle a single WebSocket connection.
+pub async fn handle_ws(
+    ws: WebSocket,
+    conn_id: u64,
+    store: Arc<Mutex<ChannelStore>>,
+    config: Arc<Config>,
+    metrics: Metrics,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+) {
+    let (mut ws_sink, mut ws_stream) = ws.split();
+    let (tx, mut rx) = mpsc::channel::<String>(config.outbound_queue_size);
+
+    // Spawn write task: reads from mpsc and writes to WebSocket
+    let write_metrics = metrics.clone();
+    let write_handle = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if ws_sink.send(Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+        let _ = ws_sink.close().await;
+        drop(write_metrics);
+    });
+
+    let mut binding: Option<SessionBinding> = None;
+
+    // Read loop
+    loop {
+        let frame = tokio::select! {
+            frame = ws_stream.next() => frame,
+            _ = shutdown_rx.recv() => {
+                // Graceful shutdown: send close and break
+                if let Some(ref b) = binding {
+                    let close = protocol::build_close(
+                        &b.channel_id,
+                        protocol::CloseReason::ServerShutdown,
+                    );
+                    let _ = tx.try_send(close);
+                }
+                break;
+            }
+        };
+
+        let frame = match frame {
+            Some(Ok(f)) => f,
+            Some(Err(e)) => {
+                tracing::debug!(conn_id = conn_id, error = %e, "ws read error");
+                break;
+            }
+            None => break, // stream ended
+        };
+
+        let raw_text = match frame {
+            Message::Text(t) => t,
+            Message::Close(_) => break,
+            Message::Ping(_) | Message::Pong(_) => continue, // handled by axum/tungstenite
+            Message::Binary(_) => {
+                // Protocol requires text frames only
+                let ch = binding
+                    .as_ref()
+                    .map(|b| b.channel_id.as_str())
+                    .unwrap_or("unknown");
+                let close = protocol::build_close(ch, protocol::CloseReason::ProtocolError);
+                let _ = tx.try_send(close);
+                metrics
+                    .messages_rejected_total
+                    .with_label_values(&["binary_frame"])
+                    .inc();
+                break;
+            }
+        };
+
+        // Size limit (pre-parse)
+        if raw_text.len() > config.max_message_bytes {
+            let ch = binding
+                .as_ref()
+                .map(|b| b.channel_id.as_str())
+                .unwrap_or("unknown");
+            let close = protocol::build_close(ch, protocol::CloseReason::PayloadTooLarge);
+            let _ = tx.try_send(close);
+            metrics
+                .messages_rejected_total
+                .with_label_values(&["payload_too_large"])
+                .inc();
+            break;
+        }
+
+        // Parse
+        let msg = match protocol::parse_message(&raw_text) {
+            Ok(m) => m,
+            Err(e) => {
+                let reason = e.to_close_reason();
+                let ch = binding
+                    .as_ref()
+                    .map(|b| b.channel_id.as_str())
+                    .unwrap_or("unknown");
+                let close = protocol::build_close(ch, reason);
+                let _ = tx.try_send(close);
+                metrics
+                    .messages_rejected_total
+                    .with_label_values(&[reason.as_str()])
+                    .inc();
+                tracing::debug!(conn_id = conn_id, error = %e, "parse error");
+                break;
+            }
+        };
+
+        // Log (never log sealed)
+        tracing::debug!(
+            conn_id = conn_id,
+            ch = %msg.channel_id(),
+            msg_type = %msg.message_type(),
+            peer = %msg.from_peer(),
+            "received message"
+        );
+
+        // Enforce single-channel binding
+        if let Some(ref b) = binding {
+            if msg.channel_id() != b.channel_id {
+                let close =
+                    protocol::build_close(msg.channel_id(), protocol::CloseReason::ProtocolError);
+                let _ = tx.try_send(close);
+                metrics
+                    .messages_rejected_total
+                    .with_label_values(&["channel_mismatch"])
+                    .inc();
+                break;
+            }
+        }
+
+        // First message must be create or join
+        if binding.is_none() {
+            match &msg {
+                ClientMessage::Create { ch, .. } | ClientMessage::Join { ch, .. } => {
+                    binding = Some(SessionBinding {
+                        channel_id: ch.clone(),
+                    });
+                }
+                _ => {
+                    let close = protocol::build_close(
+                        msg.channel_id(),
+                        protocol::CloseReason::InvalidState,
+                    );
+                    let _ = tx.try_send(close);
+                    metrics
+                        .messages_rejected_total
+                        .with_label_values(&["no_binding"])
+                        .inc();
+                    break;
+                }
+            }
+        }
+
+        // Process message through relay
+        let result = {
+            let mut store = store.lock().unwrap();
+            relay::process_message(&mut store, conn_id, &tx, &raw_text, msg, &metrics)
+        };
+
+        match result {
+            ProcessResult::Ok => {}
+            ProcessResult::Reject(close_json) => {
+                let _ = tx.try_send(close_json);
+                break;
+            }
+        }
+    }
+
+    // Cleanup: disconnect this peer from its channel
+    if let Some(ref b) = binding {
+        let mut store = store.lock().unwrap();
+        store.disconnect_peer(&b.channel_id, conn_id);
+    }
+
+    // Wait for write task to finish (with timeout)
+    drop(tx);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), write_handle).await;
+
+    metrics.active_connections.dec();
+    tracing::debug!(conn_id = conn_id, "connection closed");
+}
