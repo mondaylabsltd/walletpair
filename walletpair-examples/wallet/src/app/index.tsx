@@ -383,7 +383,11 @@ export default function WalletScreen() {
 
     ble.onMessage((msg) => {
       // Messages from dApp arrive here (ready.waiting, ready.connected, req, etc.)
-      handleMessage(JSON.stringify(msg));
+      try {
+        handleMessage(JSON.stringify(msg));
+      } catch (e: any) {
+        addLog('err', 'ble', `message handler error: ${e?.message || String(e)}`);
+      }
     });
 
     let bleHasJoined = false; // true after first join sent; distinguishes first connect from reconnect

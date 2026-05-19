@@ -43,6 +43,7 @@ private class PeripheralDelegate: NSObject, CBPeripheralManagerDelegate {
   private var subscribedCentral: CBCentral?
   private var pendingPromise: Promise?
   private var sendQueue: [Data] = []
+  private let lock = NSLock()
 
   private let svcUuid: CBUUID
   private let writeUuid: CBUUID
@@ -77,20 +78,26 @@ private class PeripheralDelegate: NSObject, CBPeripheralManagerDelegate {
 
   func enqueueNotification(base64Data: String) {
     guard let data = Data(base64Encoded: base64Data) else { return }
+    lock.lock()
     sendQueue.append(data)
+    lock.unlock()
     drainQueue()
   }
 
   func enqueueBatch(base64Frames: [String]) {
+    lock.lock()
     for b64 in base64Frames {
       if let data = Data(base64Encoded: b64) {
         sendQueue.append(data)
       }
     }
+    lock.unlock()
     drainQueue()
   }
 
   private func drainQueue() {
+    lock.lock()
+    defer { lock.unlock() }
     guard let m = manager, let ch = notifyChar, let central = subscribedCentral else { return }
     while !sendQueue.isEmpty {
       let data = sendQueue.first!

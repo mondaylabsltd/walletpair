@@ -108,14 +108,19 @@ class BlePeripheralModule : Module() {
 
     // Send all frames at once — avoids N round-trips through JS↔Native bridge
     AsyncFunction("sendBatch") { base64Frames: List<String> ->
-      val device = connectedDevice ?: return@AsyncFunction
       val ch = notifyChar ?: return@AsyncFunction
       val server = gattServer ?: return@AsyncFunction
 
       for (b64 in base64Frames) {
+        val device = connectedDevice ?: break
         val bytes = Base64.decode(b64, Base64.NO_WRAP)
         ch.value = bytes
-        server.notifyCharacteristicChanged(device, ch, false)
+        try {
+          server.notifyCharacteristicChanged(device, ch, false)
+        } catch (e: Exception) {
+          android.util.Log.e(TAG, "sendBatch notifyCharacteristicChanged failed: ${e.message}")
+          break
+        }
       }
     }
   }

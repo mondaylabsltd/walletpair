@@ -481,6 +481,10 @@ async function bleConnect() {
     log('in', 'ble', '8. write char OK');
 
     log('out', 'ble', '9. getting notify characteristic...');
+    // Remove old listener if any (prevents duplicate listeners on reconnect)
+    if (S.bleNotifyChar) {
+      S.bleNotifyChar.removeEventListener('characteristicvaluechanged', onBleNotification);
+    }
     S.bleNotifyChar = await service.getCharacteristic(BLE_NOTIFY_CHAR_UUID);
     log('in', 'ble', '10. notify char OK');
 
@@ -517,14 +521,18 @@ async function onBleDisconnect() {
   // Try to reconnect using existing device reference (no re-scan needed)
   for (const delay of BACKOFF) {
     if (S.intentionalClose) return;
+    await new Promise(r => setTimeout(r, delay));
+    if (!S.bleDevice?.gatt) break;
     try {
-      await new Promise(r => setTimeout(r, delay));
-      if (!S.bleDevice?.gatt) break;
       log('in', 'ble', `reconnect attempt...`);
 
       const server = await S.bleDevice.gatt.connect();
       const service = await server.getPrimaryService(BLE_SERVICE_UUID);
       S.bleWriteChar = await service.getCharacteristic(BLE_WRITE_CHAR_UUID);
+      // Remove old listener before adding new one (prevents duplicate listeners)
+      if (S.bleNotifyChar) {
+        S.bleNotifyChar.removeEventListener('characteristicvaluechanged', onBleNotification);
+      }
       S.bleNotifyChar = await service.getCharacteristic(BLE_NOTIFY_CHAR_UUID);
       await S.bleNotifyChar.startNotifications();
       S.bleNotifyChar.addEventListener('characteristicvaluechanged', onBleNotification);
