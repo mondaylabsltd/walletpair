@@ -41,6 +41,7 @@ export class BlePeripheralTransport {
   private defragmenter = new Defragmenter();
   private subscribed = false;
   private started = false;
+  private starting = false; // guard against double-start from React re-renders
   private subscriptions: { remove(): void }[] = [];
 
   private _onMessage: ((msg: Record<string, unknown>) => void) | null = null;
@@ -59,8 +60,13 @@ export class BlePeripheralTransport {
     this._onDisconnected = handler;
   }
 
-  async start(): Promise<void> {
-    await this.stop();
+  async start(deviceName = 'WalletPair'): Promise<void> {
+    if (this.starting || this.started) return; // prevent double-start
+    this.starting = true;
+
+    try {
+      await this.stop();
+    } catch { /* ok */ }
 
     // Lazy-load our custom Expo native module
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -118,22 +124,31 @@ export class BlePeripheralTransport {
       BLE_SERVICE_UUID,
       BLE_WRITE_CHAR_UUID,
       BLE_NOTIFY_CHAR_UUID,
-      'WalletPair',
+      deviceName,
     );
     this.started = true;
-    console.log('[BLE] peripheral started');
+    this.starting = false;
+    console.log('[BLE] peripheral started as', deviceName);
   }
 
   async sendMessage(msg: Record<string, unknown>): Promise<void> {
-    if (!this.started || !this.subscribed) return;
+    console.log('[BLE] sendMessage', msg.t, 'started:', this.started, 'subscribed:', this.subscribed);
+    if (!this.started || !this.subscribed) {
+      console.log('[BLE] sendMessage skipped — not ready');
+      return;
+    }
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const BleModule: typeof import('../../modules/ble-peripheral') =
       require('../../modules/ble-peripheral');
 
-    const frames = frameMessage(JSON.stringify(msg));
-    for (const frame of frames) {
-      await BleModule.sendNotification(bytesToBase64(frame));
+    const jsonStr = JSON.stringify(msg);
+    console.log('[BLE] sending', jsonStr.length, 'bytes');
+    const frames = frameMessage(jsonStr);
+    for (let i = 0; i < frames.length; i++) {
+      console.log('[BLE] sending frame', i + 1, '/', frames.length, 'size:', frames[i].length);
+      await BleModule.sendNotification(bytesToBase64(frames[i]));
     }
+    console.log('[BLE] sendMessage done');
   }
 
   isConnected(): boolean {
@@ -156,6 +171,7 @@ export class BlePeripheralTransport {
       }
     }
     this.started = false;
+    this.starting = false;
     this.subscribed = false;
     this.defragmenter.reset();
   }

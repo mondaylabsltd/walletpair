@@ -425,7 +425,10 @@ export default function WalletScreen() {
         addLog('in', 'ble', 'all permissions granted');
       }
 
-      await ble.start();
+      // Device name visible in Chrome BLE scan dialog
+      const Device = require('expo-device') as typeof import('expo-device');
+      const phoneName = Device.deviceName || Device.modelName || 'Phone';
+      await ble.start(`WalletPair ${phoneName}`);
       updatePhase('waiting');
       addLog('in', 'ble', 'advertising... waiting for dApp');
     } catch (err: any) {

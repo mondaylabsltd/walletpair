@@ -407,8 +407,13 @@ async function bleConnect() {
   bleStatusEl.textContent = 'Scanning...';
   try {
     log('out', 'ble', '1. requesting device...');
+    // namePrefix matches "WalletPair <DeviceName>" across iOS/Android.
+    // services filter works on iOS which includes UUID in ad packet.
     const device = await navigator.bluetooth.requestDevice({
-      filters: [{ name: 'WalletPair' }],
+      filters: [
+        { namePrefix: 'WalletPair' },
+        { services: [BLE_SERVICE_UUID] },
+      ],
       optionalServices: [BLE_SERVICE_UUID],
     });
     log('in', 'ble', `2. device selected: ${device.name} (${device.id})`);
@@ -446,10 +451,13 @@ async function bleConnect() {
 }
 
 function onBleNotification(event) {
-  const data = new Uint8Array(event.target.value.buffer);
+  const dv = event.target.value;
+  const data = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+  log('in', 'ble', `notification: ${data.length} bytes, flags=0x${data[0]?.toString(16)}`);
   const json = S.bleDefrag.push(data);
   if (json) {
-    try { handleMessage(JSON.parse(json), null); } catch {}
+    log('in', 'ble', `assembled: ${json.length} chars`);
+    try { handleMessage(JSON.parse(json), null); } catch (e) { log('err', 'ble', `parse error: ${e.message}`); }
   }
 }
 
