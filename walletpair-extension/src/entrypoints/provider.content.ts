@@ -14,6 +14,25 @@ export default defineContentScript({
     const MSG_CHANNEL = 'walletpair-ext';
     const PROVIDER_UUID = 'e3a10000-7770-4270-8000-000077700001';
 
+    // EIP-1193 ProviderRpcError — ethers.js and viem check instanceof
+    class ProviderRpcError extends Error {
+      code: number;
+      data?: unknown;
+      constructor(code: number, message: string, data?: unknown) {
+        super(message);
+        this.code = code;
+        this.data = data;
+        this.name = 'ProviderRpcError';
+      }
+    }
+
+    // Deprecated / unsupported methods → code 4200
+    const UNSUPPORTED_METHODS = new Set([
+      'eth_getEncryptionPublicKey',
+      'eth_decrypt',
+      'eth_sign',
+    ]);
+
     // Pending RPC requests waiting for responses
     const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
     let reqCounter = 0;
@@ -33,6 +52,11 @@ export default defineContentScript({
       async request(args: { method: string; params?: unknown }): Promise<unknown> {
         const { method, params } = args;
 
+        // Reject unsupported / deprecated methods with code 4200
+        if (UNSUPPORTED_METHODS.has(method)) {
+          throw new ProviderRpcError(4200, `${method} is not supported`);
+        }
+
         // Local fast-path for cached data
         if (method === 'eth_accounts') {
           return isConnected ? [...accounts] : [];
@@ -42,6 +66,9 @@ export default defineContentScript({
         }
         if (method === 'net_version') {
           return String(parseInt(chainId, 16));
+        }
+        if (method === 'web3_clientVersion') {
+          return 'WalletPair/0.1.0';
         }
 
         // Forward to background via content script bridge
@@ -57,7 +84,7 @@ export default defineContentScript({
           setTimeout(() => {
             if (pending.has(id)) {
               pending.delete(id);
-              reject(new Error('Request timeout'));
+              reject(new ProviderRpcError(4200, 'Request timeout'));
             }
           }, 300_000);
         });
@@ -78,6 +105,18 @@ export default defineContentScript({
       removeListener(event: string, handler: (...args: any[]) => void) {
         eventListeners.get(event)?.delete(handler);
         return provider;
+      },
+
+      once(event: string, handler: (...args: any[]) => void) {
+        const wrapped = (...args: any[]) => {
+          provider.removeListener(event, wrapped);
+          handler(...args);
+        };
+        return provider.on(event, wrapped);
+      },
+
+      listenerCount(event: string) {
+        return eventListeners.get(event)?.size ?? 0;
       },
 
       removeAllListeners(event?: string) {
@@ -134,6 +173,11 @@ export default defineContentScript({
         return isConnected;
       },
 
+      // MetaMask compatibility shim — many dApps check this
+      _metamask: {
+        isUnlocked: () => Promise.resolve(isConnected),
+      },
+
       // Some dApps also check these
       selectedAddress: null as string | null,
       chainId,
@@ -152,17 +196,22 @@ export default defineContentScript({
         pending.delete(msg.id);
 
         if (msg.error) {
-          const err = new Error(msg.error.message) as any;
-          err.code = msg.error.code;
-          p.reject(err);
+          p.reject(new ProviderRpcError(
+            msg.error.code ?? -32603,
+            msg.error.message ?? 'Internal error',
+            msg.error.data,
+          ));
         } else {
           // Update cached state from responses
           if (msg.method === 'eth_requestAccounts' || msg.method === 'wallet_getAccounts') {
             if (Array.isArray(msg.result) && msg.result.length > 0) {
               accounts = msg.result;
-              isConnected = true;
               provider.selectedAddress = accounts[0];
-              provider.emit('connect', { chainId });
+              // EIP-1193: only emit connect when transitioning from disconnected
+              if (!isConnected) {
+                isConnected = true;
+                provider.emit('connect', { chainId });
+              }
               provider.emit('accountsChanged', accounts);
             }
           }
@@ -185,10 +234,15 @@ export default defineContentScript({
           isConnected = false;
           accounts = [];
           provider.selectedAddress = null;
-          provider.emit('disconnect', { code: 4900, message: 'Disconnected' });
+          provider.emit('disconnect', new ProviderRpcError(4900, 'Disconnected'));
         } else if (evtName === 'connect') {
-          isConnected = true;
-          provider.emit('connect', { chainId });
+          if (!isConnected) {
+            isConnected = true;
+            provider.emit('connect', { chainId });
+          }
+        } else if (evtName === 'message') {
+          // EIP-1193 message event (used for eth_subscription)
+          provider.emit('message', data);
         }
       }
     });
@@ -197,7 +251,7 @@ export default defineContentScript({
     const icon =
       'data:image/svg+xml,' +
       encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#6366f1"/><path d="M18 32 L32 18 L46 32 L32 46Z" fill="white" opacity="0.9"/><circle cx="32" cy="32" r="6" fill="#6366f1"/></svg>`,
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96"><rect width="96" height="96" rx="24" fill="#6366f1"/><path d="M27 48 L48 27 L69 48 L48 69Z" fill="white" opacity="0.9"/><circle cx="48" cy="48" r="9" fill="#6366f1"/></svg>`,
       );
 
     const info = Object.freeze({
@@ -245,6 +299,30 @@ export default defineContentScript({
       writable: false,
       configurable: false,
     });
+
+    // Ask content script bridge for current state (handles page reload while connected)
+    const onInitState = (event: MessageEvent) => {
+      if (
+        event.source !== window ||
+        event.data?.channel !== MSG_CHANNEL ||
+        event.data?.type !== 'wp-init-state'
+      )
+        return;
+      window.removeEventListener('message', onInitState);
+      const { connected, accounts: initAccounts, chainId: initChainId } = event.data;
+      if (connected && Array.isArray(initAccounts) && initAccounts.length > 0) {
+        accounts = initAccounts;
+        chainId = initChainId || chainId;
+        provider.selectedAddress = accounts[0];
+        provider.chainId = chainId;
+        provider.networkVersion = String(parseInt(chainId, 16));
+        if (!isConnected) {
+          isConnected = true;
+          provider.emit('connect', { chainId });
+        }
+      }
+    };
+    window.addEventListener('message', onInitState);
 
     // Notify content script bridge that provider is ready
     window.postMessage({ type: 'wp-provider-ready', channel: MSG_CHANNEL }, '*');

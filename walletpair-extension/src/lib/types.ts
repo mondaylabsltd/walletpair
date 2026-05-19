@@ -17,6 +17,7 @@ export interface ExtensionSettings {
   relayUrl: string;
   autoConnect: boolean;
   enabledChains: string[];
+  rpcUrls: Record<number, string>;
 }
 
 /** Message types between injected script <-> content script */

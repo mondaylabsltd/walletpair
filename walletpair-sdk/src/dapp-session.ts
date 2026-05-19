@@ -33,6 +33,13 @@ import { Emitter } from './emitter.js';
 
 const BACKOFF = [1000, 2000, 5000, 10000, 30000];
 const DEFAULT_REQUEST_TIMEOUT = 120_000;
+const PENDING_ACCEPT_TIMEOUT = 60_000;
+
+function validateCapabilities(cap: unknown): cap is Capabilities {
+  if (cap == null || typeof cap !== 'object') return false;
+  const c = cap as Record<string, unknown>;
+  return Array.isArray(c.methods) && Array.isArray(c.events) && Array.isArray(c.chains);
+}
 
 export class DAppSession extends Emitter<DAppSessionEvents> {
   phase: DAppPhase = 'idle';
@@ -58,12 +65,14 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   private remotePubKey: Uint8Array | null = null;
   private sessionKey: Uint8Array | null = null;
   private sendSeq = 0;
+  private recvSeq = -1;
   private resumeToken: string | null = null;
   private paired = false;
   private intentionalClose = false;
   private reqCounter = 0;
   private pendingRequests = new Map<string, PendingRequest>();
 
+  private pendingAcceptTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
 
@@ -95,6 +104,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     this.pubKeyB64 = kp.publicKeyB64;
     this.channelId = generateChannelId();
     this.sendSeq = 0;
+    this.recvSeq = -1;
     this.remotePubKey = null;
     this.sessionKey = null;
     this.reqCounter = 0;
@@ -140,6 +150,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   /** Accept the wallet after pairing code verification. */
   acceptWallet(): void {
     if (this.phase !== 'pending_accept' || !this.remotePubKey) return;
+    this.clearPendingAcceptTimer();
     this.doAccept();
   }
 
@@ -166,7 +177,14 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       from: this.pubKeyB64, method,
     };
     if (params !== undefined && params !== null) {
-      (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, this.sendSeq++, params);
+      const seq = this.sendSeq;
+      this.sendSeq = (this.sendSeq + 1) >>> 0;
+      if (this.sendSeq === 0) {
+        this.emit('error', new Error('Send sequence overflow — session invalidated'));
+        this.close();
+        return Promise.reject(new Error('Send sequence overflow — session invalidated'));
+      }
+      (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, params);
     }
 
     return new Promise<T>((resolve, reject) => {
@@ -189,6 +207,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   /** Gracefully close the session. */
   close(): void {
     this.intentionalClose = true;
+    this.clearPendingAcceptTimer();
     this.stopReconnect();
     for (const [, req] of this.pendingRequests) {
       if (req.timer) clearTimeout(req.timer);
@@ -220,6 +239,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       remotePubKeyB64: this.remotePubKey ? b64urlEncode(this.remotePubKey) : null,
       sessionKey: this.sessionKey ? bytesToHex(this.sessionKey) : null,
       sendSeq: this.sendSeq,
+      recvSeq: this.recvSeq,
       resumeToken: this.resumeToken,
       reqCounter: this.reqCounter,
       paired: this.paired,
@@ -236,6 +256,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       this.remotePubKey = d.remotePubKeyB64 ? b64urlDecode(d.remotePubKeyB64) : null;
       this.sessionKey = d.sessionKey ? hexToBytes(d.sessionKey) : null;
       this.sendSeq = d.sendSeq || 0;
+      this.recvSeq = d.recvSeq ?? -1;
       this.resumeToken = d.resumeToken;
       this.reqCounter = d.reqCounter || 0;
       this.paired = d.paired || false;
@@ -276,6 +297,17 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
         const shared = computeSharedSecret(this.privKey, this.remotePubKey);
         this.sessionKey = deriveSessionKey(shared, this.channelId);
 
+        // Validate capabilities shape
+        if (msg.capabilities != null && !validateCapabilities(msg.capabilities)) {
+          this.sendRaw({
+            v: 1, t: 'close', ch: this.channelId,
+            from: this.pubKeyB64, target: b64urlEncode(this.remotePubKey),
+            reason: 'protocol_error',
+          } as any);
+          this.emit('error', new Error('Malformed wallet capabilities'));
+          break;
+        }
+
         this.walletCapabilities = msg.capabilities;
         this.walletMeta = msg.meta;
 
@@ -290,6 +322,15 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
             meta: msg.meta,
           });
           this.setPhase('pending_accept');
+
+          // Start pending_accept timeout
+          this.clearPendingAcceptTimer();
+          this.pendingAcceptTimer = setTimeout(() => {
+            if (this.phase === 'pending_accept') {
+              this.emit('error', new Error('Pairing acceptance timed out'));
+              this.rejectWallet();
+            }
+          }, PENDING_ACCEPT_TIMEOUT);
         }
         break;
       }
@@ -302,7 +343,12 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
 
         if (msg.sealed && this.sessionKey) {
           try {
-            const { data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed);
+            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed);
+            if (seq <= this.recvSeq) {
+              pending.reject(new Error('Replay detected'));
+              break;
+            }
+            this.recvSeq = seq;
             if (msg.ok) {
               pending.resolve(data);
             } else {
@@ -328,7 +374,9 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       case 'evt': {
         if (msg.sealed && this.sessionKey) {
           try {
-            const { data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed);
+            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed);
+            if (seq <= this.recvSeq) break; // replay — silently drop
+            this.recvSeq = seq;
             this.emit('event', { event: msg.event, data });
           } catch { /* ignore decryption failure on events */ }
         }
@@ -417,6 +465,13 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private clearPendingAcceptTimer(): void {
+    if (this.pendingAcceptTimer) {
+      clearTimeout(this.pendingAcceptTimer);
+      this.pendingAcceptTimer = null;
     }
   }
 

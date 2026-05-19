@@ -45,7 +45,7 @@
 
 <div class="settings">
   <div class="settings-header">
-    <button class="back-btn" onclick={onBack}>
+    <button class="back-btn" onclick={onBack} aria-label="Back">
       <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
         <path d="M7.78 12.53a.75.75 0 01-1.06 0L2.47 8.28a.75.75 0 010-1.06l4.25-4.25a.75.75 0 011.06 1.06L4.56 7.25h8.69a.75.75 0 010 1.5H4.56l3.22 3.22a.75.75 0 010 1.06z"/>
       </svg>

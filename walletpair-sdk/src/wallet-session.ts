@@ -47,6 +47,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   private remotePubKey: Uint8Array | null = null;
   private sessionKey: Uint8Array | null = null;
   private sendSeq = 0;
+  private recvSeq = -1;
   private resumeToken: string | null = null;
   private relayUrl = '';
   private intentionalClose = false;
@@ -77,6 +78,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     this.remotePubKey = b64urlDecode(parsed.pubkey);
     this.relayUrl = parsed.relay;
     this.sendSeq = 0;
+    this.recvSeq = -1;
 
     const kp = generateX25519KeyPair();
     this.privKey = kp.privateKey;
@@ -104,35 +106,56 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   /** Respond to a request with success. */
   approve(requestId: string, result: unknown): void {
     if (!this.sessionKey) return;
+    const seq = this.sendSeq;
+    this.sendSeq = (this.sendSeq + 1) >>> 0;
+    if (this.sendSeq === 0) {
+      this.emit('error', new Error('Send sequence overflow — session invalidated'));
+      this.close();
+      return;
+    }
     const msg: ProtocolMessage = {
       v: 1, t: 'res', ch: this.channelId, id: requestId,
       from: this.pubKeyB64, ok: true,
     };
-    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, this.sendSeq++, result);
+    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, result);
     this.sendRaw(msg);
   }
 
   /** Respond to a request with rejection. */
   reject(requestId: string, code = 'user_rejected', message = 'User rejected the request'): void {
     if (!this.sessionKey) return;
+    const seq = this.sendSeq;
+    this.sendSeq = (this.sendSeq + 1) >>> 0;
+    if (this.sendSeq === 0) {
+      this.emit('error', new Error('Send sequence overflow — session invalidated'));
+      this.close();
+      return;
+    }
     const error = { code, message };
     const msg: ProtocolMessage = {
       v: 1, t: 'res', ch: this.channelId, id: requestId,
       from: this.pubKeyB64, ok: false,
     };
-    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, this.sendSeq++, error);
+    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, error);
     this.sendRaw(msg);
   }
 
   /** Push an event to the dApp. */
   pushEvent(event: string, data: unknown): void {
     if (this.phase !== 'connected' || !this.sessionKey) return;
+    const seq = this.sendSeq;
+    this.sendSeq = (this.sendSeq + 1) >>> 0;
+    if (this.sendSeq === 0) {
+      this.emit('error', new Error('Send sequence overflow — session invalidated'));
+      this.close();
+      return;
+    }
     const msg: ProtocolMessage = {
       v: 1, t: 'evt', ch: this.channelId,
       id: `evt-${++this.evtCounter}`,
       from: this.pubKeyB64, event,
     };
-    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, this.sendSeq++, data);
+    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, data);
     this.sendRaw(msg);
   }
 
@@ -171,6 +194,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       remotePubKeyB64: this.remotePubKey ? b64urlEncode(this.remotePubKey) : null,
       sessionKey: this.sessionKey ? bytesToHex(this.sessionKey) : null,
       sendSeq: this.sendSeq,
+      recvSeq: this.recvSeq,
       resumeToken: this.resumeToken,
       relayUrl: this.relayUrl,
     });
@@ -186,6 +210,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       this.remotePubKey = d.remotePubKeyB64 ? b64urlDecode(d.remotePubKeyB64) : null;
       this.sessionKey = hexToBytes(d.sessionKey);
       this.sendSeq = d.sendSeq || 0;
+      this.recvSeq = d.recvSeq ?? -1;
       this.resumeToken = d.resumeToken;
       this.relayUrl = d.relayUrl;
       return true;
@@ -216,8 +241,12 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       case 'req': {
         let params: unknown = {};
         if (msg.sealed && this.sessionKey) {
-          try { params = unsealPayload(this.sessionKey, this.channelId, msg.sealed).data; }
-          catch { /* ignore */ }
+          try {
+            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed);
+            if (seq <= this.recvSeq) break; // replay — silently drop
+            this.recvSeq = seq;
+            params = data;
+          } catch { /* ignore decryption failure */ break; }
         }
         this.emit('request', { id: msg.id, method: msg.method, params });
         break;

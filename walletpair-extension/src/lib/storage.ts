@@ -5,6 +5,15 @@ const defaults: ExtensionSettings = {
   relayUrl: DEFAULT_RELAY_URL,
   autoConnect: true,
   enabledChains: ['eip155:1', 'eip155:137', 'eip155:42161', 'eip155:10', 'eip155:8453'],
+  rpcUrls: {
+    1: 'https://eth.llamarpc.com',
+    10: 'https://mainnet.optimism.io',
+    56: 'https://bsc-dataseed.binance.org',
+    137: 'https://polygon-rpc.com',
+    42161: 'https://arb1.arbitrum.io/rpc',
+    8453: 'https://mainnet.base.org',
+    43114: 'https://api.avax.network/ext/bc/C/rpc',
+  },
 };
 
 /** Get extension settings from chrome.storage.local */

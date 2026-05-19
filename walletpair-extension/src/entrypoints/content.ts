@@ -2,6 +2,8 @@
  * ISOLATED world content script - bridges between:
  *   - MAIN world provider (window.postMessage)
  *   - Background service worker (chrome.runtime)
+ *
+ * Handles port lifecycle, reconnection, and state queries.
  */
 import { MSG_CHANNEL } from '@/lib/constants';
 
@@ -12,19 +14,65 @@ export default defineContentScript({
   main() {
     const origin = window.location.origin;
 
-    // Use a persistent port connection for faster messaging
+    // Port connection with auto-reconnect
     let port: chrome.runtime.Port | null = null;
-    const pendingFromPage = new Map<string, boolean>();
+    let portDead = false; // true if extension context invalidated (e.g., extension updated)
 
-    function getPort(): chrome.runtime.Port {
-      if (!port) {
+    function getPort(): chrome.runtime.Port | null {
+      if (portDead) return null;
+      if (port) return port;
+
+      try {
         port = chrome.runtime.connect({ name: 'walletpair-content' });
         port.onMessage.addListener(handleBackgroundMessage);
         port.onDisconnect.addListener(() => {
           port = null;
+          // Check if extension context was invalidated
+          if (chrome.runtime.lastError?.message?.includes('Extension context invalidated')) {
+            portDead = true;
+          }
         });
+        return port;
+      } catch {
+        portDead = true;
+        return null;
       }
-      return port;
+    }
+
+    // Send message to background, with port → sendMessage fallback
+    function sendToBackground(msg: Record<string, unknown>): void {
+      const p = getPort();
+      if (p) {
+        try {
+          p.postMessage(msg);
+          return;
+        } catch {
+          port = null;
+        }
+      }
+
+      // Fallback to one-shot sendMessage
+      if (!portDead) {
+        chrome.runtime.sendMessage(msg).then((response) => {
+          if (response) handleBackgroundMessage(response);
+        }).catch(() => {
+          // Extension truly unavailable
+          if (msg.action === 'rpc-request') {
+            sendErrorToPage(msg.id as string, -32603, 'Extension not available');
+          }
+        });
+      } else if (msg.action === 'rpc-request') {
+        sendErrorToPage(msg.id as string, -32603, 'Extension was updated. Please refresh the page.');
+      }
+    }
+
+    function sendErrorToPage(id: string, code: number, message: string) {
+      window.postMessage({
+        type: 'wp-response',
+        id,
+        error: { code, message },
+        channel: MSG_CHANNEL,
+      }, '*');
     }
 
     // Forward RPC requests from page -> background
@@ -34,74 +82,65 @@ export default defineContentScript({
       const msg = event.data;
 
       if (msg.type === 'wp-request') {
-        pendingFromPage.set(msg.id, true);
-        try {
-          getPort().postMessage({
-            action: 'rpc-request',
-            id: msg.id,
-            payload: msg.payload,
-            origin,
-          });
-        } catch {
-          // Port disconnected, try sendMessage as fallback
-          chrome.runtime.sendMessage({
-            action: 'rpc-request',
-            id: msg.id,
-            payload: msg.payload,
-            origin,
-          }).then((response) => {
-            if (response) {
-              handleBackgroundMessage(response);
-            }
-          }).catch(() => {
-            // Send error back to page
-            window.postMessage(
-              {
-                type: 'wp-response',
-                id: msg.id,
-                error: { code: -32603, message: 'Extension not available' },
-                channel: MSG_CHANNEL,
-              },
-              '*',
-            );
-          });
-        }
+        sendToBackground({
+          action: 'rpc-request',
+          id: msg.id,
+          payload: msg.payload,
+          origin,
+        });
+      }
+
+      // Provider asking for current state (on initialization)
+      if (msg.type === 'wp-get-state') {
+        sendToBackground({ action: 'get-state' });
       }
     });
 
     // Forward responses and events from background -> page
     function handleBackgroundMessage(msg: any) {
       if (msg.action === 'rpc-response') {
-        window.postMessage(
-          {
-            type: 'wp-response',
-            id: msg.id,
-            result: msg.result,
-            error: msg.error,
-            method: msg.method,
-            channel: MSG_CHANNEL,
-          },
-          '*',
-        );
-        pendingFromPage.delete(msg.id);
+        window.postMessage({
+          type: 'wp-response',
+          id: msg.id,
+          result: msg.result,
+          error: msg.error,
+          method: msg.method,
+          channel: MSG_CHANNEL,
+        }, '*');
       }
 
       if (msg.action === 'emit-event') {
-        window.postMessage(
-          {
+        window.postMessage({
+          type: 'wp-event',
+          event: msg.event,
+          data: msg.data,
+          channel: MSG_CHANNEL,
+        }, '*');
+      }
+
+      // State response for provider initialization
+      if (msg.action === 'state-update' || msg.action === 'get-state') {
+        const state = msg.state ?? msg;
+        if (state.phase === 'connected' && state.wallet) {
+          window.postMessage({
             type: 'wp-event',
-            event: msg.event,
-            data: msg.data,
+            event: 'connect',
+            data: { chainId: `0x${(state.wallet.chainId ?? 1).toString(16)}` },
             channel: MSG_CHANNEL,
-          },
-          '*',
-        );
+          }, '*');
+          window.postMessage({
+            type: 'wp-event',
+            event: 'accountsChanged',
+            data: [state.wallet.address],
+            channel: MSG_CHANNEL,
+          }, '*');
+        }
       }
     }
 
-    // Also listen for broadcast messages from background
+    // Listen for broadcast messages from background (for events that go to all tabs)
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.action === 'emit-event') {
+      if (msg.action === 'emit-event' || msg.action === 'state-update') {
         handleBackgroundMessage(msg);
       }
     });
