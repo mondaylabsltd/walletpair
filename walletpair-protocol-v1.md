@@ -162,6 +162,7 @@ Common fields:
 | `id` | `req`, `res`, optional in `evt` | Request or event ID. |
 | `method` | `req` | Wallet method name (plaintext, visible to relay). |
 | `sealed` | `req`, `res`, `evt` (always required after `ready.connected`) | Encrypted payload, base64url. See Section 7.4. |
+| `sealed_join` | `join` (required unless `private_join` is not requested) | Encrypted capabilities and metadata, base64url. See Section 7.5. |
 | `ok` | `res` | Boolean. Whether the request succeeded. |
 | `event` | `evt` | Event name (plaintext, visible to relay). |
 | `capabilities` | `join` | Wallet capabilities object. See Section 8. |
@@ -244,7 +245,11 @@ transcript_hash = SHA256(
 )
 ```
 
-`canonical_json` is UTF-8 JSON with the following deterministic rules:
+`canonical_json` is UTF-8 JSON with the following deterministic rules,
+which are compatible with [RFC 8785 (JSON Canonicalization Scheme,
+JCS)](https://www.rfc-editor.org/rfc/rfc8785). Implementations MAY use
+a conforming RFC 8785 library directly. All object keys in this protocol
+are ASCII; non-ASCII keys are reserved for future versions.
 
 1. **Object keys** are sorted lexicographically by their UTF-8 byte
    representation (not by Unicode code point — in practice these are
@@ -312,6 +317,23 @@ The same key MUST NOT be used in both directions. `req` messages use
 If a relay tampers with the wallet public key, capabilities, wallet
 metadata, or dApp name visible to one peer, the peers derive different
 pairing codes and traffic keys.
+
+For private handshake (Section 7.5), the wallet encrypts capabilities
+and metadata before sending `join`. This uses a separate key derived
+from the root key:
+
+```text
+join_encryption_key = HKDF-SHA256(
+                        ikm  = root_key,
+                        salt = channel_id_bytes,
+                        info = "walletpair-v1 join-encryption"
+                      )[0:32]
+```
+
+This key is available to both peers at `join` time because the wallet
+knows the dApp public key from the pairing URI and can compute the
+shared secret and root key before sending `join`. The dApp computes the
+same key after receiving the wallet's public key in `join`.
 
 ### 7.3 Pairing Code
 
@@ -485,6 +507,97 @@ If both peers negotiate a `"privacy_mode": false` capability (opt-out),
 they MAY send real method/event names in plaintext. Absent this explicit
 opt-out, privacy mode is always on.
 
+### 7.5 Private Handshake
+
+In the default handshake (Section 9), the `join` message carries
+`capabilities` and `meta` in plaintext. This leaks wallet type,
+supported chains, methods, and device name to the relay.
+
+To eliminate this metadata leakage, WalletPair v1 defines a **private
+handshake** mode that encrypts capabilities and metadata before they
+leave the wallet. Private handshake is the RECOMMENDED default. Peers
+MUST support private handshake. A dApp signals this requirement by
+including `private_join=1` in the pairing URI (Section 9.1).
+
+#### Encryption
+
+The wallet encrypts its capabilities and metadata using the
+`join_encryption_key` derived in Section 7.2:
+
+```text
+join_plaintext = canonical_json({
+  "capabilities": { ... },
+  "meta": { ... }           // omit if no meta
+})
+
+join_nonce     = HMAC-SHA256(join_encryption_key, "walletpair-v1-join-nonce")[0:12]
+join_aad       = channel_id_bytes || 0x04   // type byte 0x04 = sealed_join
+sealed_join    = AEAD_encrypt(join_encryption_key, join_nonce, join_plaintext, join_aad)
+envelope       = base64url_no_pad(sealed_join_ciphertext || tag)
+```
+
+The nonce is deterministic because `sealed_join` is a one-shot
+encryption per channel — the wallet sends exactly one `join` per
+channel, so the (key, nonce) pair is never reused.
+
+The type byte `0x04` is reserved for `sealed_join` in protocol
+version 1.
+
+#### Wire format
+
+When private handshake is active, the `join` message carries
+`sealed_join` instead of plaintext `capabilities` and `meta`:
+
+```json
+{
+  "v": 1,
+  "t": "join",
+  "ch": "aabb01...eeff",
+  "from": "base64url-wallet-pubkey",
+  "pubkey": "base64url-wallet-pubkey",
+  "sealed_join": "base64url-encrypted-capabilities-and-meta"
+}
+```
+
+The `capabilities` and `meta` fields MUST be absent when `sealed_join`
+is present. If both `sealed_join` and plaintext `capabilities` are
+present, the receiver MUST reject with `protocol_error`.
+
+#### DApp processing
+
+Upon receiving a `join` with `sealed_join`:
+
+1. The dApp computes `shared_secret`, `root_key`, and
+   `join_encryption_key` using the wallet's public key from `join`.
+2. The dApp decrypts `sealed_join` to recover `capabilities` and `meta`.
+3. If decryption fails, the dApp MUST close with `decryption_failed`.
+4. The dApp uses the decrypted `capabilities` and `meta` for all
+   subsequent operations (transcript hash, pairing code, accept/reject
+   decision) exactly as if they had been sent in plaintext.
+
+The transcript hash (Section 7.2) is computed over the **decrypted**
+capabilities and meta values. Both peers produce identical transcript
+hashes because they decrypt the same `sealed_join` content.
+
+#### Relay transparency
+
+The relay does not need to understand `sealed_join`. It forwards the
+`join` message to the dApp as an opaque JSON object. The relay cannot
+read capabilities, meta, supported chains, or wallet type.
+
+#### Backward compatibility
+
+If a wallet receives a pairing URI without `private_join=1`, it SHOULD
+still use private handshake (sending `sealed_join`) unless backward
+compatibility with older dApps is required. A dApp that does not
+understand `sealed_join` will not find `capabilities` in the `join`
+message and SHOULD close with `protocol_error`.
+
+Implementations targeting environments where older dApps may be present
+MAY fall back to plaintext `capabilities` when `private_join` is absent
+from the pairing URI. However, new implementations MUST support
+`sealed_join` and SHOULD default to private handshake.
+
 ## 8. Capability Negotiation
 
 The wallet declares its capabilities in the `join` message:
@@ -611,19 +724,46 @@ dApp initiating a new session.
 ### 9.1 Pairing URI
 
 The dApp generates a pairing URI that encodes the channel ID, the dApp public
-key, and the relay endpoint. The wallet scans this as a QR code or receives it
-via deep link.
+key, and the relay endpoint. The wallet obtains this URI through an
+**out-of-band channel** that is not controlled by the relay or any network
+intermediary.
+
+**Mandatory out-of-band delivery.** The pairing URI contains the dApp's
+public key, which is the trust anchor for the entire session. The URI
+MUST be delivered through a channel where a network attacker or
+malicious relay cannot substitute the content:
+
+| Delivery method | Security | Status |
+|---|---|---|
+| QR code (optical scan) | Camera captures dApp screen directly. Relay not in path. | **REQUIRED** support. |
+| NFC tap | Physical proximity required. | Permitted. |
+| BLE characteristic read | Physical proximity required. | Permitted. |
+| Deep link / URL scheme | **INSECURE.** URI passes through OS URL handler, clipboard, browser extensions, or intent system. A malicious intermediary can replace the entire URI including the dApp public key, enabling a full MITM where pairing codes will match. | **MUST NOT** be used as the sole pairing mechanism. |
+| Copy-paste | URI may be intercepted by clipboard monitors. | **MUST NOT** be used as the sole pairing mechanism. |
+
+Wallets MUST support QR code scanning as the primary pairing method.
+Wallets MUST NOT offer deep link or copy-paste as the only pairing
+option. If a wallet supports deep link pairing as a convenience
+mechanism (e.g., same-device dApp-to-wallet), it MUST display a
+prominent security warning: "This connection was not established via
+secure out-of-band channel. A malicious app on this device could
+intercept the connection. For high-value transactions, use QR code
+pairing from a separate device."
+
+DApps MUST display a QR code as the primary pairing interface. DApps
+MAY additionally offer deep links but MUST label them as "Less secure —
+same device only."
 
 Format:
 
 ```text
-walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-percent-encoded>&name=<dapp-name>&methods=<comma-list>&chains=<comma-list>
+walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-percent-encoded>&name=<dapp-name>&methods=<comma-list>&chains=<comma-list>&private_join=1
 ```
 
 Example:
 
 ```text
-walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.example.com%2Fv1&name=MyDApp&methods=wallet_sendTransaction,wallet_signTypedData&chains=eip155:1,eip155:137
+walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.example.com%2Fv1&name=MyDApp&methods=wallet_sendTransaction,wallet_signTypedData&chains=eip155:1,eip155:137&private_join=1
 ```
 
 Parameters:
@@ -636,6 +776,7 @@ Parameters:
 | `name` | optional | DApp display name. |
 | `methods` | optional | Comma-separated list of methods the dApp intends to call. When present, the wallet MUST restrict the session to these methods (see §8.1) and MUST display them to the user during pairing. |
 | `chains` | optional | Comma-separated list of CAIP-2 chains the dApp intends to use. When present, the wallet MUST restrict the session to these chains (see §8.1) and MUST display them to the user during pairing. |
+| `private_join` | recommended | `1` to request private handshake (Section 7.5). New implementations MUST include this parameter. When present, the wallet MUST encrypt capabilities and metadata in `sealed_join`. |
 
 When `methods` or `chains` are present, the wallet MUST show the user
 what the dApp is requesting before the user confirms the connection, and
@@ -644,7 +785,8 @@ absent, the wallet MUST warn the user that the dApp did not declare its
 intent (see §8.1).
 
 For Bluetooth pairing, the URI may omit `relay` and instead be transmitted
-through BLE advertisement, NFC tap, or local QR code.
+through BLE advertisement, NFC tap, or local QR code. All of these are
+valid out-of-band channels.
 
 Multiple relay endpoints can be specified by repeating the `relay` parameter:
 
@@ -703,7 +845,27 @@ Pairing code: 8472. Compare this with the dApp before it connects."
 
 The dApp cannot display the matching code until it receives the wallet's
 public key, so this is not yet a completed pairing confirmation. If the user
-continues, the wallet connects to the relay and sends:
+continues, the wallet connects to the relay and sends.
+
+When private handshake is active (`private_join=1` in pairing URI), the
+wallet encrypts capabilities and metadata in `sealed_join` (Section 7.5):
+
+```json
+{
+  "v": 1,
+  "t": "join",
+  "ch": "aabb01...eeff",
+  "from": "base64url-wallet-pubkey",
+  "pubkey": "base64url-wallet-pubkey",
+  "sealed_join": "base64url-encrypted-capabilities-and-meta"
+}
+```
+
+The relay cannot read the wallet's capabilities, supported chains, or
+identity from this message.
+
+When private handshake is not active (legacy mode), the wallet sends
+capabilities and metadata in plaintext:
 
 ```json
 {
@@ -1370,6 +1532,27 @@ categories. A relay that does not rate-limit channel creation is
 trivially vulnerable to resource exhaustion by a single attacker
 rotating IP addresses.
 
+The relay MUST also enforce global resource limits:
+
+- Maximum concurrent channels (recommended: 10,000). When exceeded,
+  new `create` messages receive `close` with `rate_limited`.
+- Maximum total bandwidth (recommended: 100 MB/min aggregate). When
+  exceeded, the relay SHOULD throttle new messages with backpressure
+  rather than dropping existing channels.
+- Maximum message size is 64 KB per the protocol limit (§16 rule 11).
+
+To mitigate Sybil attacks from botnets or IPv6 rotation, relay
+operators SHOULD consider additional anti-abuse mechanisms:
+
+- Proof-of-work / hashcash challenge on `create` (the relay MAY
+  respond with a challenge before accepting channel creation).
+- Connection-level TLS fingerprinting to detect automated clients.
+- Anomaly detection on channel creation patterns (e.g., many channels
+  created but never paired).
+
+These mechanisms are relay-implementation details and are not part of
+the protocol wire format. They do not affect protocol interoperability.
+
 The relay must not:
 
 1. Require any form of authentication, registration, or API key.
@@ -1571,12 +1754,15 @@ The relay operator, network attacker, or eavesdropper should not be able to:
 ### 20.2.1 Pairing Code Security Analysis
 
 The 4-digit pairing code is a **defense-in-depth** measure, not the primary
-MITM protection.
+MITM protection. The primary defense is **out-of-band public key delivery**,
+which is mandatory (Section 9.1).
 
 **Primary defense: out-of-band public key delivery.** The dApp's public key
-is embedded in the pairing URI (QR code displayed on the dApp's screen).
-The wallet obtains this key by optically scanning the screen — the relay is
-not in this path and cannot substitute the dApp's public key.
+is embedded in the pairing URI. The wallet MUST obtain this URI through an
+out-of-band channel where the relay and network attackers cannot substitute
+content (see §9.1 for mandatory delivery methods). QR code optical scanning
+is the required primary method: the wallet reads the dApp's screen directly,
+and the relay is not in this path.
 
 A relay-positioned attacker can only attempt a **half-MITM**: substituting
 the wallet's public key in the forwarded `join` message. However, this
@@ -1608,6 +1794,24 @@ session (one `join` per channel). The probability is 1/10,000 per attempt,
 but a successful collision does not yield a functional MITM channel due to
 the traffic key mismatch described above.
 
+**Deep link and non-OOB delivery threat.** When the pairing URI is delivered
+through a software-controlled channel (deep link, clipboard, URL scheme
+handler, browser extension), a malicious intermediary can replace the entire
+URI — including the dApp public key and channel ID. In this scenario:
+
+1. The attacker creates its own channel and key pair.
+2. The attacker forwards the wallet's `join` to the real dApp (or runs a
+   full MITM proxy).
+3. Both sides derive keys based on the attacker's public key.
+4. The pairing codes **will match** because the attacker controls the key
+   material on both sides.
+5. The user cannot detect the MITM through pairing code comparison.
+
+This is why §9.1 mandates out-of-band delivery and prohibits deep link as
+the sole pairing mechanism. Wallets that offer deep link convenience pairing
+MUST display a security downgrade warning and SHOULD restrict deep-link
+sessions to read-only methods (e.g., `wallet_getAccounts`) by default.
+
 ### 20.3 Rules
 
 1. `ch` must be cryptographically random (256 bits).
@@ -1626,29 +1830,41 @@ The following fields are visible to the relay in plaintext:
 
 - `ch` (channel ID)
 - `from` (public key / peer ID)
-- `method` (request method name)
-- `event` (event name)
-- `meta` (display metadata during handshake)
-- `capabilities` (wallet capabilities during handshake)
+- `method` (request method name — encrypted by default, see below)
+- `event` (event name — encrypted by default, see below)
 
-This metadata leakage allows a malicious relay to build user behavior
-profiles (when transactions are signed, which chains are used, wallet
-type and capabilities). Implementations MUST mitigate this:
+When **private handshake** (Section 7.5) is active (RECOMMENDED default),
+the following fields are encrypted in `sealed_join` and invisible to the
+relay:
 
-- Method and event names are encrypted by default (see Section 7.4
-  privacy mode). Real names are carried inside the `sealed` payload.
-- Minimize `meta` in handshake messages (see below).
-- Minimize `capabilities` declaration during handshake (see below).
+- `capabilities` (wallet capabilities)
+- `meta` (display metadata)
+
+When private handshake is **not** active (legacy mode), `capabilities` and
+`meta` are visible to the relay in plaintext. See legacy minimization rules
+below.
+
+A malicious relay can still observe traffic patterns (message frequency,
+timing, message sizes) and the `from` field (public key). However, with
+private handshake and privacy mode, the relay cannot determine: what
+chains the user uses, what methods the wallet supports, the wallet brand,
+what operations are being performed, or whether requests succeed or fail.
+
+Implementations MUST mitigate metadata leakage:
+
+- **Private handshake (Section 7.5):** RECOMMENDED as the default.
+  Encrypts capabilities and metadata in the `join` message. New
+  implementations MUST support private handshake.
+- **Method/event name privacy mode (Section 7.4):** Default behavior.
+  Real names are carried inside the `sealed` payload.
+- **Response privacy mode:** Optional. See below.
 
 Method/event name encryption is the default behavior per Section 7.4.
 Peers MAY opt out only by mutual agreement via the `privacy_mode`
 capability.
 
-**Handshake metadata tradeoff.** The `capabilities` and `meta` fields in
-the `join` message are transmitted in plaintext because the dApp needs them
-to decide whether to `accept` the wallet before the encrypted channel is
-established. This is an inherent tradeoff in the current handshake design.
-Implementations MUST apply the following minimization rules:
+**Legacy mode minimization rules.** When private handshake is not used
+(no `sealed_join`), implementations MUST apply the following:
 
 - `meta.name` reveals the wallet brand or device name (e.g., "MetaMask",
   "Ledger Nano S"). Wallets MUST use a generic name (e.g., "Wallet") or
@@ -1667,9 +1883,7 @@ Implementations MUST apply the following minimization rules:
   `wallet_signTypedData` suggests DeFi interaction).
 
 Relay operators MUST NOT log, index, or retain `join` message content
-beyond the immediate delivery. A future protocol version may address this
-by splitting the handshake into a key-exchange phase followed by an
-encrypted capability exchange.
+beyond the immediate delivery.
 
 **Response success/failure leakage.** The `ok` field in `res` messages is
 plaintext on the wire. A malicious relay can observe whether requests
@@ -1715,12 +1929,83 @@ host). Wallet implementations SHOULD either:
 - Load them through a privacy proxy, or
 - Only load URLs with `https:` scheme and warn on other schemes.
 
+### 20.7 Key Material Lifecycle and Secure Erasure
+
+Implementations MUST manage the lifecycle of all cryptographic key
+material and MUST securely erase (zero) sensitive values as soon as they
+are no longer needed. The following rules apply:
+
+1. **`shared_secret`** (X25519 output): MUST be securely erased
+   immediately after `root_key` is derived. It is never needed again.
+2. **X25519 private key**: MUST be securely erased after
+   `join_encryption_key` and traffic keys (`dapp_to_wallet_key`,
+   `wallet_to_dapp_key`) are derived. Reconnect (Section 14) does not
+   require the private key — it uses `resume` tokens and persisted
+   traffic keys.
+3. **`root_key`**: MUST be securely erased after `join_encryption_key`,
+   traffic keys, and pairing code are derived. It is never needed again.
+4. **`join_encryption_key`**: MUST be securely erased after `sealed_join`
+   is encrypted (wallet) or decrypted (dApp). It is a one-shot key.
+5. **`dapp_to_wallet_key` and `wallet_to_dapp_key`** (traffic keys):
+   MUST be persisted for the channel lifetime (including across
+   reconnects). MUST be securely erased when the channel is closed or
+   the session expires (§16 rule 17).
+6. **`transcript_hash`**: MUST be securely erased after traffic keys and
+   pairing code are derived. It is never needed again.
+7. **`resume` token**: MUST be securely erased when the channel is
+   closed, the session expires, or a new `resume` token replaces it
+   after reconnect.
+8. **Sequence counters**: MUST be persisted for the channel lifetime.
+   MUST be securely erased when the channel is closed.
+9. **Idempotency cache**: MUST be securely erased (zeroed) when the
+   channel is closed. See §10 rule 6 for cache-specific security rules.
+
+**Secure erasure** means overwriting the memory with zeroes (or random
+bytes) before deallocation. On platforms that support it, implementations
+SHOULD use memory-locking APIs (e.g., `mlock`, `VirtualLock`,
+`sodium_mlock`) to prevent key material from being swapped to disk.
+
+On platforms where memory locking is not available (e.g., browser
+JavaScript environments), implementations MUST minimize the lifetime of
+key material by erasing intermediate values (steps 1–4, 6) as soon as
+derivation is complete, and SHOULD use `crypto.subtle` or WebAssembly
+for key operations to reduce exposure in the JavaScript heap.
+
+If a peer detects that persisted key material (traffic keys or sequence
+counters) has been corrupted or lost (e.g., after an app crash),
+it MUST NOT attempt to reconnect. It MUST close the channel and
+initiate a fresh pairing, because reusing sequence numbers or operating
+with incorrect keys would break AEAD security (see §14.1).
+
+### 20.8 Idempotency Cache Side Channel
+
+The idempotency cache (§10 rule 6) introduces a minor information
+leakage vector: a malicious dApp can probe whether the wallet has
+previously processed a specific request ID by observing the error
+response type.
+
+- If a `req.id` has been processed and the params hash differs, the
+  wallet responds with `invalid_params` ("Duplicate request ID with
+  different params").
+- If the `req.id` is unknown, the wallet processes the request normally.
+
+This allows a malicious dApp to enumerate which request IDs have been
+cached. In practice, request IDs are dApp-generated and the dApp already
+knows which requests it has sent, so this leakage is minimal.
+Implementations SHOULD NOT add timing-based mitigations (e.g., constant-
+time responses) as the complexity is not justified by the risk.
+
+However, implementations MUST ensure that the cache lookup itself is not
+vulnerable to timing attacks that reveal the cached response content
+(e.g., through variable-time comparison of params hashes). The params
+hash comparison MUST use constant-time comparison.
+
 ## 21. Complete Example
 
 ### Pairing URI (shown as QR code)
 
 ```text
-walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.example.com%2Fv1&name=MyDApp&methods=wallet_signTransaction,wallet_signMessage&chains=eip155:1,eip155:137
+walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.example.com%2Fv1&name=MyDApp&methods=wallet_signTransaction,wallet_signMessage&chains=eip155:1,eip155:137&private_join=1
 ```
 
 ### DApp creates channel
@@ -1750,7 +2035,7 @@ walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.exam
 }
 ```
 
-### Wallet joins with capabilities
+### Wallet joins with encrypted capabilities (private handshake)
 
 ```json
 {
@@ -1759,6 +2044,15 @@ walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.exam
   "ch": "aabb01...eeff",
   "from": "base64url-wallet-pubkey",
   "pubkey": "base64url-wallet-pubkey",
+  "sealed_join": "base64url-encrypted-capabilities-and-meta"
+}
+```
+
+The dApp decrypts `sealed_join` to recover the capabilities and metadata
+(see Section 7.5). The decrypted content is:
+
+```json
+{
   "capabilities": {
     "methods": ["wallet_signTransaction", "wallet_signMessage"],
     "events": ["accountsChanged", "chainChanged"],
@@ -1911,6 +2205,25 @@ HKDF-SHA256(
 
 root_key = c33b664ab3eea368d81109b432f04a1293a743212749e19bfe412a2996dcefee
 ```
+
+#### Join encryption key derivation (for private handshake, Section 7.5)
+
+```text
+HKDF-SHA256(
+  ikm  = root_key,
+  salt = channel_id_bytes,
+  info = "walletpair-v1 join-encryption"
+)[0:32]
+
+join_encryption_key = <implementations MUST compute and verify this value>
+```
+
+Note: The `join_encryption_key` is used to encrypt `sealed_join` before
+the `join` message is sent. It is derived from `root_key` and
+`channel_id_bytes` only — it does not depend on the transcript hash
+(which is computed after `join` is received). Implementations MUST
+securely erase this key after `sealed_join` is encrypted (wallet) or
+decrypted (dApp).
 
 ### A.2 Transcript and Traffic Keys
 
