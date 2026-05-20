@@ -158,6 +158,52 @@ export function computePairingCode(
 }
 
 // ---------------------------------------------------------------------------
+// Join encryption key (protocol Section 7.5 — private handshake)
+// ---------------------------------------------------------------------------
+
+export function deriveJoinEncryptionKey(
+  rootKey: Uint8Array,
+  channelIdHex: string,
+): Uint8Array {
+  return hkdf(sha256, rootKey, hexToBytes(channelIdHex), 'walletpair-v1 join-encryption', 32);
+}
+
+/**
+ * Encrypt capabilities + meta for private handshake (§7.5).
+ * Returns base64url(ciphertext || tag).
+ */
+export function sealJoin(
+  joinEncryptionKey: Uint8Array,
+  channelIdHex: string,
+  capabilities: unknown,
+  meta?: unknown,
+): string {
+  const plainObj: Record<string, unknown> = { capabilities };
+  if (meta != null) plainObj.meta = meta;
+  const plaintext = utf8ToBytes(canonicalJson(plainObj));
+  const nonce = hmac(sha256, joinEncryptionKey, utf8ToBytes('walletpair-v1-join-nonce')).slice(0, 12);
+  const aad = concatBytes(hexToBytes(channelIdHex), new Uint8Array([0x04]));
+  const ciphertext = chacha20poly1305(joinEncryptionKey, nonce, aad).encrypt(plaintext);
+  return b64urlEncode(ciphertext);
+}
+
+/**
+ * Decrypt sealed_join from a private handshake join message (§7.5).
+ * Returns { capabilities, meta }.
+ */
+export function unsealJoin(
+  joinEncryptionKey: Uint8Array,
+  channelIdHex: string,
+  sealedJoin: string,
+): { capabilities: unknown; meta?: unknown } {
+  const ciphertext = b64urlDecode(sealedJoin);
+  const nonce = hmac(sha256, joinEncryptionKey, utf8ToBytes('walletpair-v1-join-nonce')).slice(0, 12);
+  const aad = concatBytes(hexToBytes(channelIdHex), new Uint8Array([0x04]));
+  const plaintext = chacha20poly1305(joinEncryptionKey, nonce, aad).decrypt(ciphertext);
+  return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+// ---------------------------------------------------------------------------
 // Encrypt / Decrypt (protocol Section 7.4)
 // ---------------------------------------------------------------------------
 
@@ -246,10 +292,20 @@ export function buildPairingUri(params: {
   pubkeyB64: string;
   relayUrl?: string | undefined;
   name?: string | undefined;
+  /** Methods the dApp intends to call (§9.1). */
+  methods?: string[] | undefined;
+  /** CAIP-2 chains the dApp intends to use (§9.1). */
+  chains?: string[] | undefined;
+  /** Request private handshake (§7.5). Default true for new implementations. */
+  privateJoin?: boolean | undefined;
 }): string {
   let uri = `walletpair:?ch=${params.channelId}&pubkey=${params.pubkeyB64}`;
   if (params.relayUrl) uri += `&relay=${encodeURIComponent(params.relayUrl)}`;
   if (params.name) uri += `&name=${encodeURIComponent(params.name)}`;
+  if (params.methods?.length) uri += `&methods=${params.methods.join(',')}`;
+  if (params.chains?.length) uri += `&chains=${params.chains.join(',')}`;
+  // Default to private_join=1 per §7.5 (new implementations MUST include)
+  if (params.privateJoin !== false) uri += '&private_join=1';
   return uri;
 }
 
@@ -259,10 +315,15 @@ export function parsePairingUri(uri: string): PairingParams {
   const ch = params.get('ch');
   const pubkey = params.get('pubkey');
   if (!ch || !pubkey) throw new Error('Invalid pairing URI: missing ch or pubkey');
+  const methodsStr = params.get('methods');
+  const chainsStr = params.get('chains');
   return {
     ch,
     pubkey,
     relay: params.get('relay') ?? '',
     name: params.get('name') ?? undefined,
+    methods: methodsStr ? methodsStr.split(',').filter(Boolean) : undefined,
+    chains: chainsStr ? chainsStr.split(',').filter(Boolean) : undefined,
+    privateJoin: params.get('private_join') === '1',
   };
 }

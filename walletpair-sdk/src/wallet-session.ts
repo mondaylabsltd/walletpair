@@ -19,10 +19,12 @@ import {
   computeSharedSecret,
   deriveSessionKey,
   deriveDirectionalSessionKeys,
+  deriveJoinEncryptionKey,
   computePairingCode,
   canonicalJson,
   sealPayload,
   unsealPayload,
+  sealJoin,
   b64urlEncode,
   b64urlDecode,
   bytesToHex,
@@ -33,6 +35,7 @@ import { Emitter } from './emitter.js';
 
 const BACKOFF = [1000, 2000, 5000, 10000, 30000];
 const MAX_SEND_SEQ = 2 ** 31;
+const DEFAULT_SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours (§16 rule 17)
 
 export class WalletSession extends Emitter<WalletSessionEvents> {
   phase: WalletPhase = 'idle';
@@ -59,6 +62,18 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   private dappName: string | undefined;
   private intentionalClose = false;
   private evtCounter = 0;
+  /** Whether dApp requested private handshake via pairing URI (§7.5). */
+  private privateJoin = false;
+  /** dApp-declared method scope from pairing URI (§9.1 / §8.1). */
+  private dappDeclaredMethods: string[] | undefined;
+  /** dApp-declared chain scope from pairing URI (§9.1 / §8.1). */
+  private dappDeclaredChains: string[] | undefined;
+  /** Effective capabilities after scope intersection (§8.1). */
+  private effectiveCapabilities!: Capabilities;
+  /** Session TTL in ms (§16 rule 17). */
+  private sessionTtl: number;
+  private sessionTtlTimer: ReturnType<typeof setTimeout> | null = null;
+  private sessionStartTime: number | null = null;
 
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
@@ -68,6 +83,8 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     this.transport = options.transport;
     this.capabilities = options.capabilities;
     this.meta = options.meta;
+    this.sessionTtl = options.sessionTtl ?? DEFAULT_SESSION_TTL;
+    this.effectiveCapabilities = { ...options.capabilities };
 
     this.transport.onMessage((msg) => this.handleMessage(msg));
     this.transport.onClose(() => this.handleTransportClose());
@@ -90,10 +107,16 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     this.remotePubKey = b64urlDecode(parsed.pubkey);
     this.relayUrl = parsed.relay;
     this.dappName = parsed.name;
+    this.privateJoin = parsed.privateJoin === true;
+    this.dappDeclaredMethods = parsed.methods;
+    this.dappDeclaredChains = parsed.chains;
     this.sendSeq = 0;
     this.recvSeq = -1;
     this.sendKey = null;
     this.recvKey = null;
+
+    // Compute effective capabilities via scope intersection (§8.1)
+    this.effectiveCapabilities = this.computeScopeIntersection();
 
     const kp = generateX25519KeyPair();
     this.privKey = kp.privateKey;
@@ -101,14 +124,27 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
 
     // Derive root and directional traffic keys immediately.
     const shared = computeSharedSecret(this.privKey, this.remotePubKey);
-    this.sessionKey = deriveSessionKey(shared, this.channelId);
+    const rootKey = deriveSessionKey(shared, this.channelId);
+    // §20.7: erase shared_secret immediately after root_key derivation
+    shared.fill(0);
+
     const context = this.sessionContext();
-    const keys = deriveDirectionalSessionKeys(this.sessionKey, this.channelId, context);
+    const keys = deriveDirectionalSessionKeys(rootKey, this.channelId, context);
     this.sendKey = keys.walletToDappKey;
     this.recvKey = keys.dappToWalletKey;
 
-    this.pairingCode = computePairingCode(this.sessionKey, this.channelId, context);
+    this.pairingCode = computePairingCode(rootKey, this.channelId, context);
     this.emit('pairingCode', this.pairingCode);
+
+    // Derive join encryption key for private handshake before erasing rootKey
+    if (this.privateJoin) {
+      this.sessionKey = deriveJoinEncryptionKey(rootKey, this.channelId);
+    }
+
+    // §20.7: erase root_key after all derivations complete
+    rootKey.fill(0);
+    keys.rootKey.fill(0);
+    keys.transcriptHash.fill(0);
 
     return this.pairingCode;
   }
@@ -118,7 +154,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
    * receives this join and displays its locally computed code.
    */
   async confirmJoin(): Promise<void> {
-    if (!this.channelId || !this.sessionKey || !this.sendKey || !this.recvKey) {
+    if (!this.channelId || !this.sendKey || !this.recvKey) {
       throw new Error('Must call prepareJoin() first');
     }
 
@@ -177,13 +213,16 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     const seq = this.nextSendSeq();
     if (seq == null) return;
     const evtId = `evt-${++this.evtCounter}`;
+    // Privacy mode (§7.4): encrypt event name inside sealed payload
+    const wireEvent = 'encrypted';
+    const sealedData = { _event: event, ...(data && typeof data === 'object' ? data as Record<string, unknown> : { _data: data }) };
     const msg: ProtocolMessage = {
       v: 1, t: 'evt', ch: this.channelId,
       id: evtId,
-      from: this.pubKeyB64, event,
+      from: this.pubKeyB64, event: wireEvent,
     };
-    const hdr = { type: 'evt' as const, from: this.pubKeyB64, event, id: evtId };
-    (msg as any).sealed = sealPayload(this.sendKey, this.channelId, seq, data, hdr);
+    const hdr = { type: 'evt' as const, from: this.pubKeyB64, event: wireEvent, id: evtId };
+    (msg as any).sealed = sealPayload(this.sendKey, this.channelId, seq, sealedData, hdr);
     this.sendRaw(msg);
   }
 
@@ -194,11 +233,12 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   }
 
   /** Gracefully close. */
-  close(): void {
+  close(reason: string = 'normal'): void {
     this.intentionalClose = true;
     this.stopReconnect();
+    this.clearSessionTtl();
     if (this.channelId) {
-      this.sendRaw({ v: 1, t: 'close', ch: this.channelId, from: this.pubKeyB64, reason: 'normal' });
+      this.sendRaw({ v: 1, t: 'close', ch: this.channelId, from: this.pubKeyB64, reason: reason as any });
     }
     this.transport.disconnect();
     this.setPhase('closed');
@@ -208,7 +248,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   destroy(): void {
     this.close();
     this.removeAll();
-    // Wipe sensitive key material
+    // Wipe sensitive key material (§20.7)
     if (this.privKey) this.privKey.fill(0);
     if (this.sessionKey) this.sessionKey.fill(0);
     if (this.sendKey) this.sendKey.fill(0);
@@ -228,7 +268,6 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       privKey: bytesToHex(this.privKey),
       pubKeyB64: this.pubKeyB64,
       remotePubKeyB64: this.remotePubKey ? b64urlEncode(this.remotePubKey) : null,
-      sessionKey: this.sessionKey ? bytesToHex(this.sessionKey) : null,
       sendKey: this.sendKey ? bytesToHex(this.sendKey) : null,
       recvKey: this.recvKey ? bytesToHex(this.recvKey) : null,
       sendSeq: this.sendSeq,
@@ -238,18 +277,18 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       capabilities: this.capabilities,
       meta: this.meta ?? null,
       dappName: this.dappName ?? null,
+      sessionStartTime: this.sessionStartTime,
     });
   }
 
   restore(json: string): boolean {
     try {
       const d = JSON.parse(json);
-      if (!d.channelId || !d.privKey || !d.sessionKey) return false;
+      if (!d.channelId || !d.privKey) return false;
       this.channelId = d.channelId;
       this.privKey = hexToBytes(d.privKey);
       this.pubKeyB64 = d.pubKeyB64;
       this.remotePubKey = d.remotePubKeyB64 ? b64urlDecode(d.remotePubKeyB64) : null;
-      this.sessionKey = hexToBytes(d.sessionKey);
       this.sendKey = d.sendKey ? hexToBytes(d.sendKey) : null;
       this.recvKey = d.recvKey ? hexToBytes(d.recvKey) : null;
       if (!this.sendKey || !this.recvKey) return false;
@@ -264,6 +303,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
         return false;
       }
       this.dappName = d.dappName ?? undefined;
+      this.sessionStartTime = d.sessionStartTime ?? null;
       return true;
     } catch { return false; }
   }
@@ -296,6 +336,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
           this.setPhase('waiting');
         } else if (msg.state === 'connected') {
           this.setPhase('connected');
+          this.startSessionTtl();
         }
         break;
 
@@ -308,11 +349,22 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
           break;
         }
         try {
+          // AAD uses the wire method value (may be "encrypted" in privacy mode)
           const reqHdr = { type: 'req' as const, from: msg.from!, id: msg.id, method: msg.method };
           const { seq, data } = unsealPayload(this.recvKey, this.channelId, msg.sealed, reqHdr);
           if (seq <= this.recvSeq) break; // replay — silently drop
           this.recvSeq = seq;
-          this.emit('request', { id: msg.id, method: msg.method, params: data ?? {} });
+
+          // Privacy mode (§7.4): real method name is inside the encrypted payload
+          let method = msg.method;
+          let params = data ?? {};
+          if (method === 'encrypted' && data && typeof data === 'object' && '_method' in (data as any)) {
+            method = (data as any)._method;
+            const { _method: _, ...rest } = data as Record<string, unknown>;
+            params = rest;
+          }
+
+          this.emit('request', { id: msg.id, method, params });
         } catch {
           this.reject(msg.id, 'decryption_failed', 'Failed to decrypt request');
         }
@@ -351,13 +403,25 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   }
 
   private sendJoin(useResume: boolean): void {
+    const caps = this.effectiveCapabilities;
     const msg: ProtocolMessage = {
       v: 1, t: 'join', ch: this.channelId,
       from: this.pubKeyB64, pubkey: this.pubKeyB64,
-      capabilities: this.capabilities,
-      meta: this.meta,
     };
     if (useResume && this.resumeToken) (msg as any).resume = this.resumeToken;
+
+    if (this.privateJoin && this.sessionKey && !useResume) {
+      // Private handshake (§7.5): encrypt capabilities + meta in sealed_join
+      (msg as any).sealed_join = sealJoin(this.sessionKey, this.channelId, caps, this.meta);
+      // §20.7: erase join_encryption_key after one-shot use
+      this.sessionKey.fill(0);
+      this.sessionKey = null;
+    } else if (!useResume) {
+      // Legacy plaintext handshake
+      (msg as any).capabilities = caps;
+      (msg as any).meta = this.meta;
+    }
+
     this.sendRaw(msg);
   }
 
@@ -365,10 +429,33 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     return {
       dappPubKeyB64: this.remotePubKey ? b64urlEncode(this.remotePubKey) : '',
       walletPubKeyB64: this.pubKeyB64,
-      capabilities: this.capabilities,
+      capabilities: this.effectiveCapabilities,
       walletMeta: this.meta ?? null,
       dappName: this.dappName,
     };
+  }
+
+  /**
+   * Compute the intersection of wallet capabilities with dApp-declared
+   * scope from the pairing URI (§8.1).
+   */
+  private computeScopeIntersection(): Capabilities {
+    const base = this.capabilities;
+    let methods = base.methods;
+    let chains = base.chains;
+
+    if (this.dappDeclaredMethods?.length) {
+      const allowed = new Set(this.dappDeclaredMethods);
+      methods = base.methods.filter((m) => allowed.has(m));
+    }
+    if (this.dappDeclaredChains?.length) {
+      const allowed = new Set(this.dappDeclaredChains);
+      chains = base.chains.filter((c) => allowed.has(c));
+    }
+
+    const result: Capabilities = { methods, events: base.events, chains };
+    if (base.version != null) result.version = base.version;
+    return result;
   }
 
   private nextSendSeq(): number | null {
@@ -421,6 +508,30 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal: session TTL (§16 rule 17)
+  // -------------------------------------------------------------------------
+
+  private startSessionTtl(): void {
+    this.clearSessionTtl();
+    if (this.sessionStartTime == null) {
+      this.sessionStartTime = Date.now();
+    }
+    const elapsed = Date.now() - this.sessionStartTime;
+    const remaining = Math.max(0, this.sessionTtl - elapsed);
+    this.sessionTtlTimer = setTimeout(() => {
+      this.emit('error', new Error('Session lifetime expired'));
+      this.close('timeout');
+    }, remaining);
+  }
+
+  private clearSessionTtl(): void {
+    if (this.sessionTtlTimer) {
+      clearTimeout(this.sessionTtlTimer);
+      this.sessionTtlTimer = null;
     }
   }
 

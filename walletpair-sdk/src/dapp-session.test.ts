@@ -215,7 +215,8 @@ describe('DAppSession', () => {
 
       const reqMsg = transport.sent.find(m => m.t === 'req');
       expect(reqMsg).toBeTruthy();
-      expect((reqMsg as any).method).toBe('wallet_getAccounts');
+      // Privacy mode (§7.4): wire method is "encrypted", real method is inside sealed
+      expect((reqMsg as any).method).toBe('encrypted');
       expect((reqMsg as any).id).toMatch(/^req-/);
 
       // Simulate wallet response

@@ -42,6 +42,8 @@ export interface JoinMessage extends ProtocolMessageBase {
   pubkey: string;
   capabilities?: Capabilities | undefined;
   meta?: WalletMeta | undefined;
+  /** Encrypted capabilities + meta for private handshake (§7.5). */
+  sealed_join?: string | undefined;
   resume?: string | undefined;
 }
 
@@ -118,6 +120,7 @@ export type CloseReason =
   | 'invalid_role'
   | 'invalid_resume'
   | 'timeout'
+  | 'rate_limited'
   | 'payload_too_large'
   | 'protocol_error'
   | 'unsupported_version'
@@ -134,6 +137,8 @@ export interface Capabilities {
   events: string[];
   /** CAIP-2 chain IDs (e.g. "eip155:1", "solana:mainnet"). */
   chains: string[];
+  /** Sub-protocol version map (e.g. { evm: 1 }). §8 */
+  version?: Record<string, number> | undefined;
 }
 
 export interface WalletMeta {
@@ -195,6 +200,12 @@ export interface PairingParams {
   /** Empty string = BLE mode (no relay). */
   relay: string;
   name?: string | undefined;
+  /** Comma-separated methods the dApp intends to call (§9.1). */
+  methods?: string[] | undefined;
+  /** Comma-separated CAIP-2 chains the dApp intends to use (§9.1). */
+  chains?: string[] | undefined;
+  /** Whether private handshake is requested (§7.5). */
+  privateJoin?: boolean | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,8 +228,14 @@ export interface DAppSessionOptions {
   transport: Transport;
   /** DApp display name (included in pairing URI). */
   name?: string | undefined;
+  /** Methods the dApp intends to call (included in pairing URI §9.1). */
+  methods?: string[] | undefined;
+  /** CAIP-2 chains the dApp intends to use (included in pairing URI §9.1). */
+  chains?: string[] | undefined;
   /** Request timeout in ms (default 120_000). */
   requestTimeout?: number | undefined;
+  /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 17. */
+  sessionTtl?: number | undefined;
   /** Auto-accept known wallets on rejoin (default true). */
   autoAccept?: boolean | undefined;
   /**
@@ -235,6 +252,8 @@ export interface WalletSessionOptions {
   capabilities: Capabilities;
   /** Wallet metadata. */
   meta?: WalletMeta | undefined;
+  /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 17. */
+  sessionTtl?: number | undefined;
 }
 
 // ---------------------------------------------------------------------------

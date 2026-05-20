@@ -22,10 +22,12 @@ import {
   computeSharedSecret,
   deriveSessionKey,
   deriveDirectionalSessionKeys,
+  deriveJoinEncryptionKey,
   computePairingCode,
   canonicalJson,
   sealPayload,
   unsealPayload,
+  unsealJoin,
   b64urlEncode,
   b64urlDecode,
   bytesToHex,
@@ -38,6 +40,7 @@ const BACKOFF = [1000, 2000, 5000, 10000, 30000];
 const DEFAULT_REQUEST_TIMEOUT = 120_000;
 const PENDING_ACCEPT_TIMEOUT = 60_000;
 const MAX_SEND_SEQ = 2 ** 31;
+const DEFAULT_SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours (§16 rule 17)
 
 function validateCapabilities(cap: unknown): cap is Capabilities {
   if (cap == null || typeof cap !== 'object') return false;
@@ -64,9 +67,15 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
 
   private transport: Transport;
   private name: string | undefined;
+  private declaredMethods: string[] | undefined;
+  private declaredChains: string[] | undefined;
   private requestTimeout: number;
   private autoAccept: boolean;
   private autoAcceptNewWallet: boolean;
+  /** Session lifetime in ms (§16 rule 17). */
+  private sessionTtl: number;
+  private sessionTtlTimer: ReturnType<typeof setTimeout> | null = null;
+  private sessionStartTime: number | null = null;
 
   private privKey!: Uint8Array;
   private pubKeyB64 = '';
@@ -90,9 +99,12 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     super();
     this.transport = options.transport;
     this.name = options.name;
+    this.declaredMethods = options.methods;
+    this.declaredChains = options.chains;
     this.requestTimeout = options.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT;
     this.autoAccept = options.autoAccept ?? true;
     this.autoAcceptNewWallet = options.autoAcceptNewWallet ?? false;
+    this.sessionTtl = options.sessionTtl ?? DEFAULT_SESSION_TTL;
 
     this.transport.onMessage((msg) => this.handleMessage(msg));
     this.transport.onClose(() => this.handleTransportClose());
@@ -120,6 +132,8 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     this.sessionKey = null;
     this.sendKey = null;
     this.recvKey = null;
+    this.sessionStartTime = null;
+    this.clearSessionTtl();
     this.approvedCapabilities = undefined;
     this.approvedWalletMeta = undefined;
     this.approvedScopeRecorded = false;
@@ -137,6 +151,8 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       pubkeyB64: this.pubKeyB64,
       relayUrl,
       name: this.name,
+      methods: this.declaredMethods,
+      chains: this.declaredChains,
     });
     this.emit('pairingUri', this.pairingUri);
 
@@ -188,9 +204,11 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     }
 
     const id = `req-${++this.reqCounter}`;
+    // Privacy mode (§7.4): encrypt real method name inside sealed payload
+    const wireMethod = 'encrypted';
     const msg: ProtocolMessage = {
       v: 1, t: 'req', ch: this.channelId, id,
-      from: this.pubKeyB64, method,
+      from: this.pubKeyB64, method: wireMethod,
     };
 
     // Always seal: even parameterless requests must be authenticated via AEAD
@@ -201,8 +219,10 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     } catch (error) {
       return Promise.reject(error as Error);
     }
-    const hdr = { type: 'req' as const, from: this.pubKeyB64, id, method };
-    (msg as any).sealed = sealPayload(this.sendKey, this.channelId, seq, params ?? {}, hdr);
+    // AAD uses the wire method ("encrypted"), real method goes inside sealed payload
+    const hdr = { type: 'req' as const, from: this.pubKeyB64, id, method: wireMethod };
+    const sealedParams = { _method: method, ...(params && typeof params === 'object' ? params as Record<string, unknown> : { _params: params ?? {} }) };
+    (msg as any).sealed = sealPayload(this.sendKey, this.channelId, seq, sealedParams, hdr);
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -222,9 +242,10 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   }
 
   /** Gracefully close the session. */
-  close(): void {
+  close(reason: string = 'normal'): void {
     this.intentionalClose = true;
     this.clearPendingAcceptTimer();
+    this.clearSessionTtl();
     this.stopReconnect();
     for (const [, req] of this.pendingRequests) {
       if (req.timer) clearTimeout(req.timer);
@@ -232,7 +253,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     }
     this.pendingRequests.clear();
     if (this.channelId) {
-      this.sendRaw({ v: 1, t: 'close', ch: this.channelId, from: this.pubKeyB64, reason: 'normal' });
+      this.sendRaw({ v: 1, t: 'close', ch: this.channelId, from: this.pubKeyB64, reason: reason as any });
     }
     this.transport.disconnect();
     this.setPhase('closed');
@@ -242,7 +263,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   destroy(): void {
     this.close();
     this.removeAll();
-    // Wipe sensitive key material
+    // Wipe sensitive key material (§20.7)
     if (this.privKey) this.privKey.fill(0);
     if (this.sessionKey) this.sessionKey.fill(0);
     if (this.sendKey) this.sendKey.fill(0);
@@ -262,7 +283,6 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       privKey: bytesToHex(this.privKey),
       pubKeyB64: this.pubKeyB64,
       remotePubKeyB64: this.remotePubKey ? b64urlEncode(this.remotePubKey) : null,
-      sessionKey: this.sessionKey ? bytesToHex(this.sessionKey) : null,
       sendKey: this.sendKey ? bytesToHex(this.sendKey) : null,
       recvKey: this.recvKey ? bytesToHex(this.recvKey) : null,
       sendSeq: this.sendSeq,
@@ -274,6 +294,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       approvedScopeRecorded: this.approvedScopeRecorded,
       approvedCapabilities: this.approvedCapabilities ?? null,
       approvedWalletMeta: this.approvedWalletMeta ?? null,
+      sessionStartTime: this.sessionStartTime,
     });
   }
 
@@ -285,10 +306,10 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       this.privKey = hexToBytes(d.privKey);
       this.pubKeyB64 = d.pubKeyB64;
       this.remotePubKey = d.remotePubKeyB64 ? b64urlDecode(d.remotePubKeyB64) : null;
-      this.sessionKey = d.sessionKey ? hexToBytes(d.sessionKey) : null;
       this.sendKey = d.sendKey ? hexToBytes(d.sendKey) : null;
       this.recvKey = d.recvKey ? hexToBytes(d.recvKey) : null;
-      if (this.sessionKey && (!this.sendKey || !this.recvKey)) return false;
+      // Backward compat: ignore sessionKey from old serialization format
+      if (!this.sendKey || !this.recvKey) return false;
       this.sendSeq = d.sendSeq || 0;
       this.recvSeq = d.recvSeq ?? -1;
       this.resumeToken = d.resumeToken;
@@ -300,6 +321,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       this.walletCapabilities = this.approvedCapabilities;
       this.walletMeta = this.approvedWalletMeta;
       this.name = d.dappName ?? undefined;
+      this.sessionStartTime = d.sessionStartTime ?? null;
       return true;
     } catch { return false; }
   }
@@ -333,6 +355,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           this.setPhase('waiting');
         } else if (msg.state === 'connected') {
           this.setPhase('connected');
+          this.startSessionTtl();
         }
         break;
 
@@ -361,38 +384,81 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           break;
         }
 
+        // §7.5: Both sealed_join and plaintext capabilities must not coexist
+        if (msg.sealed_join && msg.capabilities) {
+          this.sendRaw({
+            v: 1, t: 'close', ch: this.channelId,
+            from: this.pubKeyB64, target: joinPubKey,
+            reason: 'protocol_error',
+          } as any);
+          this.emit('error', new Error('Both sealed_join and plaintext capabilities present'));
+          break;
+        }
+
+        this.remotePubKey = remoteBytes;
+        const shared = computeSharedSecret(this.privKey, this.remotePubKey);
+        const rootKey = deriveSessionKey(shared, this.channelId);
+        // §20.7: erase shared_secret immediately
+        shared.fill(0);
+
+        // Decrypt sealed_join if present (private handshake §7.5)
+        let joinCapabilities = msg.capabilities;
+        let joinMeta = msg.meta;
+        if (msg.sealed_join) {
+          try {
+            const joinKey = deriveJoinEncryptionKey(rootKey, this.channelId);
+            const decrypted = unsealJoin(joinKey, this.channelId, msg.sealed_join);
+            // §20.7: erase join_encryption_key
+            joinKey.fill(0);
+            joinCapabilities = decrypted.capabilities as Capabilities | undefined;
+            joinMeta = decrypted.meta as WalletMeta | undefined;
+          } catch {
+            this.sendRaw({
+              v: 1, t: 'close', ch: this.channelId,
+              from: this.pubKeyB64, target: joinPubKey,
+              reason: 'decryption_failed',
+            } as any);
+            this.emit('error', new Error('Failed to decrypt sealed_join'));
+            rootKey.fill(0);
+            break;
+          }
+        }
+
         // Validate capabilities shape
-        if (msg.capabilities != null && !validateCapabilities(msg.capabilities)) {
+        if (joinCapabilities != null && !validateCapabilities(joinCapabilities)) {
           this.sendRaw({
             v: 1, t: 'close', ch: this.channelId,
             from: this.pubKeyB64, target: joinPubKey,
             reason: 'protocol_error',
           } as any);
           this.emit('error', new Error('Malformed wallet capabilities'));
+          rootKey.fill(0);
           break;
         }
 
-        const knownWallet = this.isSameApprovedWallet(joinPubKey, msg.capabilities, msg.meta);
-        this.remotePubKey = remoteBytes;
-        const shared = computeSharedSecret(this.privKey, this.remotePubKey);
-        this.sessionKey = deriveSessionKey(shared, this.channelId);
-
-        this.walletCapabilities = msg.capabilities;
-        this.walletMeta = msg.meta;
-        const context = this.sessionContext(joinPubKey, msg.capabilities, msg.meta);
-        const keys = deriveDirectionalSessionKeys(this.sessionKey, this.channelId, context);
+        const knownWallet = this.isSameApprovedWallet(joinPubKey, joinCapabilities, joinMeta);
+        this.walletCapabilities = joinCapabilities;
+        this.walletMeta = joinMeta;
+        const context = this.sessionContext(joinPubKey, joinCapabilities, joinMeta);
+        const keys = deriveDirectionalSessionKeys(rootKey, this.channelId, context);
         this.sendKey = keys.dappToWalletKey;
         this.recvKey = keys.walletToDappKey;
+
+        this.pairingCode = computePairingCode(rootKey, this.channelId, context);
+
+        // §20.7: erase root_key and transcript_hash after all derivations
+        rootKey.fill(0);
+        keys.rootKey.fill(0);
+        keys.transcriptHash.fill(0);
 
         if (knownWallet) {
           this.doAccept();
         } else {
-          this.pairingCode = computePairingCode(this.sessionKey, this.channelId, context);
           this.emit('pairingCode', this.pairingCode);
           this.emit('walletJoined', {
             pubkey: joinPubKey,
-            capabilities: msg.capabilities,
-            meta: msg.meta,
+            capabilities: joinCapabilities,
+            meta: joinMeta,
           });
 
           if (this.autoAcceptNewWallet) {
@@ -457,7 +523,17 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           const { seq, data } = unsealPayload(this.recvKey, this.channelId, msg.sealed, evtHdr);
           if (seq <= this.recvSeq) break; // replay — silently drop
           this.recvSeq = seq;
-          this.emit('event', { event: msg.event, data });
+
+          // Privacy mode (§7.4): real event name is inside the encrypted payload
+          let event = msg.event;
+          let eventData: unknown = data;
+          if (event === 'encrypted' && data && typeof data === 'object' && '_event' in (data as any)) {
+            event = (data as any)._event;
+            const { _event: _, ...rest } = data as Record<string, unknown>;
+            eventData = Object.keys(rest).length === 1 && '_data' in rest ? rest._data : rest;
+          }
+
+          this.emit('event', { event, data: eventData });
         } catch { /* drop events that fail decryption */ }
         break;
       }
@@ -593,6 +669,30 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     if (this.pendingAcceptTimer) {
       clearTimeout(this.pendingAcceptTimer);
       this.pendingAcceptTimer = null;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal: session TTL (§16 rule 17)
+  // -------------------------------------------------------------------------
+
+  private startSessionTtl(): void {
+    this.clearSessionTtl();
+    if (this.sessionStartTime == null) {
+      this.sessionStartTime = Date.now();
+    }
+    const elapsed = Date.now() - this.sessionStartTime;
+    const remaining = Math.max(0, this.sessionTtl - elapsed);
+    this.sessionTtlTimer = setTimeout(() => {
+      this.emit('error', new Error('Session lifetime expired'));
+      this.close('timeout');
+    }, remaining);
+  }
+
+  private clearSessionTtl(): void {
+    if (this.sessionTtlTimer) {
+      clearTimeout(this.sessionTtlTimer);
+      this.sessionTtlTimer = null;
     }
   }
 

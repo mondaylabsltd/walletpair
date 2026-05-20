@@ -104,7 +104,7 @@ describe('WalletPairProvider', () => {
 
       // Verify it sent wallet_getAccounts
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.method).toBe('wallet_getAccounts');
+      expect(reqMsg.method).toBe('encrypted'); // privacy mode: real method inside sealed
 
       respondToLatestReq(['0xabc123']);
       const result = await promise;
@@ -131,7 +131,7 @@ describe('WalletPairProvider', () => {
       await flushMicrotasks();
 
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.method).toBe('wallet_getAccounts');
+      expect(reqMsg.method).toBe('encrypted'); // privacy mode: real method inside sealed
 
       respondToLatestReq(['0x456']);
       const result = await promise;
@@ -154,7 +154,7 @@ describe('WalletPairProvider', () => {
       await flushMicrotasks();
 
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.method).toBe('wallet_signRawMessage');
+      expect(reqMsg.method).toBe('encrypted'); // privacy mode
 
       // Wallet responds with { signature }, mapResponse unwraps to just the string
       respondToLatestReq({ signature: '0xsig...' });
@@ -172,7 +172,7 @@ describe('WalletPairProvider', () => {
       await flushMicrotasks();
 
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.method).toBe('wallet_signMessage');
+      expect(reqMsg.method).toBe('encrypted'); // privacy mode
 
       respondToLatestReq({ signature: '0xsig...' });
       const result = await promise;
@@ -196,7 +196,7 @@ describe('WalletPairProvider', () => {
       await flushMicrotasks();
 
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.method).toBe('wallet_sendTransaction');
+      expect(reqMsg.method).toBe('encrypted'); // privacy mode
 
       // mapResponse unwraps { txHash } to just the hash string
       respondToLatestReq({ txHash: '0xtx...' });
@@ -220,7 +220,7 @@ describe('WalletPairProvider', () => {
       await flushMicrotasks();
 
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.method).toBe('wallet_switchChain');
+      expect(reqMsg.method).toBe('encrypted'); // privacy mode
 
       respondToLatestReq({ success: true });
       await promise;
@@ -351,7 +351,7 @@ describe('WalletPairProvider', () => {
       await flushMicrotasks();
 
       const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.method).toBe('eth_getBalance');
+      expect(reqMsg.method).toBe('encrypted'); // privacy mode
 
       respondToLatestReq('0x1234');
       const result = await promise;
