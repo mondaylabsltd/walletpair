@@ -1233,7 +1233,7 @@ mod tests {
 
         let (tx, _) = mpsc::channel(64);
         let (raw, msg) = make_close_msg(&ch, &dapp, "normal");
-        process_message(&mut store, 1, &tx, &raw, msg, &metrics, false);
+        let _ = process_message(&mut store, 1, &tx, &raw, msg, &metrics, false);
 
         let forwarded = wallet_rx.try_recv().unwrap();
         let v: serde_json::Value = serde_json::from_str(&forwarded).unwrap();
