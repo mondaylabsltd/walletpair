@@ -58,8 +58,10 @@ const pendingConfirmations = new Map<string, PendingConfirmation>();
 /** Methods that require user confirmation before forwarding to wallet */
 const CONFIRMATION_METHODS = new Set([
   'eth_sendTransaction',
+  'eth_signTransaction',
   'personal_sign',
   'eth_signTypedData_v4',
+  'eth_signTypedData_v3',
 ]);
 
 // Map of connected content script ports
@@ -396,6 +398,11 @@ async function handleRpcRequest(
     }
   }
 
+  // ── Methods requiring user confirmation popup ─────────────────────────
+  if (CONFIRMATION_METHODS.has(method) && origin) {
+    return requestUserConfirmation(method, params, origin);
+  }
+
   // ── Forward all other wallet methods via SDK provider ──────────────────
   try {
     const result = await evmProvider!.request({ method, params });
@@ -536,11 +543,55 @@ export default defineBackground(() => {
           break;
         }
 
+        case 'get-confirmation': {
+          const pending = pendingConfirmations.get(msg.id);
+          if (pending) {
+            sendResponse({ method: pending.method, params: pending.params, origin: pending.origin });
+          } else {
+            sendResponse(null);
+          }
+          break;
+        }
+
+        case 'approve-confirmation': {
+          const pending = pendingConfirmations.get(msg.id);
+          if (pending) {
+            pendingConfirmations.delete(msg.id);
+            const response = await forwardToWallet(pending.method, pending.params);
+            pending.resolve(response);
+          }
+          sendResponse({ ok: true });
+          break;
+        }
+
+        case 'reject-confirmation': {
+          const pending = pendingConfirmations.get(msg.id);
+          if (pending) {
+            pendingConfirmations.delete(msg.id);
+            pending.resolve({ error: { code: 4001, message: 'User rejected the request' } });
+            if (pending.windowId) {
+              chrome.windows.remove(pending.windowId).catch(() => {});
+            }
+          }
+          sendResponse({ ok: true });
+          break;
+        }
+
         default:
           sendResponse({ error: 'Unknown action' });
       }
     })();
     return true; // Keep channel open for async
+  });
+
+  // Handle confirmation popup closed without user action
+  chrome.windows.onRemoved.addListener((windowId: number) => {
+    for (const [id, pending] of pendingConfirmations) {
+      if (pending.windowId === windowId) {
+        pendingConfirmations.delete(id);
+        pending.resolve({ error: { code: 4001, message: 'User rejected the request' } });
+      }
+    }
   });
 
   // Handle keepalive alarm (fires even after SW restart)

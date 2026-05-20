@@ -59,6 +59,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   private name: string | undefined;
   private requestTimeout: number;
   private autoAccept: boolean;
+  private autoAcceptNewWallet: boolean;
 
   private privKey!: Uint8Array;
   private pubKeyB64 = '';
@@ -82,6 +83,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     this.name = options.name;
     this.requestTimeout = options.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT;
     this.autoAccept = options.autoAccept ?? true;
+    this.autoAcceptNewWallet = options.autoAcceptNewWallet ?? false;
 
     this.transport.onMessage((msg) => this.handleMessage(msg));
     this.transport.onClose(() => this.handleTransportClose());
@@ -321,16 +323,22 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
             capabilities: msg.capabilities,
             meta: msg.meta,
           });
-          this.setPhase('pending_accept');
 
-          // Start pending_accept timeout
-          this.clearPendingAcceptTimer();
-          this.pendingAcceptTimer = setTimeout(() => {
-            if (this.phase === 'pending_accept') {
-              this.emit('error', new Error('Pairing acceptance timed out'));
-              this.rejectWallet();
-            }
-          }, PENDING_ACCEPT_TIMEOUT);
+          if (this.autoAcceptNewWallet) {
+            // Wallet user already confirmed pairing code before sending join
+            this.doAccept();
+          } else {
+            this.setPhase('pending_accept');
+
+            // Start pending_accept timeout
+            this.clearPendingAcceptTimer();
+            this.pendingAcceptTimer = setTimeout(() => {
+              if (this.phase === 'pending_accept') {
+                this.emit('error', new Error('Pairing acceptance timed out'));
+                this.rejectWallet();
+              }
+            }, PENDING_ACCEPT_TIMEOUT);
+          }
         }
         break;
       }

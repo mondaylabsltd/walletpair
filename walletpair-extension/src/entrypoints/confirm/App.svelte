@@ -26,6 +26,7 @@
   function formatMethod(m: string): string {
     switch (m) {
       case 'eth_sendTransaction': return 'Send Transaction';
+      case 'eth_signTransaction': return 'Sign Transaction';
       case 'personal_sign': return 'Sign Message';
       case 'eth_signTypedData_v4': return 'Sign Typed Data';
       case 'eth_signTypedData_v3': return 'Sign Typed Data';
@@ -85,7 +86,7 @@
       <div class="origin-badge">{origin}</div>
 
       <!-- Transaction details -->
-      {#if method === 'eth_sendTransaction'}
+      {#if method === 'eth_sendTransaction' || method === 'eth_signTransaction'}
         <div class="detail-card">
           <div class="detail-row">
             <span class="label">To</span>

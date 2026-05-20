@@ -221,6 +221,14 @@ export interface DAppSessionOptions {
   requestTimeout?: number | undefined;
   /** Auto-accept known wallets on rejoin (default true). */
   autoAccept?: boolean | undefined;
+  /**
+   * Auto-accept new wallet connections (default false).
+   * When true, the dApp auto-accepts after receiving `join`, trusting
+   * that the wallet user already confirmed the pairing code on their
+   * device. The pairing code is still emitted via the `pairingCode`
+   * event for display purposes.
+   */
+  autoAcceptNewWallet?: boolean | undefined;
 }
 
 export interface WalletSessionOptions {

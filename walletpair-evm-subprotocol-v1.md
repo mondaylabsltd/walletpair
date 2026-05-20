@@ -67,7 +67,7 @@ Examples:
 | Chain | CAIP-2 |
 |-------|--------|
 | Ethereum Mainnet | `eip155:1` |
-| Goerli Testnet | `eip155:5` |
+| Holesky Testnet | `eip155:17000` |
 | Sepolia Testnet | `eip155:11155111` |
 | Polygon | `eip155:137` |
 | Arbitrum One | `eip155:42161` |
@@ -102,6 +102,21 @@ case-insensitive comparison when matching addresses.
 The zero address (`0x0000000000000000000000000000000000000000`) MUST NOT be
 used as a `from` or signing address.
 
+### 3.1 Relationship to CAIP-10
+
+A [CAIP-10](https://chainagnostic.org/CAIPs/caip-10) account identifier
+combines a CAIP-2 chain ID and an address:
+
+```text
+eip155:1:0xab16a96D359eC26a11e2C2b3d8f8B8942d5Bfcdb
+```
+
+This sub-protocol does not use CAIP-10 strings on the wire. Instead,
+`wallet_getAccounts` returns structured objects with separate `address`
+and `chains` fields. Implementations that need to interoperate with
+CAIP-10 systems can construct CAIP-10 identifiers by combining
+`chain + ":" + address` for each chain in the account's `chains` array.
+
 ## 4. Capabilities
 
 An EVM wallet declares its capabilities in the WalletPair `join` message:
@@ -114,6 +129,7 @@ An EVM wallet declares its capabilities in the WalletPair `join` message:
       "wallet_signTransaction",
       "wallet_sendTransaction",
       "wallet_signMessage",
+      "wallet_signRawMessage",
       "wallet_signTypedData",
       "wallet_switchChain",
       "wallet_addChain",
@@ -232,9 +248,12 @@ network.
 | `tx.maxFeePerGas` | string | no | Max fee for EIP-1559 (type 2) transactions. |
 | `tx.maxPriorityFeePerGas` | string | no | Priority fee for EIP-1559 transactions. |
 | `tx.nonce` | string | no | Nonce, hex-encoded. Wallet MAY determine if omitted. |
-| `tx.type` | string | no | Transaction type: `"0x0"` (legacy), `"0x1"` (EIP-2930), `"0x2"` (EIP-1559). |
+| `tx.type` | string | no | Transaction type: `"0x0"` (legacy), `"0x1"` (EIP-2930), `"0x2"` (EIP-1559), `"0x3"` (EIP-4844), `"0x4"` (EIP-7702). |
 | `tx.chainId` | string | no | Chain ID, hex-encoded. MUST match `chain` if provided. |
 | `tx.accessList` | array | no | EIP-2930 access list. |
+| `tx.maxFeePerBlobGas` | string | no | Max fee per blob gas for EIP-4844 (type 3) transactions, hex-encoded. |
+| `tx.blobVersionedHashes` | string[] | no | Blob versioned hashes for EIP-4844 transactions. |
+| `tx.authorizationList` | array | no | Authorization list for EIP-7702 (type 4) transactions. |
 
 **Validation rules:**
 
@@ -249,10 +268,44 @@ The wallet MUST enforce the following before signing:
    `invalid_params`.
 4. If `tx.chainId` is absent, the wallet MUST set it to the chain ID
    derived from `chain` before signing.
-5. If both `gasPrice` and `maxFeePerGas` are present, reject with
-   `invalid_params` (conflicting transaction types).
-6. The wallet MUST display to the user at minimum: chain name, recipient
-   address (or "Contract Creation" if `to` is absent), and value.
+5. Transaction type and fee field consistency:
+   - If `tx.type` is `"0x0"` (legacy): `maxFeePerGas` and
+     `maxPriorityFeePerGas` MUST NOT be present. `accessList` MUST NOT
+     be present.
+   - If `tx.type` is `"0x1"` (EIP-2930): `maxFeePerGas` and
+     `maxPriorityFeePerGas` MUST NOT be present. `gasPrice` MUST be
+     used. `accessList` MAY be present.
+   - If `tx.type` is `"0x2"` (EIP-1559): `gasPrice` MUST NOT be
+     present. `maxFeePerGas` MUST be used.
+   - If `tx.type` is `"0x3"` (EIP-4844): `gasPrice` MUST NOT be
+     present. `maxFeePerGas` and `maxFeePerBlobGas` MUST be used.
+     `blobVersionedHashes` MUST be a non-empty array. `to` MUST be
+     present (blob transactions cannot create contracts).
+   - If `tx.type` is `"0x4"` (EIP-7702): `gasPrice` MUST NOT be
+     present. `maxFeePerGas` MUST be used. `authorizationList` MUST
+     be a non-empty array. The wallet MUST display each authorization
+     entry to the user and warn that EIP-7702 grants code execution
+     authority to the account.
+   - If both `gasPrice` and `maxFeePerGas` are present regardless of
+     `type`, reject with `invalid_params`.
+   - If `tx.type` is absent, the wallet MAY infer it: presence of
+     `maxFeePerGas` implies type 2; presence of `accessList` without
+     `maxFeePerGas` implies type 1; otherwise type 0. Types 3 and 4
+     MUST be explicitly specified (not inferred).
+6. If `tx.type` is present and its value is not one of `"0x0"`, `"0x1"`,
+   `"0x2"`, `"0x3"`, `"0x4"`, the wallet MUST reject with
+   `invalid_params`.
+7. `address` MUST be a 42-character hex string starting with `0x`. The
+   wallet MUST reject requests with addresses of incorrect length or
+   format with `invalid_params`.
+8. If `tx.from` is present, the wallet MUST verify it matches `address`
+   (case-insensitive comparison). On mismatch, reject with
+   `invalid_params`. The wallet MUST use the `address` field as the
+   authoritative sender, not `tx.from`.
+9. The wallet MUST display to the user at minimum: chain name, recipient
+   address (or "Contract Creation" if `to` is absent), and value. When
+   `to` is absent (contract creation), the wallet SHOULD display a
+   prominent warning.
 
 **Result:**
 
@@ -265,10 +318,6 @@ The wallet MUST enforce the following before signing:
 | Field | Type | Description |
 |-------|------|-------------|
 | `signedTx` | string | The full RLP-encoded signed transaction, hex-encoded. Ready to submit via `eth_sendRawTransaction`. |
-
-The wallet MAY additionally include a `signature` field containing the
-raw signature bytes (r + s + v, hex-encoded), but dApps MUST NOT depend
-on its presence.
 
 **Errors:** `user_rejected`, `unauthorized`, `invalid_params`, `unsupported_chain`, `internal_error`
 
@@ -300,6 +349,11 @@ successful response indicates the transaction was accepted by the wallet's
 RPC endpoint, not that it was mined or confirmed. The dApp is responsible
 for monitoring the transaction status on-chain.
 
+Note: EIP-4844 blob transactions require blob sidecar data for
+broadcasting, which may exceed the 64 KB WalletPair message limit.
+For blob transactions, dApps SHOULD use `wallet_signTransaction`
+(sign only) and submit the transaction with sidecar data themselves.
+
 **Errors:** `user_rejected`, `unauthorized`, `invalid_params`, `unsupported_chain`, `insufficient_funds`, `nonce_too_low`, `gas_estimation_failed`, `tx_rejected`, `internal_error`
 
 ### 5.4 wallet_signMessage
@@ -323,14 +377,15 @@ personal sign (`\x19Ethereum Signed Message:\n` prefix).
 |-------|------|----------|-------------|
 | `chain` | string | yes | CAIP-2 chain. |
 | `address` | string | yes | Signing address. |
-| `message` | string | yes | Message to sign. If prefixed with `0x` and contains only hex characters, treated as hex-encoded bytes. Otherwise treated as UTF-8 text. |
+| `message` | string | yes | UTF-8 text to sign. The message is ALWAYS treated as UTF-8 text regardless of its content (including strings that start with `0x`). To sign raw bytes, use `wallet_signRawMessage` instead. |
 
 The wallet MUST apply the EIP-191 prefix `\x19Ethereum Signed Message:\n<length>`
-where `<length>` is the byte length of the decoded message (hex-decoded bytes
-for `0x`-prefixed, UTF-8 bytes otherwise).
+where `<length>` is the byte length of the message encoded as UTF-8.
 
-The wallet SHOULD display the message as human-readable text when possible,
-and as hex when it cannot be decoded as valid UTF-8.
+The wallet MUST NOT infer encoding from message content. The `message`
+field is always UTF-8 text.
+
+The wallet MUST display the full message text to the user before signing.
 
 **Validation rules:**
 
@@ -403,14 +458,25 @@ Signs typed structured data using [EIP-712](https://eips.ethereum.org/EIPS/eip-7
 
 1. `address` MUST be an account authorized for this session.
 2. `chain` MUST be in `capabilities.chains`.
-3. If `typedData.domain.chainId` is present, the wallet MUST verify it
-   equals the numeric chain ID from the `chain` parameter. On mismatch,
-   reject with `invalid_params`.
-4. The wallet MUST display `domain.name`, `domain.verifyingContract`,
+3. If `typedData.domain.chainId` is present, the wallet MUST coerce it
+   to a number: if it is a hex string (`0x`-prefixed), parse as hex; if
+   a decimal string, parse as decimal; if a number, use directly. If
+   coercion fails, reject with `invalid_params`. The resulting numeric
+   value MUST equal the numeric chain ID from the `chain` parameter. On
+   mismatch, reject with `invalid_params`.
+4. The wallet MUST verify that `typedData.primaryType` references a type
+   defined in `typedData.types`. If not, reject with `invalid_params`.
+5. The wallet MUST verify that `typedData.types` contains
+   `EIP712Domain`. If not, reject with `invalid_params`.
+6. If `typedData.domain.verifyingContract` is the zero address
+   (`0x0000000000000000000000000000000000000000`), the wallet MUST
+   display a prominent warning to the user before requesting
+   confirmation. This is unusual and may indicate a malicious request.
+7. The wallet MUST display `domain.name`, `domain.verifyingContract`,
    `primaryType`, and key message fields to the user before requesting
    confirmation.
-5. The wallet MUST NOT perform blind signing of EIP-712 data.
-6. The wallet SHOULD warn the user when signing known high-risk typed data
+8. The wallet MUST NOT perform blind signing of EIP-712 data.
+9. The wallet SHOULD warn the user when signing known high-risk typed data
    patterns such as ERC-20 Permit (token approvals), ERC-2612, or any
    typed data that grants spending allowance.
 
@@ -430,9 +496,9 @@ Requests the wallet to switch its active chain for this session. If the
 wallet supports the requested chain, it switches and emits a `chainChanged`
 event.
 
-Chain switching affects only the current WalletPair session. The wallet
-MUST NOT change the active chain for other sessions or its global state
-unless the wallet explicitly chooses to do so.
+Chain switching MUST affect only the current WalletPair session. The
+wallet MUST NOT change the active chain for other sessions or its global
+state as a result of this method.
 
 **Method:** `wallet_switchChain`
 
@@ -491,7 +557,7 @@ Requests the wallet to add a new EVM chain to its configuration.
 | `nativeCurrency` | object | yes | Native currency info. |
 | `nativeCurrency.name` | string | yes | Currency name. |
 | `nativeCurrency.symbol` | string | yes | Currency symbol (2-6 characters). |
-| `nativeCurrency.decimals` | number | yes | Number of decimals (usually 18). |
+| `nativeCurrency.decimals` | number | yes | Number of decimals (usually 18). MUST be a non-negative integer not exceeding 36. |
 | `rpcUrls` | string[] | yes | At least one RPC endpoint URL. |
 | `blockExplorerUrls` | string[] | no | Block explorer URLs. |
 | `iconUrls` | string[] | no | Chain icon URLs. Wallet MAY ignore. |
@@ -503,6 +569,11 @@ Requests the wallet to add a new EVM chain to its configuration.
   "added": true
 }
 ```
+
+The wallet MUST reject `rpcUrls` entries using non-HTTPS schemes, except
+for `http://localhost` and `http://127.0.0.1` (local development). The
+wallet MUST reject `rpcUrls` entries using `javascript:`, `data:`, or
+other non-HTTP(S) schemes with `invalid_params`.
 
 If the chain already exists in the wallet, the wallet MUST prompt the user
 before updating RPC URLs. The wallet MUST NOT silently update RPC endpoints
@@ -551,6 +622,61 @@ Requests the wallet to track a token (ERC-20, ERC-721, or ERC-1155).
 
 **Errors:** `user_rejected`, `invalid_params`, `internal_error`
 
+### 5.9 wallet_signRawMessage
+
+Signs raw bytes using [EIP-191](https://eips.ethereum.org/EIPS/eip-191)
+personal sign (`\x19Ethereum Signed Message:\n` prefix). Unlike
+`wallet_signMessage` which accepts UTF-8 text, this method accepts
+hex-encoded raw bytes.
+
+**Method:** `wallet_signRawMessage`
+
+**Params:**
+
+```json
+{
+  "chain": "eip155:1",
+  "address": "0xab16a96D359eC26a11e2C2b3d8f8B8942d5Bfcdb",
+  "data": "0xdeadbeef"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `chain` | string | yes | CAIP-2 chain. |
+| `address` | string | yes | Signing address. |
+| `data` | string | yes | Hex-encoded bytes to sign, with `0x` prefix. MUST be even-length. |
+
+The wallet MUST validate that `data` is a valid `0x`-prefixed hex string
+with even length. If not, reject with `invalid_params`.
+
+The wallet MUST apply the EIP-191 prefix `\x19Ethereum Signed Message:\n<length>`
+where `<length>` is the byte length of the hex-decoded `data`.
+
+The wallet SHOULD display the raw bytes as hex to the user. If the bytes
+can be decoded as valid UTF-8, the wallet MAY additionally show the text
+representation.
+
+**Validation rules:**
+
+1. `address` MUST be an account authorized for this session.
+2. `chain` MUST be in `capabilities.chains`.
+3. `data` MUST be a `0x`-prefixed hex string with even length.
+
+**Result:**
+
+```json
+{
+  "signature": "0x..."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `signature` | string | 65-byte signature (r + s + v), hex-encoded. |
+
+**Errors:** `user_rejected`, `unauthorized`, `invalid_params`, `internal_error`
+
 ## 6. Events
 
 Events are sent from the wallet to the dApp using the WalletPair `evt`
@@ -585,6 +711,10 @@ adds or removes account access).
 The dApp MUST update its local account state. It MAY call
 `wallet_getAccounts` for a full refresh.
 
+An empty `accounts` array indicates the wallet has revoked all account
+access for this session. The dApp MUST treat this as equivalent to
+session disconnection for authorization purposes.
+
 ### 6.2 chainChanged
 
 Emitted when the wallet's active chain changes.
@@ -602,6 +732,9 @@ Emitted when the wallet's active chain changes.
 ### 6.3 connect
 
 Emitted when the wallet establishes connectivity to a chain's RPC endpoint.
+Note: This event refers to the wallet's connectivity to the chain's RPC
+endpoint, not to the WalletPair session itself. WalletPair session lifecycle
+is managed by the transport layer.
 
 **Event:** `connect`
 
@@ -654,13 +787,13 @@ Standard error codes:
 | `user_rejected` | 4001 | User declined the request in wallet UI. | User tapped reject/cancel. |
 | `unauthorized` | 4100 | DApp is not authorized for this account or method. | Account not exposed to dApp. |
 | `invalid_params` | -32602 | Request parameters are malformed or missing. | Bad address, missing field, chainId mismatch. |
-| `unsupported_chain` | 4902 | Wallet does not support the requested chain. | Chain not in capabilities. |
+| `unsupported_chain` | 4902 | Wallet does not support the requested chain and cannot add it. | Chain not in capabilities and not addable. |
 | `unsupported_method` | 4200 | Wallet does not support the requested method. | Method not in capabilities. |
 | `insufficient_funds` | -32000 | Account balance too low for the transaction. | Not enough ETH/token. |
 | `nonce_too_low` | -32000 | Transaction nonce is already used. | Stale nonce. |
 | `gas_estimation_failed` | -32000 | Wallet could not estimate gas for the transaction. | Reverted in estimation. |
 | `tx_rejected` | -32000 | Network rejected the transaction. | RPC returned error. |
-| `chain_not_added` | 4902 | Requested chain is not configured in wallet. | Unknown chain ID. |
+| `chain_not_added` | 4902 | Requested chain is not configured but could be added via `wallet_addChain`. | Chain unknown but addable. |
 | `internal_error` | -32603 | Unexpected wallet error. | Catch-all. |
 
 The `code` field is a string (not a number) to allow namespaced extensions.
@@ -878,18 +1011,73 @@ This is intentional:
 
 ## 11. Relationship to Existing Standards
 
+### 11.1 EIPs
+
 | Standard | Relationship |
 |----------|-------------|
 | [EIP-155](https://eips.ethereum.org/EIPS/eip-155) | Chain ID format in transactions. |
-| [EIP-191](https://eips.ethereum.org/EIPS/eip-191) | Personal message signing (`wallet_signMessage`). |
+| [EIP-191](https://eips.ethereum.org/EIPS/eip-191) | Personal message signing (`wallet_signMessage`, `wallet_signRawMessage`). |
 | [EIP-712](https://eips.ethereum.org/EIPS/eip-712) | Typed data signing (`wallet_signTypedData`). |
 | [EIP-1193](https://eips.ethereum.org/EIPS/eip-1193) | Provider interface. SDK provides adapter. |
 | [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559) | Type 2 transaction format. |
 | [EIP-2930](https://eips.ethereum.org/EIPS/eip-2930) | Access list transactions. |
+| [EIP-4844](https://eips.ethereum.org/EIPS/eip-4844) | Blob transactions (type 3). |
+| [EIP-7702](https://eips.ethereum.org/EIPS/eip-7702) | Set code transactions (type 4). |
 | [EIP-3085](https://eips.ethereum.org/EIPS/eip-3085) | Add chain (`wallet_addChain`). |
 | [EIP-3326](https://eips.ethereum.org/EIPS/eip-3326) | Switch chain (`wallet_switchChain`). |
 | [EIP-747](https://eips.ethereum.org/EIPS/eip-747) | Watch asset (`wallet_watchAsset`). |
-| [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md) | Chain identifier format. |
+
+### 11.2 CAIPs
+
+| Standard | Relationship |
+|----------|-------------|
+| [CAIP-2](https://chainagnostic.org/CAIPs/caip-2) | Chain identifier format. Used throughout as `eip155:<chain_id>`. |
+| [CAIP-10](https://chainagnostic.org/CAIPs/caip-10) | Account identifier format. Not used on wire, but interoperable (see §3.1). |
+| [CAIP-25](https://chainagnostic.org/CAIPs/caip-25) | Session authorization (`wallet_createSession`). Not adopted — see §11.3. |
+| [CAIP-27](https://chainagnostic.org/CAIPs/caip-27) | Method invocation envelope (`wallet_invokeMethod`). Similar concept — see §11.3. |
+| [CAIP-122](https://chainagnostic.org/CAIPs/caip-122) | Sign in With X (SIWx). Not in scope for v1, may be added as extension. |
+| [CAIP-74](https://chainagnostic.org/CAIPs/caip-74) | CACAO capability object. Not in scope for v1, may be added as extension. |
+| [CAIP-171](https://chainagnostic.org/CAIPs/caip-171) | Session identifier. WalletPair channel ID (256-bit) exceeds the 96-bit entropy requirement. |
+| [CAIP-217](https://chainagnostic.org/CAIPs/caip-217) | Authorization scopes. WalletPair capabilities use a compatible flat structure. |
+
+### 11.3 Design Comparison with CAIP-25 / CAIP-27
+
+WalletPair does not adopt [CAIP-25](https://chainagnostic.org/CAIPs/caip-25)
+(`wallet_createSession`) or [CAIP-27](https://chainagnostic.org/CAIPs/caip-27)
+(`wallet_invokeMethod`). This is a deliberate design choice:
+
+**CAIP-25** defines session authorization negotiation for in-browser
+providers and extensions. It supports partial scope authorization,
+namespace-wide scopes, capabilities merging, and multi-session
+management via `sessionId`. WalletPair targets a different scenario:
+cross-device communication over encrypted relay or Bluetooth, where:
+
+- The pairing flow (QR scan → key exchange → pairing code) replaces
+  scope negotiation. The wallet declares its full capabilities in the
+  `join` message; the dApp either accepts or rejects.
+- End-to-end encryption makes JSON-RPC 2.0 envelope nesting
+  unnecessary — all payloads are encrypted in the `sealed` field.
+- Each WalletPair channel is a 1:1 session by design. There is no
+  need for `sessionId` management (the channel ID serves this role).
+- Session lifecycle is handled by the transport layer (`create` /
+  `join` / `accept` / `ready` / `close`), not by application-level
+  methods like `wallet_getSession` or `wallet_revokeSession`.
+
+**CAIP-27** wraps standard JSON-RPC methods in a routing envelope
+(`{ chainId, request: { method, params } }`). WalletPair achieves the
+same routing via the `chain` parameter in each method's params,
+without an extra nesting layer. The SDK's EIP-1193 adapter transparently
+maps standard JSON-RPC calls to WalletPair's flat method format.
+
+**What is shared:**
+
+- Chain identification uses [CAIP-2](https://chainagnostic.org/CAIPs/caip-2)
+  throughout.
+- The `capabilities` object in WalletPair's `join` message is structurally
+  compatible with [CAIP-217](https://chainagnostic.org/CAIPs/caip-217)
+  `scopeObject`s (`methods`, `events`/`notifications`, `chains`).
+- Account data can be converted to/from
+  [CAIP-10](https://chainagnostic.org/CAIPs/caip-10) format (see §3.1).
 
 ## 12. Session Isolation
 
@@ -899,5 +1087,4 @@ Accounts authorized in one session MUST NOT automatically become available
 in another session.
 
 If the wallet has a global "active chain" concept, `wallet_switchChain`
-in one session SHOULD NOT affect other sessions unless the wallet
-explicitly documents this behavior.
+in one session MUST NOT affect other sessions.

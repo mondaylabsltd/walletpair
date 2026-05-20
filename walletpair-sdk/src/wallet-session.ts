@@ -70,8 +70,13 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   // Public API
   // -------------------------------------------------------------------------
 
-  /** Join a channel by parsing a pairing URI. */
-  async joinFromUri(uri: string): Promise<string> {
+  /**
+   * Prepare to join a channel by parsing a pairing URI.
+   * Computes session key and pairing code WITHOUT connecting or sending join.
+   * The wallet UI should display the pairing code and ask the user to confirm
+   * it matches the dApp's display. After user confirms, call `confirmJoin()`.
+   */
+  prepareJoin(uri: string): string {
     const parsed = parsePairingUri(uri);
     this.intentionalClose = false;
     this.channelId = parsed.ch;
@@ -91,6 +96,18 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     this.pairingCode = computePairingCode(this.sessionKey, this.channelId);
     this.emit('pairingCode', this.pairingCode);
 
+    return this.pairingCode;
+  }
+
+  /**
+   * Confirm the pairing code and send the join message.
+   * Call this after `prepareJoin()` when the user has confirmed the code.
+   */
+  async confirmJoin(): Promise<void> {
+    if (!this.channelId || !this.sessionKey) {
+      throw new Error('Must call prepareJoin() first');
+    }
+
     // Update transport URL if WebSocket
     if ('setUrl' in this.transport && typeof (this.transport as any).setUrl === 'function') {
       (this.transport as any).setUrl(this.relayUrl);
@@ -99,8 +116,17 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     await this.transport.connect();
     this.setPhase('waiting');
     this.sendJoin(false);
+  }
 
-    return this.pairingCode;
+  /**
+   * Join a channel in one step (convenience method).
+   * Equivalent to prepareJoin() + confirmJoin() without waiting for user
+   * confirmation. Prefer prepareJoin() + confirmJoin() for better UX.
+   */
+  async joinFromUri(uri: string): Promise<string> {
+    const code = this.prepareJoin(uri);
+    await this.confirmJoin();
+    return code;
   }
 
   /** Respond to a request with success. */
