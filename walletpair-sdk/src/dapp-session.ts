@@ -186,8 +186,8 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
         this.close();
         return Promise.reject(new Error('Send sequence overflow — session invalidated'));
       }
-      const aadSuffix = `${this.pubKeyB64}:${id}:${method}`;
-      (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, params, aadSuffix);
+      const hdr = { type: 'req' as const, from: this.pubKeyB64, id, method };
+      (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, params, hdr);
     }
 
     return new Promise<T>((resolve, reject) => {
@@ -352,8 +352,8 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
 
         if (msg.sealed && this.sessionKey) {
           try {
-            const resAadSuffix = `${msg.from}:${msg.id}:${msg.ok ? 'ok' : 'err'}`;
-            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed, resAadSuffix);
+            const resHdr = { type: 'res' as const, from: msg.from!, id: msg.id, ok: msg.ok };
+            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed, resHdr);
             if (seq <= this.recvSeq) {
               pending.reject(new Error('Replay detected'));
               break;
@@ -384,8 +384,8 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       case 'evt': {
         if (msg.sealed && this.sessionKey) {
           try {
-            const evtAadSuffix = `${msg.from}:${msg.event}`;
-            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed, evtAadSuffix);
+            const evtHdr = { type: 'evt' as const, from: msg.from!, event: msg.event };
+            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed, evtHdr);
             if (seq <= this.recvSeq) break; // replay — silently drop
             this.recvSeq = seq;
             this.emit('event', { event: msg.event, data });

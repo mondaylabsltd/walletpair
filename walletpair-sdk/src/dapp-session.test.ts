@@ -12,6 +12,7 @@ import {
   b64urlDecode,
   parsePairingUri,
 } from './crypto.js';
+import type { AadHeader } from './crypto.js';
 import type { ProtocolMessage } from './types.js';
 
 function flushMicrotasks(): Promise<void> {
@@ -217,13 +218,13 @@ describe('DAppSession', () => {
 
       // Simulate wallet response
       const resData = ['0xabc123'];
-      const resAadSuffix = `${walletKp.publicKeyB64}:${(reqMsg as any).id}:ok`;
+      const resHdr: AadHeader = { type: 'res', from: walletKp.publicKeyB64, id: (reqMsg as any).id, ok: true };
       transport.receive({
         v: 1, t: 'res', ch: session.channelId,
         id: (reqMsg as any).id,
         from: walletKp.publicKeyB64,
         ok: true,
-        sealed: sealPayload(sessionKey, session.channelId, 0, resData, resAadSuffix),
+        sealed: sealPayload(sessionKey, session.channelId, 0, resData, resHdr),
       } as ProtocolMessage);
 
       const result = await promise;
@@ -242,7 +243,7 @@ describe('DAppSession', () => {
         v: 1, t: 'res', ch: session.channelId,
         id: reqMsg.id, from: walletKp.publicKeyB64,
         ok: true,
-        sealed: sealPayload(sessionKey, session.channelId, 0, { signature: '0x...' }, `${walletKp.publicKeyB64}:${reqMsg.id}:ok`),
+        sealed: sealPayload(sessionKey, session.channelId, 0, { signature: '0x...' }, { type: 'res', from: walletKp.publicKeyB64, id: reqMsg.id, ok: true }),
       } as ProtocolMessage);
 
       const result = await promise;
@@ -259,7 +260,7 @@ describe('DAppSession', () => {
         v: 1, t: 'res', ch: session.channelId,
         id: reqMsg.id, from: walletKp.publicKeyB64,
         ok: false,
-        sealed: sealPayload(sessionKey, session.channelId, 0, { code: 'user_rejected', message: 'User rejected' }, `${walletKp.publicKeyB64}:${reqMsg.id}:err`),
+        sealed: sealPayload(sessionKey, session.channelId, 0, { code: 'user_rejected', message: 'User rejected' }, { type: 'res', from: walletKp.publicKeyB64, id: reqMsg.id, ok: false }),
       } as ProtocolMessage);
 
       await expect(promise).rejects.toThrow('User rejected');
@@ -296,7 +297,7 @@ describe('DAppSession', () => {
         v: 1, t: 'res', ch: session.channelId,
         id: reqMsg.id, from: walletKp.publicKeyB64,
         ok: true,
-        sealed: sealPayload(sessionKey, session.channelId, 0, ['0x123'], `${walletKp.publicKeyB64}:${reqMsg.id}:ok`),
+        sealed: sealPayload(sessionKey, session.channelId, 0, ['0x123'], { type: 'res', from: walletKp.publicKeyB64, id: reqMsg.id, ok: true }),
       } as ProtocolMessage);
 
       await promise;
@@ -335,7 +336,7 @@ describe('DAppSession', () => {
       transport.receive({
         v: 1, t: 'evt', ch: session.channelId,
         from: walletKp.publicKeyB64, event: 'accountsChanged',
-        sealed: sealPayload(sessionKey, session.channelId, 0, { accounts: ['0xabc'] }, `${walletKp.publicKeyB64}:accountsChanged`),
+        sealed: sealPayload(sessionKey, session.channelId, 0, { accounts: ['0xabc'] }, { type: 'evt', from: walletKp.publicKeyB64, event: 'accountsChanged' }),
       } as ProtocolMessage);
 
       expect(handler).toHaveBeenCalledWith({

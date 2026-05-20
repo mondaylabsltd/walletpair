@@ -143,8 +143,8 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       v: 1, t: 'res', ch: this.channelId, id: requestId,
       from: this.pubKeyB64, ok: true,
     };
-    const aadSuffix = `${this.pubKeyB64}:${requestId}:ok`;
-    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, result, aadSuffix);
+    const hdr = { type: 'res' as const, from: this.pubKeyB64, id: requestId, ok: true };
+    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, result, hdr);
     this.sendRaw(msg);
   }
 
@@ -163,8 +163,8 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       v: 1, t: 'res', ch: this.channelId, id: requestId,
       from: this.pubKeyB64, ok: false,
     };
-    const aadSuffix = `${this.pubKeyB64}:${requestId}:err`;
-    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, error, aadSuffix);
+    const hdr = { type: 'res' as const, from: this.pubKeyB64, id: requestId, ok: false };
+    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, error, hdr);
     this.sendRaw(msg);
   }
 
@@ -183,8 +183,8 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       id: `evt-${++this.evtCounter}`,
       from: this.pubKeyB64, event,
     };
-    const aadSuffix = `${this.pubKeyB64}:${event}`;
-    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, data, aadSuffix);
+    const hdr = { type: 'evt' as const, from: this.pubKeyB64, event };
+    (msg as any).sealed = sealPayload(this.sessionKey, this.channelId, seq, data, hdr);
     this.sendRaw(msg);
   }
 
@@ -271,8 +271,8 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
         let params: unknown = {};
         if (msg.sealed && this.sessionKey) {
           try {
-            const reqAadSuffix = `${msg.from}:${msg.id}:${msg.method}`;
-            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed, reqAadSuffix);
+            const reqHdr = { type: 'req' as const, from: msg.from!, id: msg.id, method: msg.method };
+            const { seq, data } = unsealPayload(this.sessionKey, this.channelId, msg.sealed, reqHdr);
             if (seq <= this.recvSeq) break; // replay — silently drop
             this.recvSeq = seq;
             params = data;

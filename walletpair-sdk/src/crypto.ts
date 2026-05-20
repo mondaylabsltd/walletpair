@@ -102,14 +102,36 @@ export function computePairingCode(
 // ---------------------------------------------------------------------------
 
 /**
- * Build AEAD additional authenticated data.
- * AAD = channel_id_bytes || utf8(aadSuffix)
- * The aadSuffix authenticates plaintext header fields to prevent relay tampering.
+ * AAD header for authenticated encryption.
+ * Uses length-prefixed binary encoding per protocol §7.4.
  */
-function buildAad(channelIdHex: string, aadSuffix?: string): Uint8Array {
+export type AadHeader =
+  | { type: 'req'; from: string; id: string; method: string }
+  | { type: 'res'; from: string; id: string; ok: boolean }
+  | { type: 'evt'; from: string; event: string };
+
+/** Length-prefix a UTF-8 string: uint16_be(byte_length) || utf8_bytes */
+function lp(s: string): Uint8Array {
+  const bytes = utf8ToBytes(s);
+  const len = new Uint8Array(2);
+  new DataView(len.buffer).setUint16(0, bytes.length);
+  return concatBytes(len, bytes);
+}
+
+/**
+ * Build AEAD AAD = channel_id_bytes || type_byte || lp(fields...)
+ */
+function buildAad(channelIdHex: string, header?: AadHeader): Uint8Array {
   const chBytes = hexToBytes(channelIdHex);
-  if (!aadSuffix) return chBytes;
-  return concatBytes(chBytes, utf8ToBytes(aadSuffix));
+  if (!header) return chBytes;
+  switch (header.type) {
+    case 'req':
+      return concatBytes(chBytes, new Uint8Array([0x01]), lp(header.from), lp(header.id), lp(header.method));
+    case 'res':
+      return concatBytes(chBytes, new Uint8Array([0x02]), lp(header.from), lp(header.id), new Uint8Array([header.ok ? 0x01 : 0x00]));
+    case 'evt':
+      return concatBytes(chBytes, new Uint8Array([0x03]), lp(header.from), lp(header.event));
+  }
 }
 
 export function sealPayload(
@@ -117,13 +139,13 @@ export function sealPayload(
   channelIdHex: string,
   seq: number,
   data: unknown,
-  aadSuffix?: string,
+  header?: AadHeader,
 ): string {
   const seqBytes = new Uint8Array(4);
   new DataView(seqBytes.buffer).setUint32(0, seq);
   const nonce = hmac(sha256, sessionKey, seqBytes).slice(0, 12);
   const plaintext = utf8ToBytes(JSON.stringify(data));
-  const aad = buildAad(channelIdHex, aadSuffix);
+  const aad = buildAad(channelIdHex, header);
   const ciphertext = chacha20poly1305(sessionKey, nonce, aad).encrypt(plaintext);
   return b64urlEncode(concatBytes(seqBytes, ciphertext));
 }
@@ -132,13 +154,13 @@ export function unsealPayload(
   sessionKey: Uint8Array,
   channelIdHex: string,
   sealed: string,
-  aadSuffix?: string,
+  header?: AadHeader,
 ): { seq: number; data: unknown } {
   const bytes = b64urlDecode(sealed);
   const seqBytes = bytes.slice(0, 4);
   const ciphertext = bytes.slice(4);
   const nonce = hmac(sha256, sessionKey, seqBytes).slice(0, 12);
-  const aad = buildAad(channelIdHex, aadSuffix);
+  const aad = buildAad(channelIdHex, header);
   const plaintext = chacha20poly1305(sessionKey, nonce, aad).decrypt(ciphertext);
   const seq = new DataView(seqBytes.buffer, seqBytes.byteOffset, 4).getUint32(0);
   return { seq, data: JSON.parse(new TextDecoder().decode(plaintext)) };
