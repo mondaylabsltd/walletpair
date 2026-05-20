@@ -332,7 +332,7 @@ network.
 | `tx.accessList` | array | no | EIP-2930 access list. Each entry: `{ address: string, storageKeys: string[] }`. |
 | `tx.maxFeePerBlobGas` | string | no | Max fee per blob gas for EIP-4844 (type 3) transactions, hex-encoded. |
 | `tx.blobVersionedHashes` | string[] | no | Versioned hashes for EIP-4844 (each 32-byte hex with `0x01` version prefix). The wallet cannot verify that actual blob data exists for these hashes — it trusts the dApp to provide correct hashes. See validation rule 5 for type 3 constraints. |
-| `tx.authorizationList` | array | no | EIP-7702 authorization tuples. Each entry: `{ chainId: string, address: string, nonce: string, yParity: string, r: string, s: string, authority: string (optional) }`. All hex-encoded. These are pre-signed authorizations attached to the transaction; this method does not define a generic dApp-driven flow for creating new authorizations. The optional `authority` field is the expected recovered authority address (see validation rule 5b). |
+| `tx.authorizationList` | array | no | EIP-7702 authorization tuples. Each entry: `{ chainId: string, address: string, nonce: string, yParity: string, r: string, s: string, authority: string (optional) }`. All hex-encoded. Maximum 16 entries. These are pre-signed authorizations attached to the transaction; this method does not define a generic dApp-driven flow for creating new authorizations. The optional `authority` field is the expected recovered authority address (see validation rule 5b). |
 
 **Validation rules:**
 
@@ -371,8 +371,9 @@ The wallet MUST enforce the following before signing:
    - If `tx.type` is `"0x4"` (EIP-7702): `gasPrice` MUST NOT be
      present. `maxFeePerGas` MUST be used. `to` MUST be present
      (EIP-7702 does not support contract creation). `authorizationList`
-     MUST be a non-empty array. For each authorization entry, the
-     wallet MUST:
+     MUST be a non-empty array with at most 16 entries. If more than
+     16 entries are provided, reject with `invalid_params`. For each
+     authorization entry, the wallet MUST:
      (a) Validate `yParity` is `"0x0"` or `"0x1"`. Validate `r` and
          `s` are 32-byte hex values within the secp256k1 curve order.
          `s` MUST be in the lower half of the curve order (low-s per
@@ -810,6 +811,13 @@ that includes it in `capabilities.chains`.
   "added": true
 }
 ```
+
+**Global chain limits.** The wallet MUST enforce a maximum number of
+dApp-added custom chains (recommended: 20). If the limit is reached,
+the wallet MUST reject with `rate_limited`. Additionally, the wallet
+MUST limit `wallet_addChain` calls to at most 3 per session to prevent
+abuse. Subsequent calls in the same session MUST be rejected with
+`rate_limited`.
 
 **Input length limits.** The wallet MUST enforce the following limits and
 reject with `invalid_params` if exceeded:
