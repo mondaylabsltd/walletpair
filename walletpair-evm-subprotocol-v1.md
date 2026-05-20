@@ -216,13 +216,9 @@ The dApp MUST check `txTypes` before sending transactions of type 3 or
 `wallet_signTransaction` (not `wallet_sendTransaction`) and handle
 broadcast itself.
 
-**Privacy note.** The `txTypes` field is part of `capabilities` in the
-plaintext `join` message. A relay can observe which transaction types
-the wallet supports. This leakage is minimal (it describes wallet
-capability, not user intent) and is consistent with the metadata
-tradeoff discussed in WalletPair Protocol v1 §20.4. Wallets SHOULD
-omit `txTypes` when the defaults (§4.1) are sufficient, to minimize
-metadata exposure.
+**Privacy note.** The `txTypes` field is part of `capabilities`, which
+is encrypted inside `sealed_join` (WalletPair Protocol v1 §7.5). The
+relay cannot observe transaction type capabilities.
 
 ## 5. Methods
 
@@ -243,7 +239,7 @@ The wallet MAY limit accounts on a per-session basis.
 
 During pairing, the wallet MUST explicitly select or confirm the accounts that
 will be exposed to this session. The selected account set is not sent in
-plaintext `join`; it is disclosed only through encrypted `wallet_getAccounts`
+`join`; it is disclosed only through encrypted `wallet_getAccounts`
 and subsequent encrypted `accountsChanged` events. A wallet MUST NOT infer
 account authorization from global wallet state.
 
@@ -1120,10 +1116,12 @@ WalletPair message (wire):
   "v": 1,
   "t": "req",
   "ch": "aabb...eeff",
-  "id": "req-001",
+  "ts": 1779170000000,
   "from": "base64url-dapp-pubkey",
-  "method": "encrypted",
-  "sealed": "<encrypted params>"
+  "body": {
+    "id": "req-001",
+    "sealed": "<encrypted params>"
+  }
 }
 ```
 
@@ -1145,10 +1143,13 @@ WalletPair message (wire):
   "v": 1,
   "t": "res",
   "ch": "aabb...eeff",
-  "id": "req-001",
+  "ts": 1779170000000,
   "from": "base64url-wallet-pubkey",
-  "ok": true,
-  "sealed": "<encrypted result>"
+  "body": {
+    "id": "req-001",
+    "ok": true,
+    "sealed": "<encrypted result>"
+  }
 }
 ```
 
@@ -1174,10 +1175,12 @@ WalletPair message (wire):
   "v": 1,
   "t": "req",
   "ch": "aabb...eeff",
-  "id": "req-002",
+  "ts": 1779170000000,
   "from": "base64url-dapp-pubkey",
-  "method": "encrypted",
-  "sealed": "<encrypted params>"
+  "body": {
+    "id": "req-002",
+    "sealed": "<encrypted params>"
+  }
 }
 ```
 
@@ -1215,10 +1218,13 @@ WalletPair message (wire):
   "v": 1,
   "t": "res",
   "ch": "aabb...eeff",
-  "id": "req-003",
+  "ts": 1779170000000,
   "from": "base64url-wallet-pubkey",
-  "ok": false,
-  "sealed": "<encrypted error>"
+  "body": {
+    "id": "req-003",
+    "ok": false,
+    "sealed": "<encrypted error>"
+  }
 }
 ```
 
@@ -1240,9 +1246,12 @@ WalletPair message (wire):
   "v": 1,
   "t": "evt",
   "ch": "aabb...eeff",
+  "ts": 1779170000000,
   "from": "base64url-wallet-pubkey",
-  "event": "encrypted",
-  "sealed": "<encrypted data>"
+  "body": {
+    "id": "evt-001",
+    "sealed": "<encrypted data>"
+  }
 }
 ```
 
@@ -1373,9 +1382,9 @@ discovery to find and use WalletPair connections alongside injected wallets.
 The EIP-6963 provider info for a WalletPair connection SHOULD use:
 
 - `uuid`: A unique identifier per WalletPair session (not the channel ID).
-- `name`: The wallet's display name. Since WalletPair Protocol v1 §20.4
-  requires wallets to use a generic `meta.name` in the plaintext `join`
-  message for privacy, the SDK SHOULD use a default display name (e.g.,
+- `name`: The wallet's display name. Since `meta.name` in the `join`
+  message is encrypted inside `sealed_join` and not visible to the relay,
+  the SDK SHOULD use a default display name (e.g.,
   "WalletPair Wallet") for EIP-6963 registration. If the wallet provides
   a more specific name via an encrypted method after `ready.connected`
   (e.g., in the `wallet_getAccounts` response metadata or a future
