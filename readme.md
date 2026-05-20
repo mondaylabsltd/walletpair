@@ -169,7 +169,7 @@ cargo build --release
 - **Key exchange**: X25519 ephemeral keypairs
 - **Key derivation**: HKDF-SHA256 with channel ID as salt
 - **Encryption**: ChaCha20-Poly1305 AEAD with length-prefixed AAD
-- **Pairing code**: 6-digit code derived from the transcript-bound root key for visual MITM prevention
+- **Pairing code**: 4-digit code derived from the transcript-bound root key for visual MITM prevention
 - **Replay protection**: Per-peer sequence counters with monotonic enforcement
 
 ### Message Types

@@ -67,7 +67,7 @@ describe('Integration: DApp ↔ Wallet full flow', () => {
     await wait();
 
     expect(walletSession.phase).toBe('waiting');
-    expect(pairingCode).toMatch(/^\d{6}$/);
+    expect(pairingCode).toMatch(/^\d{4}$/);
 
     // Step 3: Pairing codes match
     await wait();

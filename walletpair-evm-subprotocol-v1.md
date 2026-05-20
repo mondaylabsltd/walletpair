@@ -286,7 +286,7 @@ network.
 | `tx.chainId` | string | no | Chain ID, hex-encoded. MUST match `chain` if provided. |
 | `tx.accessList` | array | no | EIP-2930 access list. Each entry: `{ address: string, storageKeys: string[] }`. |
 | `tx.maxFeePerBlobGas` | string | no | Max fee per blob gas for EIP-4844 (type 3) transactions, hex-encoded. |
-| `tx.blobVersionedHashes` | string[] | no | Versioned hashes for EIP-4844 (each 32-byte hex with `0x01` version prefix). |
+| `tx.blobVersionedHashes` | string[] | no | Versioned hashes for EIP-4844 (each 32-byte hex with `0x01` version prefix). The wallet cannot verify that actual blob data exists for these hashes — it trusts the dApp to provide correct hashes. See validation rule 5 for type 3 constraints. |
 | `tx.authorizationList` | array | no | EIP-7702 authorization tuples. Each entry: `{ chainId: string, address: string, nonce: string, yParity: string, r: string, s: string }`. All hex-encoded. These are pre-signed authorizations attached to the transaction; this method does not define a generic dApp-driven flow for creating new authorizations. |
 
 **Validation rules:**
@@ -314,7 +314,15 @@ The wallet MUST enforce the following before signing:
    - If `tx.type` is `"0x3"` (EIP-4844): `gasPrice` MUST NOT be
      present. `maxFeePerGas` and `maxFeePerBlobGas` MUST be used.
      `blobVersionedHashes` MUST be a non-empty array. `to` MUST be
-     present (blob transactions cannot create contracts).
+     present (blob transactions cannot create contracts). Each entry
+     in `blobVersionedHashes` MUST be a 32-byte hex value whose first
+     byte is `0x01` (the version byte). The wallet MUST verify the
+     version byte and reject entries with other versions via
+     `invalid_params`. Note: the wallet cannot verify that actual blob
+     sidecar data corresponds to these hashes; it signs the transaction
+     trusting the dApp-provided hashes. The wallet SHOULD display the
+     number of blob hashes and warn the user that blob transactions
+     carry additional data costs.
    - If `tx.type` is `"0x4"` (EIP-7702): `gasPrice` MUST NOT be
      present. `maxFeePerGas` MUST be used. `to` MUST be present
      (EIP-7702 does not support contract creation). `authorizationList`
@@ -471,9 +479,11 @@ The wallet MUST display the full message text to the user before signing.
 Note: EIP-191 personal sign signatures are not chain-bound (the chain ID
 is not part of the signed data). The `chain` parameter identifies the
 session context but does not prevent cross-chain replay of the signature.
-The wallet SHOULD display a warning when the message appears to be a
-login nonce or authorization grant without domain/expiry/nonce fields
-(e.g., bare hex hashes or short numeric strings).
+The wallet MUST display a prominent warning that the signature is not
+chain-bound and may be replayed on any EVM chain. The wallet MUST
+additionally warn when the message appears to be a login nonce or
+authorization grant without domain/expiry/nonce fields (e.g., bare hex
+hashes or short numeric strings).
 
 **Result:**
 
@@ -777,6 +787,10 @@ The wallet SHOULD display the raw bytes as hex to the user. If the bytes
 can be decoded as valid UTF-8, the wallet MAY additionally show the text
 representation.
 
+As with `wallet_signMessage`, EIP-191 signatures are not chain-bound. The
+wallet MUST display a prominent warning that the signature may be replayed
+on any EVM chain.
+
 **Validation rules:**
 
 1. `address` MUST be an account authorized for this session.
@@ -914,6 +928,7 @@ Standard error codes:
 | `gas_estimation_failed` | -32000 | Wallet could not estimate gas for the transaction. | Reverted in estimation. |
 | `tx_rejected` | -32000 | Network rejected the transaction. | RPC returned error. |
 | `chain_not_added` | 4902 | Requested chain is not configured but could be added via `wallet_addChain`. | Chain unknown but addable. |
+| `rate_limited` | -32005 | Too many pending requests. | DApp exceeded 32 concurrent pending requests. |
 | `internal_error` | -32603 | Unexpected wallet error. | Catch-all. |
 
 The `code` field is a string (not a number) to allow namespaced extensions.

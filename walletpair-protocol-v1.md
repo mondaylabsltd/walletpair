@@ -272,7 +272,7 @@ pairing codes and traffic keys.
 ### 7.3 Pairing Code
 
 After the wallet `join` message is delivered, both sides independently derive
-a 6-digit pairing code:
+a 4-digit pairing code:
 
 ```text
 code_bytes   = HKDF-SHA256(
@@ -281,7 +281,7 @@ code_bytes   = HKDF-SHA256(
                  info = "walletpair-pairing-code"
                )[0:4]                          // first 4 bytes (indices 0,1,2,3)
 code_uint32  = big-endian uint32(code_bytes)
-pairing_code = code_uint32 mod 1000000         // zero-pad to 6 digits
+pairing_code = code_uint32 mod 10000           // zero-pad to 4 digits
 ```
 
 The wallet can compute its local pairing code before sending `join`, because
@@ -418,9 +418,28 @@ Example `req` with encrypted params:
 }
 ```
 
-The `method` and `event` fields are plaintext so the relay can optionally log
-them for debugging. If method-name privacy is needed, use a generic method
-name like `encrypted` and put the real method inside the encrypted payload.
+The `method` and `event` fields are plaintext on the wire. To prevent the
+relay from profiling user behavior (e.g., detecting when transactions are
+signed), both peers MUST support **privacy mode** as the default behavior:
+
+- The sender MUST set the `method` field to `"encrypted"` (for `req`) or
+  the `event` field to `"encrypted"` (for `evt`).
+- The actual method or event name MUST be included inside the encrypted
+  `sealed` payload as a `"_method"` or `"_event"` string field alongside
+  the params/data object. Specifically, the plaintext JSON encrypted into
+  `sealed` becomes `{ "_method": "<real method>", ...params }` for `req`,
+  `{ "_event": "<real event>", ...data }` for `evt`, and unchanged for
+  `res` (the response inherits context from the matched request).
+- The AAD `method` / `event` component uses the literal string
+  `"encrypted"` (the value on the wire), so AAD construction is unchanged.
+- A wallet or dApp that receives a message with `method` or `event` set
+  to `"encrypted"` MUST read the real name from the decrypted payload.
+  If the `_method` / `_event` field is missing, reject with
+  `invalid_params`.
+
+If both peers negotiate a `"privacy_mode": false` capability (opt-out),
+they MAY send real method/event names in plaintext. Absent this explicit
+opt-out, privacy mode is always on.
 
 ## 8. Capability Negotiation
 
@@ -612,7 +631,7 @@ user wants to announce the wallet to the dApp:
 
 ```text
 Wallet: "Connect to MyDApp? Requested: wallet_signTransaction on eip155:1.
-Pairing code: 847293. Compare this with the dApp before it connects."
+Pairing code: 8472. Compare this with the dApp before it connects."
 ```
 
 The dApp cannot display the matching code until it receives the wallet's
@@ -671,7 +690,7 @@ the dApp MUST wait for explicit user confirmation that the wallet display
 shows the same code and requested scope:
 
 ```text
-DApp:   "Pairing code: 847293. Confirm this matches your wallet."
+DApp:   "Pairing code: 8472. Confirm this matches your wallet."
 ```
 
 Only after confirmation does the dApp send:
@@ -791,8 +810,14 @@ Rules:
    or `error`, owned by the upper-layer service.
 6. **Request idempotency.** The wallet MUST cache every processed
    request ID, its params hash, and its decrypted response (result or
-   error object) for the lifetime of the channel (until close).
-   If the wallet receives a `req` with an `id` it has already processed:
+   error object). The cache MUST hold at least the most recent 1024
+   processed requests, evicted in LRU order. Wallets MAY use a larger
+   cache. If a retried request's ID has been evicted, the wallet
+   processes it as a new request (which is safe for read-only methods;
+   for `wallet_sendTransaction`, see the broadcast-idempotency rule
+   below).
+   If the wallet receives a `req` with an `id` it has already processed
+   and the entry is still in the cache:
    - If the params hash matches, the wallet MUST return the cached
      response by re-encrypting the cached result/error with a fresh
      sequence number. The wallet MUST NOT replay the old `sealed`
@@ -807,7 +832,10 @@ Rules:
    produce different key ordering or whitespace.
    For `wallet_sendTransaction` specifically: if the wallet has already
    signed and broadcast a transaction for a given `req.id`, it MUST NOT
-   sign or broadcast again — it MUST return the original `txHash`.
+   sign or broadcast again — it MUST return the original `txHash`. To
+   ensure this guarantee survives cache eviction, the wallet SHOULD
+   persist broadcast tx hashes separately (keyed by `req.id`) until
+   the channel is closed.
 
 ## 11. Wallet Events
 
@@ -916,6 +944,7 @@ Close reasons:
 | `invalid_role` | Peer sent a message not allowed for its role. |
 | `invalid_resume` | Resume token is missing or invalid. |
 | `timeout` | Heartbeat or pairing confirmation timed out. |
+| `rate_limited` | Too many pending requests or messages. |
 | `payload_too_large` | Message exceeds 64 KB. |
 | `protocol_error` | Malformed or unsupported message. |
 | `unsupported_version` | Peer sent a `v` value the receiver does not support. |
@@ -1092,7 +1121,11 @@ closed
 9. `resume` is secret and must not be shown to users.
 10. A closed channel cannot carry more requests, responses, or events.
 11. A single message must not exceed 64 KB on the wire.
-12. A peer should have at most 32 pending (unanswered) requests per channel.
+12. A peer MUST NOT have more than 32 pending (unanswered) requests per
+    channel. If a dApp sends a `req` that would exceed this limit, the
+    wallet MUST reject it with error code `rate_limited` and message
+    "Too many pending requests". The dApp MUST wait for at least one
+    pending response before sending another request.
 13. If a peer receives a message with an unsupported `v` value, it must reply
     with `close` reason `unsupported_version`.
 14. Encryption sequence counters must never be reset. They persist across
@@ -1334,17 +1367,16 @@ The following fields are visible to the relay in plaintext:
 
 This metadata leakage allows a malicious relay to build user behavior
 profiles (when transactions are signed, which chains are used, wallet
-type and capabilities). Privacy-sensitive implementations SHOULD mitigate
-this:
+type and capabilities). Implementations MUST mitigate this:
 
-- Use a generic `method` value (e.g., `encrypted`) and include the real
-  method name inside the encrypted `sealed` payload. The wallet and dApp
-  SHOULD agree on this via a `privacy_mode` capability.
-- Omit `meta` from handshake messages.
+- Method and event names are encrypted by default (see Section 7.4
+  privacy mode). Real names are carried inside the `sealed` payload.
+- Omit `meta` from handshake messages when privacy is a concern.
 - Use a minimal `capabilities` declaration during handshake.
 
-Implementations that prioritize privacy SHOULD treat method/event name
-encryption as the default behavior, not an optional optimization.
+Method/event name encryption is the default behavior per Section 7.4.
+Peers MAY opt out only by mutual agreement via the `privacy_mode`
+capability.
 
 ### 20.5 Close Message Trust
 
@@ -1439,8 +1471,8 @@ walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.exam
 ### User compares pairing code and DApp accepts
 
 ```text
-Wallet: "Pairing code: 847293"  (displayed after scanning)
-DApp:   "Pairing code: 847293"  (displayed after receiving join)
+Wallet: "Pairing code: 8472"  (displayed after scanning)
+DApp:   "Pairing code: 8472"  (displayed after receiving join)
 User:   confirms both displays match
 ```
 

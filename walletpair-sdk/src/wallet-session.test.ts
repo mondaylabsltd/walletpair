@@ -80,7 +80,7 @@ describe('WalletSession', () => {
       await session.joinFromUri(uri);
 
       expect(handler).toHaveBeenCalled();
-      expect(session.pairingCode).toMatch(/^\d{6}$/);
+      expect(session.pairingCode).toMatch(/^\d{4}$/);
     });
 
     it('pairing code matches dApp side derivation', async () => {

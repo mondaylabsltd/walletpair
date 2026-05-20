@@ -52,7 +52,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   channelId = '';
   /** Pairing URI. Available after createPairing(). */
   pairingUri = '';
-  /** 6-digit pairing code. Available after wallet joins. */
+  /** 4-digit pairing code. Available after wallet joins. */
   pairingCode = '';
   /** Remote wallet capabilities. Available after wallet joins. */
   walletCapabilities: Capabilities | undefined = undefined;

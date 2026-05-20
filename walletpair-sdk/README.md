@@ -241,7 +241,7 @@ new DAppSession({ transport, name?, requestTimeout?, autoAccept? })
 |-------|---------|-------------|
 | `phase` | `DAppPhase` | State machine transition |
 | `pairingUri` | `string` | Pairing URI generated |
-| `pairingCode` | `string` | 6-digit code for verification |
+| `pairingCode` | `string` | 4-digit code for verification |
 | `walletJoined` | `{ pubkey, capabilities?, meta? }` | Wallet joined the channel |
 | `response` | `{ id, ok, data }` | Response received |
 | `event` | `{ event, data }` | Wallet pushed an event |
@@ -271,7 +271,7 @@ new WalletSession({ transport, capabilities, meta? })
 | Event | Payload | Description |
 |-------|---------|-------------|
 | `phase` | `WalletPhase` | State machine transition |
-| `pairingCode` | `string` | 6-digit code for verification |
+| `pairingCode` | `string` | 4-digit code for verification |
 | `request` | `{ id, method, params }` | Incoming request from dApp |
 | `error` | `Error` | Error occurred |
 
@@ -391,7 +391,7 @@ The core protocol is chain-agnostic -- `DAppSession.request()` and `WalletSessio
 ## Security
 
 - **E2E Encryption**: X25519 ECDH -> HKDF-SHA256 -> ChaCha20-Poly1305 AEAD
-- **MITM Protection**: 6-digit pairing code verified by user on both devices
+- **MITM Protection**: 4-digit pairing code verified by user on both devices
 - **Replay Protection**: Sequence-number-based nonces, monotonically increasing
 - **Channel Isolation**: 256-bit random channel IDs
 - **Zero Trust Relay**: Relay sees routing metadata only, never plaintext payloads

@@ -99,7 +99,7 @@ describe('DAppSession', () => {
       } as ProtocolMessage);
 
       expect(handler).toHaveBeenCalled();
-      expect(session.pairingCode).toMatch(/^\d{6}$/);
+      expect(session.pairingCode).toMatch(/^\d{4}$/);
     });
 
     it('emits walletJoined with capabilities and meta', async () => {

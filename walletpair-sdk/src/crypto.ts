@@ -154,7 +154,7 @@ export function computePairingCode(
     : hexToBytes(channelIdHex);
   const codeBytes = hkdf(sha256, rootKey, salt, 'walletpair-pairing-code', 4);
   const view = new DataView(codeBytes.buffer, codeBytes.byteOffset, 4);
-  return (view.getUint32(0) % 1000000).toString().padStart(6, '0');
+  return (view.getUint32(0) % 10000).toString().padStart(4, '0');
 }
 
 // ---------------------------------------------------------------------------

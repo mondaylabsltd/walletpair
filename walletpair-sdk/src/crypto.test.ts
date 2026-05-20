@@ -131,14 +131,14 @@ describe('key exchange', () => {
 // ---------------------------------------------------------------------------
 
 describe('computePairingCode', () => {
-  it('returns a 6-digit string', () => {
+  it('returns a 4-digit string', () => {
     const kp = generateX25519KeyPair();
     const shared = computeSharedSecret(kp.privateKey, kp.publicKey);
     const channelId = generateChannelId();
     const sk = deriveSessionKey(shared, channelId);
 
     const code = computePairingCode(sk, channelId);
-    expect(code).toMatch(/^\d{6}$/);
+    expect(code).toMatch(/^\d{4}$/);
   });
 
   it('both peers compute the same code', () => {
@@ -171,7 +171,7 @@ describe('computePairingCode', () => {
       crypto.getRandomValues(sk);
       const ch = generateChannelId();
       const code = computePairingCode(sk, ch);
-      expect(code).toHaveLength(6);
+      expect(code).toHaveLength(4);
       results.add(code);
     }
     // Very unlikely all 20 are the same

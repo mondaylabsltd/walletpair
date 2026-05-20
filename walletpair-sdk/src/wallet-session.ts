@@ -39,7 +39,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
 
   /** Channel ID (hex). Available after join. */
   channelId = '';
-  /** 6-digit pairing code. Available after join. */
+  /** 4-digit pairing code. Available after join. */
   pairingCode = '';
 
   private transport: Transport;

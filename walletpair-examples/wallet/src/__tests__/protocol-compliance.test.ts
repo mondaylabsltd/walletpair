@@ -105,15 +105,15 @@ describe('Protocol Section 7.3: Pairing Code', () => {
     expect(view.getUint32(0, true)).not.toBe(1000000); // little-endian = different
   });
 
-  it('produces 6-digit zero-padded code', () => {
-    const code = (12345 % 1000000).toString().padStart(6, '0');
-    expect(code).toBe('012345');
-    expect(code.length).toBe(6);
+  it('produces 4-digit zero-padded code', () => {
+    const code = (12345 % 10000).toString().padStart(4, '0');
+    expect(code).toBe('2345');
+    expect(code.length).toBe(4);
   });
 
-  it('wraps at 1000000', () => {
-    const code = (1000001 % 1000000).toString().padStart(6, '0');
-    expect(code).toBe('000001');
+  it('wraps at 10000', () => {
+    const code = (10001 % 10000).toString().padStart(4, '0');
+    expect(code).toBe('0001');
   });
 });
 
