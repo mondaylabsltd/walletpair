@@ -514,8 +514,7 @@ The wallet declares its capabilities in the `join` message:
     ]
   },
   "meta": {
-    "name": "MyWallet",
-    "icon": "https://example.com/icon.png"
+    "name": "Wallet"
   }
 }
 ```
@@ -719,7 +718,7 @@ continues, the wallet connects to the relay and sends:
     "chains": ["eip155:1", "eip155:137"]
   },
   "meta": {
-    "name": "MyWallet"
+    "name": "Wallet"
   }
 }
 ```
@@ -1063,7 +1062,7 @@ Close reasons:
 | `invalid_state` | Message is not allowed in current state. |
 | `invalid_role` | Peer sent a message not allowed for its role. |
 | `invalid_resume` | Resume token is missing or invalid. |
-| `timeout` | Heartbeat or pairing confirmation timed out. |
+| `timeout` | Heartbeat, pairing confirmation, or session lifetime timed out. |
 | `rate_limited` | Too many pending requests or messages. |
 | `payload_too_large` | Message exceeds 64 KB. |
 | `protocol_error` | Malformed or unsupported message. |
@@ -1131,6 +1130,22 @@ sends `ready.connected` to the reconnecting peer. If the other peer is also
 disconnected, the relay sends `ready.waiting` and will send `ready.connected`
 to both once the other peer also reconnects.
 
+**Simultaneous reconnect.** When both peers reconnect at approximately the
+same time (e.g., after a relay restart), the relay MUST handle resume token
+validation atomically per channel. Specifically:
+
+1. The relay MUST serialize resume token validation and state transitions
+   for a given channel ID. Two concurrent reconnect messages for the same
+   channel MUST NOT cause a race condition where both receive
+   `ready.waiting` but neither triggers `ready.connected`.
+2. If both resume tokens are validated successfully, the relay MUST send
+   `ready.connected` to both peers regardless of arrival order. The relay
+   MAY process them sequentially (first arrival gets `ready.waiting`, second
+   arrival triggers `ready.connected` for both) or atomically (both get
+   `ready.connected` immediately).
+3. If one resume token is invalid, the relay MUST reject only that peer
+   with `invalid_resume` and MUST NOT affect the other peer's reconnect.
+
 The previously negotiated root key, transcript hash, and traffic keys remain
 valid. Peers must persist their send and receive sequence counters across
 reconnects and continue from the persisted values. **Sequence counters must
@@ -1192,10 +1207,12 @@ connected
   -> send close ---------------------------------> closed
   -> receive close ------------------------------> closed
   -> transport disconnected ---------------------> disconnected
+  -> session lifetime expired (§16 rule 17) -----> closed
 disconnected
   -> send create with resume --------------------> waiting
      (relay may respond with ready.waiting or
       ready.connected depending on other peer)
+  -> session lifetime expired (§16 rule 17) -----> closed
   -> give up ------------------------------------> closed
 closed
   (terminal state)
@@ -1218,10 +1235,12 @@ connected
   -> send close ---------------------------------> closed
   -> receive close ------------------------------> closed
   -> transport disconnected ---------------------> disconnected
+  -> session lifetime expired (§16 rule 17) -----> closed
 disconnected
   -> send join with resume ----------------------> waiting_accept
      (relay may respond with ready.waiting or
       ready.connected depending on other peer)
+  -> session lifetime expired (§16 rule 17) -----> closed
   -> give up ------------------------------------> closed
 closed
   (terminal state)
@@ -1255,6 +1274,19 @@ closed
     a cryptographic trust boundary.
 16. A peer MUST reject `ready.connected` if `remote` does not match the peer
     public key used to derive the handshake transcript.
+17. **Session expiry.** A channel MUST have a maximum session lifetime.
+    The recommended default is 24 hours from `ready.connected`. Both
+    peers MUST track the session start time and close the channel with
+    reason `timeout` when the lifetime expires. After expiry, the peers
+    MUST initiate a fresh pairing to re-establish a channel (reconnect
+    with `resume` MUST NOT be used after session expiry). The wallet
+    SHOULD display the remaining session lifetime to the user and warn
+    before expiry. If a peer receives a message on an expired session,
+    it MUST respond with `close` reason `timeout`. The relay SHOULD
+    also enforce session expiry independently and close channels that
+    exceed the configured TTL. Implementations MAY allow users to
+    configure a shorter session lifetime but MUST NOT allow unlimited
+    sessions.
 
 ## 17. Transport Requirements
 
@@ -1321,7 +1353,7 @@ The relay must:
 11. Expire channels after a configurable TTL (recommended: 5 minutes for
     unpaired channels, 24 hours for connected channels).
 
-The relay SHOULD implement rate limiting to prevent abuse:
+The relay MUST implement rate limiting to prevent abuse:
 
 - Per-IP channel creation rate limit (recommended: 10 channels per
   minute per IP).
@@ -1331,8 +1363,12 @@ The relay SHOULD implement rate limiting to prevent abuse:
   minute per peer).
 
 These limits preserve the "zero registration" principle while preventing
-resource exhaustion attacks. Relay operators MAY adjust limits based on
-their deployment context.
+resource exhaustion attacks. The specific numeric thresholds above are
+recommendations; relay operators MAY adjust them based on their
+deployment context, but MUST enforce non-zero limits in all three
+categories. A relay that does not rate-limit channel creation is
+trivially vulnerable to resource exhaustion by a single attacker
+rotating IP addresses.
 
 The relay must not:
 
@@ -1383,6 +1419,15 @@ relays (each relay generates its own opaque tokens). In this case:
   re-pairing SHOULD persist the channel's cryptographic state (keys,
   sequence counters) and use a relay-independent reconnect mechanism
   (outside the scope of v1).
+
+**Channel cleanup on unused relays.** Once pairing completes on one relay,
+the dApp MUST close the channels it created on all other relays by sending
+a `close` message with reason `normal` to each. This prevents orphaned
+channels from consuming relay resources until TTL expiry. If the dApp
+cannot reach an unused relay to send `close` (e.g., network error), it
+SHOULD retry with backoff and eventually abandon — the relay's channel
+TTL (§18.3 rule 11) will clean up the channel automatically. The wallet
+does not need to perform cleanup because it only connects to one relay.
 
 ## 19. Bluetooth Binding
 
@@ -1592,8 +1637,8 @@ type and capabilities). Implementations MUST mitigate this:
 
 - Method and event names are encrypted by default (see Section 7.4
   privacy mode). Real names are carried inside the `sealed` payload.
-- Omit `meta` from handshake messages when privacy is a concern.
-- Use a minimal `capabilities` declaration during handshake.
+- Minimize `meta` in handshake messages (see below).
+- Minimize `capabilities` declaration during handshake (see below).
 
 Method/event name encryption is the default behavior per Section 7.4.
 Peers MAY opt out only by mutual agreement via the `privacy_mode`
@@ -1603,16 +1648,22 @@ capability.
 the `join` message are transmitted in plaintext because the dApp needs them
 to decide whether to `accept` the wallet before the encrypted channel is
 established. This is an inherent tradeoff in the current handshake design.
-Implementations SHOULD be aware of the following specific leakage:
+Implementations MUST apply the following minimization rules:
 
 - `meta.name` reveals the wallet brand or device name (e.g., "MetaMask",
-  "Ledger Nano S"). Wallets SHOULD use a generic name or omit `meta.name`
-  when privacy is a concern.
+  "Ledger Nano S"). Wallets MUST use a generic name (e.g., "Wallet") or
+  omit `meta.name` entirely unless the user has explicitly opted in to
+  sharing wallet identity. The `meta` field itself SHOULD be omitted when
+  no display information is necessary.
 - `capabilities.chains` reveals which chains the user intends to use.
-  Wallets SHOULD include only the intersection of dApp-requested chains
-  (per §8.1) rather than all supported chains.
-- `capabilities.methods` reveals the scope of operations. This is less
-  sensitive but may indicate user intent (e.g., presence of
+  Wallets MUST include only the intersection of dApp-requested chains
+  (per §8.1) rather than all supported chains. When the pairing URI
+  omits `chains`, the wallet MUST prompt the user to select chains
+  rather than advertising all supported chains.
+- `capabilities.methods` reveals the scope of operations. Wallets MUST
+  include only the intersection of dApp-requested methods (per §8.1)
+  rather than all supported methods. This is less sensitive than chain
+  leakage but may still indicate user intent (e.g., presence of
   `wallet_signTypedData` suggests DeFi interaction).
 
 Relay operators MUST NOT log, index, or retain `join` message content
@@ -1627,11 +1678,19 @@ user rejects. This is a known tradeoff: `ok` is plaintext so the relay can
 deliver error responses without needing to decrypt them (relevant for relay
 diagnostics and error routing). The `ok` field is bound into the AEAD's AAD
 (§7.4), so the relay cannot flip it without causing decryption failure.
-Implementations that require full response privacy may set `ok` to `true`
-for all responses and encode the real success/failure status inside the
-encrypted `sealed` payload. This approach is compatible with the protocol
-(the receiver checks the decrypted content for actual status) but requires
-both peers to agree on this convention via a capability flag.
+
+Implementations SHOULD support a **response privacy mode** where the
+sender always sets `ok` to `true` on the wire and encodes the real
+success/failure status inside the encrypted `sealed` payload. In this
+mode, the decrypted payload MUST include a `"_ok"` boolean field
+(`true` or `false`); the receiver MUST use `_ok` as the authoritative
+status and ignore the wire `ok` value. This mode is negotiated via the
+`"response_privacy": true` capability flag. When both peers declare
+this capability, response privacy mode MUST be used. When not
+negotiated, the wire `ok` field is authoritative (backward compatible).
+
+A future protocol version SHOULD consider removing `ok` from the
+plaintext wire format entirely.
 
 ### 20.5 Close Message Trust
 
@@ -1705,7 +1764,7 @@ walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.exam
     "events": ["accountsChanged", "chainChanged"],
     "chains": ["eip155:1", "eip155:137"]
   },
-  "meta": { "name": "MyWallet" }
+  "meta": { "name": "Wallet" }
 }
 ```
 
@@ -1855,7 +1914,8 @@ root_key = c33b664ab3eea368d81109b432f04a1293a743212749e19bfe412a2996dcefee
 
 ### A.2 Transcript and Traffic Keys
 
-Handshake context:
+Handshake context (test data only — production wallets MUST use generic
+names per §20.4):
 
 ```text
 capabilities (canonical JSON) = {"chains":["eip155:1","eip155:137"],"events":["accountsChanged","chainChanged"],"methods":["wallet_signTransaction","wallet_signMessage"]}
