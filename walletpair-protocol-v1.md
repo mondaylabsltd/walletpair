@@ -308,10 +308,33 @@ are defined for protocol version 1 only). The `ch` field is already bound
 via `channel_id_bytes` in the AAD prefix. For `evt`, if an `id` field is
 present it MUST be included in the AAD; if absent, an empty string is used.
 
+The `lp()` function uses a 2-byte length prefix (uint16_be), supporting
+field UTF-8 byte lengths up to 65535. If any field exceeds 65535 UTF-8
+bytes, the sender MUST reject the message before encryption. In practice,
+all AAD fields (`from`, `id`, `method`, `event`) are short strings well
+within this limit.
+
 The leading type byte (`0x01`/`0x02`/`0x03`) and length-prefixed fields
 ensure unambiguous parsing regardless of field content. If a relay
 modifies any plaintext field (`from`, `id`, `method`, `event`, `ok`),
 AEAD decryption will fail.
+
+**AAD test vector** (for cross-implementation verification):
+
+```text
+Given:  ch = "aa" repeated 32 times (64 hex chars)
+        type = req (0x01)
+        from = "dGVzdA" (base64url of "test")
+        id   = "req-1"
+        method = "wallet_getAccounts"
+
+aad_header = 01                       (type byte)
+           | 0006 6447567A6441       (lp("dGVzdA") = 6 bytes)
+           | 0005 7265712D31         (lp("req-1") = 5 bytes)
+           | 0012 77616C6C65745F6765744163636F756E7473
+                                      (lp("wallet_getAccounts") = 18 bytes)
+aad = channel_id_bytes || aad_header
+```
 
 Where `seq_bytes` is a 4-byte big-endian sequence number. Each peer maintains
 its own send counter, starting at 0 and incrementing by 1 for each message
@@ -398,12 +421,24 @@ Capability fields:
 
 | Field | Type | Description |
 |---|---|---|
-| `methods` | string[] | Wallet methods the wallet supports. |
-| `events` | string[] | Event types the wallet may push. |
-| `chains` | string[] | CAIP-2 chain identifiers the wallet supports. |
+| `methods` | string[] | Methods authorized for this session. |
+| `events` | string[] | Event types the wallet may push in this session. |
+| `chains` | string[] | CAIP-2 chains authorized for this session. |
 
 All three fields are required in `capabilities`. An empty array means the
 wallet explicitly supports none of that category.
+
+The `capabilities` in the `join` message represents the **approved session
+scope** — not the wallet's full capability set. When the pairing URI
+includes `methods` and `chains`, the wallet MUST compute the intersection
+(per §8.1) before populating `capabilities`. The dApp can inspect
+`capabilities` to know exactly what was authorized without an extra round
+trip.
+
+After `ready.connected`, the dApp calls `wallet_getAccounts` to discover
+the approved accounts. The combination of `join.capabilities` (methods,
+chains) and the `wallet_getAccounts` response (accounts) constitutes the
+complete approved session scope.
 
 ### 8.1 Session Scope Enforcement
 
@@ -700,20 +735,21 @@ Rules:
 5. The decrypted content of `sealed` is the JSON value of `params`, `result`,
    or `error`, owned by the upper-layer service.
 6. **Request idempotency.** The wallet MUST cache every processed
-   request ID, its params hash, and its response for the lifetime of
-   the channel (until close). If the wallet receives a `req` with an
-   `id` it has already processed:
+   request ID, its params hash, and its decrypted response (result or
+   error object) for the lifetime of the channel (until close).
+   If the wallet receives a `req` with an `id` it has already processed:
    - If the params hash matches, the wallet MUST return the cached
-     response without re-executing the operation.
+     response by re-encrypting the cached result/error with a fresh
+     sequence number. The wallet MUST NOT replay the old `sealed`
+     bytes (they would be rejected by the sequence number rule).
    - If the params hash differs, the wallet MUST reject with
      `invalid_params` ("Duplicate request ID with different params").
    The **canonical params hash** is `SHA-256(plaintext_json_utf8)` —
-   the raw UTF-8 bytes of the decrypted params JSON, before any parsing.
-   The wallet computes this hash immediately after AEAD decryption and
-   stores it alongside the request ID. Because the dApp serializes
-   params to JSON once and this byte sequence is preserved through
-   encrypt→decrypt, the hash is stable across retries (which use
-   different sequence numbers and therefore different ciphertext).
+   the raw UTF-8 bytes of the decrypted params JSON, before any
+   parsing. The dApp MUST cache and reuse the exact
+   `plaintext_json_utf8` bytes when retrying a request. The dApp
+   MUST NOT re-serialize params from parsed objects, as this may
+   produce different key ordering or whitespace.
    For `wallet_sendTransaction` specifically: if the wallet has already
    signed and broadcast a transaction for a given `req.id`, it MUST NOT
    sign or broadcast again — it MUST return the original `txHash`.
