@@ -13,18 +13,19 @@ switch between relays freely.In Bluetooth mode, no relay is needed at all. No
 registration, API key, or vendor lock-in is required in either case.
 
 The channel is created by the dApp. The wallet joins that channel. After a
-cryptographic handshake and user confirmation, the dApp can send requests and
-the wallet can send responses or events.
+cryptographic handshake, the dApp can send requests and the wallet can send
+responses or events.
 
 Intended flow:
 
 1. DApp creates a channel and generates a pairing URI (QR code).
 2. Wallet scans QR code or opens deep link.
-3. Wallet derives the shared secret, displays pairing code, and asks user
-   to confirm it matches the dApp's display.
+3. Wallet derives the shared secret and session fingerprint, asks user
+   to confirm the fingerprint matches the dApp's display.
 4. User confirms on wallet. Wallet sends join with its public key and
    capabilities.
-5. DApp verifies and accepts. Channel is now connected and encrypted.
+5. DApp verifies sealed_join and auto-accepts. Channel is now connected
+   and encrypted.
 6. DApp sends requests. Wallet sends responses and events.
 
 WalletPair is transport independent. The same protocol messages can run over
@@ -41,7 +42,7 @@ WalletPair defines:
 - channel creation and pairing URI
 - key exchange and end-to-end encryption
 - capability negotiation
-- user confirmation with pairing code
+- session fingerprint and user confirmation on wallet side
 - request and response
 - wallet events
 - heartbeat
@@ -224,7 +225,7 @@ Body field descriptions:
 
 | Field | In `body` of | Description |
 |-------|-------------|-------------|
-| `meta` | `create` | Display metadata object (e.g., `{ "name": "MyDApp" }`). Use `{}` if no metadata. |
+| `meta` | `create` | Display metadata object (`name`, `description`, `url`, `icon`). All fields required. See §9.2. |
 | `sealed_join` | `join` | Encrypted capabilities and metadata, base64url. See Section 7.5. |
 | `resume` | `create`, `join`, `ready` | Reconnect token (Section 14). `null` on first connection. |
 | `target` | `accept` | Target peer ID (wallet public key, base64url). |
@@ -415,7 +416,8 @@ The same key MUST NOT be used in both directions. `req` messages use
 `dapp_to_wallet_key`; `res` and `evt` messages use `wallet_to_dapp_key`.
 If a relay tampers with the wallet public key, capabilities, wallet
 metadata, or dApp name visible to one peer, the peers derive different
-pairing codes and traffic keys.
+traffic keys and the channel becomes cryptographically non-functional
+(AEAD decryption fails on both sides).
 
 For private handshake (Section 7.5), the wallet encrypts capabilities
 and metadata before sending `join`. This uses a separate key derived
@@ -434,42 +436,43 @@ knows the dApp public key from the pairing URI and can compute the
 shared secret and root key before sending `join`. The dApp computes the
 same key after receiving the wallet's public key in `join`.
 
-### 7.3 Pairing Code
+### 7.3 Session Fingerprint
 
-After the wallet `join` message is delivered, both sides independently derive
-a 4-digit pairing code:
+Both sides independently derive a 4-digit session fingerprint from the
+channel ID and dApp public key. This fingerprint is used for the wallet
+user to verify they are connecting to the correct dApp.
 
 ```text
-code_bytes   = HKDF-SHA256(
-                 ikm  = root_key,
-                 salt = transcript_hash,
-                 info = "walletpair-pairing-code"
-               )[0:4]                          // first 4 bytes (indices 0,1,2,3)
-code_uint32  = big-endian uint32(code_bytes)
-pairing_code = code_uint32 mod 10000           // zero-pad to 4 digits
+fp_bytes     = SHA256(
+                 "walletpair-v1-session-fingerprint" ||
+                 channel_id_bytes ||
+                 dapp_pubkey_bytes
+               )[0:4]                            // first 4 bytes
+fp_uint32    = big-endian uint32(fp_bytes)
+fingerprint  = fp_uint32 mod 10000               // zero-pad to 4 digits
 ```
 
-The wallet can compute its local pairing code before sending `join`, because
-it has generated its own public key and knows the dApp public key from the
-pairing URI. However, the dApp cannot compute the same code until it receives
-the wallet public key in `join`. Therefore, the wallet MUST NOT treat the code
-as confirmed before `join` is sent.
+Both the dApp and the wallet can compute this fingerprint **independently
+and simultaneously** — no message exchange is needed. The dApp knows its
+own public key and channel ID. The wallet knows both from the pairing URI.
 
-The secure flow is:
+**Display and confirmation flow:**
 
-1. The wallet scans the URI, computes its local code, and sends `join`.
-2. The dApp receives `join`, computes the same code, and displays it.
-3. The user compares the code displayed by the wallet and the dApp.
-4. The dApp sends `accept` only after the user confirms the codes match.
+1. The dApp displays the fingerprint alongside the QR code (e.g.,
+   "Session: 4821").
+2. The wallet scans the QR code, computes the same fingerprint, and
+   displays it in the connection confirmation dialog (e.g., "Connect to
+   MyDApp? Session: 4821").
+3. The user verifies the fingerprint matches the dApp's display and
+   confirms. The wallet sends `join`.
+4. The dApp auto-accepts after verifying `sealed_join`.
 
-A dApp MUST NOT auto-accept a first-time wallet connection. It MAY auto-accept
-a previously paired wallet only if it verifies the same wallet public key and
-the same approved session scope.
-
-This prevents man-in-the-middle attacks: if a relay substitutes public
-keys or tampers with the authenticated handshake context, both sides will
-derive different root/traffic keys and different pairing codes. The user
-will see mismatched codes and reject the connection.
+This one-time confirmation protects the wallet user against connecting
+to a malicious dApp in deep link scenarios, where a software intermediary
+could substitute the dApp's public key. In QR code scenarios the optical
+channel already prevents key substitution, but the fingerprint provides
+defense-in-depth at no additional UX cost (the user is already looking
+at the dApp screen to scan the QR code).
 
 ### 7.4 Message Encryption
 
@@ -633,8 +636,8 @@ Upon receiving a `join`:
    `meta`.
 3. If decryption fails, the dApp MUST close with `decryption_failed`.
 4. The dApp uses the decrypted `capabilities` and `meta` for all
-   subsequent operations (transcript hash, pairing code, accept/reject
-   decision).
+   subsequent operations (transcript hash, traffic key derivation,
+   accept/reject decision).
 
 The transcript hash (Section 7.2) is computed over the **decrypted**
 capabilities and meta values. Both peers produce identical transcript
@@ -671,7 +674,10 @@ field of the `join` message (see §7.5). The decrypted content is:
     ]
   },
   "meta": {
-    "name": "Wallet"
+    "name": "MyWallet",
+    "description": "A multi-chain wallet",
+    "url": "https://mywallet.app",
+    "icon": "https://mywallet.app/icon.png"
   }
 }
 ```
@@ -680,6 +686,18 @@ The dApp decrypts `sealed_join`, inspects `capabilities` before calling
 `accept`. If the wallet does
 not support a required chain or method, the dApp may `close` with
 `unsupported_capability`.
+
+**Wallet `meta` fields:**
+
+| Field         | Required | Description                         |
+| ------------- | -------- | ----------------------------------- |
+| `name`        | yes      | Wallet display name.                |
+| `description` | yes      | Short description of the wallet.    |
+| `url`         | yes      | Wallet official website URL.        |
+| `icon`        | yes      | Wallet icon URL. MUST be `https:`.  |
+
+Wallet `meta` is encrypted inside `sealed_join` and invisible to the
+relay.
 
 Capability fields:
 
@@ -784,7 +802,7 @@ malicious relay cannot substitute the content:
 | QR code (optical scan)  | Camera captures dApp screen directly. Relay not in path.                                                                                                                                                                                        | **REQUIRED** support.                               |
 | NFC tap                 | Physical proximity required.                                                                                                                                                                                                                    | Permitted.                                                |
 | BLE characteristic read | Physical proximity required.                                                                                                                                                                                                                    | Permitted.                                                |
-| Deep link / URL scheme  | **INSECURE.** URI passes through OS URL handler, clipboard, browser extensions, or intent system. A malicious intermediary can replace the entire URI including the dApp public key, enabling a full MITM where pairing codes will match. | **MUST NOT** be used as the sole pairing mechanism. |
+| Deep link / URL scheme  | **INSECURE.** URI passes through OS URL handler, clipboard, browser extensions, or intent system. A malicious intermediary can replace the entire URI including the dApp public key, enabling a full MITM that no protocol-level defense can detect. | **MUST NOT** be used as the sole pairing mechanism. |
 | Copy-paste              | URI may be intercepted by clipboard monitors.                                                                                                                                                                                                   | **MUST NOT** be used as the sole pairing mechanism. |
 
 Wallets MUST support QR code scanning as the primary pairing method.
@@ -797,19 +815,20 @@ intercept the connection. For high-value transactions, use QR code
 pairing from a separate device."
 
 DApps MUST display a QR code as the primary pairing interface. DApps
-MAY additionally offer deep links but MUST label them as "Less secure —
-same device only."
+MUST display the session fingerprint (§7.3) alongside the QR code so the
+wallet user can verify the connection. DApps MAY additionally offer deep
+links but MUST label them as "Less secure — same device only."
 
 Format:
 
 ```text
-walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-percent-encoded>&name=<dapp-name>&methods=<comma-list>&chains=<comma-list>
+walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-percent-encoded>&name=<dapp-name>&url=<dapp-url>&icon=<icon-url>&methods=<comma-list>&chains=<comma-list>
 ```
 
 Example:
 
 ```text
-walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.example.com%2Fv1&name=MyDApp&methods=wallet_sendTransaction,wallet_signTypedData&chains=eip155:1,eip155:137
+walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.example.com%2Fv1&name=MyDApp&url=https%3A%2F%2Fmydapp.com&icon=https%3A%2F%2Fmydapp.com%2Ficon.png&methods=wallet_sendTransaction,wallet_signTypedData&chains=eip155:1,eip155:137
 ```
 
 Parameters:
@@ -819,7 +838,9 @@ Parameters:
 | `ch`           | yes                     | Channel ID (hex, 64 chars).                                                                                                                                                                     |
 | `pubkey`       | yes                     | DApp X25519 public key (base64url, no padding).                                                                                                                                                 |
 | `relay`        | yes for relay transport | WebSocket relay URL (percent-encoded).                                                                                                                                                          |
-| `name`         | optional                | DApp display name.                                                                                                                                                                              |
+| `name`         | yes                     | DApp display name.                                                                                                                                                                              |
+| `url`          | yes                     | DApp website URL (percent-encoded).                                                                                                                                                             |
+| `icon`         | yes                     | DApp icon URL (percent-encoded). MUST be `https:` scheme.                                                                                                                                       |
 | `methods`      | optional                | Comma-separated list of methods the dApp intends to call. When present, the wallet MUST restrict the session to these methods (see §8.1) and MUST display them to the user during pairing.     |
 | `chains`       | optional                | Comma-separated list of CAIP-2 chains the dApp intends to use. When present, the wallet MUST restrict the session to these chains (see §8.1) and MUST display them to the user during pairing. |
 
@@ -857,12 +878,26 @@ The dApp connects to the relay and sends:
   "from": "base64url-dapp-pubkey",
   "body": {
     "meta": {
-      "name": "MyDApp"
+      "name": "MyDApp",
+      "description": "A decentralized exchange",
+      "url": "https://mydapp.com",
+      "icon": "https://mydapp.com/icon.png"
     },
     "resume": null
   }
 }
 ```
+
+**DApp `meta` fields:**
+
+| Field         | Required | Description                      |
+| ------------- | -------- | -------------------------------- |
+| `name`        | yes      | DApp display name.               |
+| `description` | yes      | Short description of the dApp.   |
+| `url`         | yes      | DApp website URL.                |
+| `icon`        | yes      | DApp icon URL. MUST be `https:`. |
+
+The `meta` in `create` is plaintext and visible to the relay.
 
 The relay replies:
 
@@ -888,17 +923,19 @@ The `resume` token is generated by the relay and is opaque to the peer.
 ### 9.3 Wallet Joins
 
 The wallet scans the pairing URI, generates its keypair, computes its local
-root key and pairing code, displays the requested scope, and asks whether the
-user wants to announce the wallet to the dApp:
+root key and session fingerprint, displays the requested scope and
+fingerprint, and asks the user to confirm the fingerprint matches the
+dApp's display:
 
 ```text
-Wallet: "Connect to MyDApp? Requested: wallet_signTransaction on eip155:1.
-Pairing code: 8472. Compare this with the dApp before it connects."
+Wallet: "Connect to MyDApp (https://mydapp.com)?
+Requested: wallet_signTransaction on eip155:1.
+Session: 4821. Verify this matches the dApp."
 ```
 
-The dApp cannot display the matching code until it receives the wallet's
-public key, so this is not yet a completed pairing confirmation. If the user
-continues, the wallet connects to the relay and sends `join` with
+The dApp displays the same fingerprint alongside the QR code (e.g.,
+"Session: 4821"). After the user confirms they match, the wallet connects
+to the relay and sends `join` with
 capabilities and metadata encrypted in `sealed_join` (Section 7.5):
 
 ```json
@@ -945,24 +982,22 @@ drops during the waiting phase.
 
 At this point:
 
-- The wallet has displayed its local pairing code.
+- The user has verified the session fingerprint and confirmed the connection.
 - The dApp now has the wallet's public key and can compute the same root key,
-  transcript hash, traffic keys, and pairing code.
-- The user must compare both displays before the dApp accepts.
+  transcript hash, and traffic keys.
+- The dApp can verify the wallet by decrypting `sealed_join` — successful
+  decryption proves the wallet possesses the dApp's public key (obtained
+  via the out-of-band QR code).
 
 ### 9.4 DApp Accepts Wallet
 
-The dApp computes its pairing code and displays it. For a first-time wallet,
-the dApp MUST wait for explicit user confirmation that the wallet display
-shows the same code and requested scope:
+The dApp decrypts `sealed_join` and verifies the wallet's capabilities.
+If decryption succeeds, the wallet is authenticated — it must have obtained
+the dApp's public key from the QR code (out-of-band channel). The dApp
+MAY auto-accept the wallet without additional user interaction.
 
-```text
-DApp:   "Pairing code: 8472. Confirm this matches your wallet."
-```
-
-Only after confirmation does the dApp send:
-
-The dApp sends:
+The dApp MAY display the wallet's metadata (name, capabilities) to the
+user before accepting. The dApp sends:
 
 ```json
 {
@@ -1481,7 +1516,7 @@ waiting
   -> receive close or terminate -----------------> closed
   -> timeout ------------------------------------> closed
 pending_accept
-  -> user confirms pairing code -> send accept --> connected
+  -> sealed_join verified -> send accept ---------> connected
   -> user rejects -> send close -----------------> closed
   -> receive terminate --------------------------> closed
   -> timeout ------------------------------------> closed
@@ -1792,12 +1827,12 @@ register a 16-bit UUID with the Bluetooth SIG or use a fully random
 1. DApp creates `ch`. BLE adapter returns `ready.waiting` to the dApp.
 2. DApp exposes pairing URI via QR, NFC, or BLE advertisement.
 3. Wallet discovers the pairing URI and obtains the dApp's public key.
-4. Wallet computes its local root key and pairing code, then sends `join`
-   with public key and capabilities.
-5. BLE adapter forwards `join` to dApp and sends `ready.waiting` to wallet.
-6. DApp computes the root key, transcript hash, traffic keys, and pairing code.
-7. User confirms the wallet and dApp displays show the same code.
-8. DApp sends `accept`.
+4. Wallet computes its local root key and session fingerprint. User
+   verifies the fingerprint matches the dApp's display and confirms.
+5. Wallet sends `join` with public key and capabilities.
+6. BLE adapter forwards `join` to dApp and sends `ready.waiting` to wallet.
+7. DApp computes the root key, transcript hash, and traffic keys.
+8. DApp verifies `sealed_join` and sends `accept`.
 9. BLE adapter generates `ready.connected` for both sides.
 10. DApp sends `req`. Wallet sends `res` and optional `evt`.
 11. All payloads are encrypted with direction-specific traffic keys.
@@ -1831,23 +1866,24 @@ parses the complete JSON message.
    characteristic. The same MITM protections apply as with relay
    transport: the attacker cannot complete a full MITM because the
    wallet obtains the dApp's public key directly from the BLE
-   characteristic (out-of-band from any network attacker), and the
-   pairing code provides human verification.
+   characteristic (out-of-band from any network attacker), and
+   `sealed_join` cryptographically binds the wallet to the QR-scanned
+   dApp public key.
 2. **Proximity assumption.** Unlike relay-based pairing, Bluetooth
    pairing implicitly assumes physical proximity. However, BLE range
    can extend beyond visual range (especially with directional
    antennas). Implementations MUST NOT rely on Bluetooth proximity as
-   a security property — the pairing code verification is the trust
-   anchor, not physical distance. The wallet SHOULD display the dApp
-   name and pairing code prominently and require explicit user
-   confirmation.
+   a security property — the out-of-band public key delivery is the
+   trust anchor, not physical distance. The wallet SHOULD display the
+   dApp name prominently and require explicit user confirmation.
 3. **BLE connection hijacking.** A nearby attacker could attempt to
    connect to the dApp's BLE service before the legitimate wallet.
    The dApp MUST enforce the one-wallet-per-channel rule (§16 rule 4).
    If a second device attempts to `join`, the BLE adapter MUST reject
-   it with `already_connected`. The pairing code ensures the dApp
-   connects to the intended wallet even if an attacker connects first
-   (the codes will not match).
+   it with `already_connected`. If an attacker connects first, the
+   legitimate wallet's `join` will be rejected, resulting in a
+   denial-of-service — but not a security compromise (the attacker
+   cannot sign transactions without the user's blockchain private keys).
 4. **Denial of service.** A nearby attacker can jam BLE frequencies or
    flood the GATT service with connections. This is inherent to any
    wireless protocol. For high-security scenarios, QR code scanning
@@ -1870,67 +1906,63 @@ The relay operator, network attacker, or eavesdropper should not be able to:
 | Threat             | Protection                                                         |
 | ------------------ | ------------------------------------------------------------------ |
 | Eavesdropping      | E2E encryption with X25519 + ChaCha20-Poly1305.                    |
-| Man-in-the-middle  | Pairing code derived from shared secret; user visual verification. |
+| Man-in-the-middle  | Out-of-band public key delivery (QR); session fingerprint (§7.3) for user verification; `sealed_join` cryptographically binds wallet to QR-scanned dApp key. |
 | Peer impersonation | Peer ID is the X25519 public key; relay verifies on reconnect.     |
 | Replay             | Sequence-number-based nonce; receiver rejects out-of-order seq.    |
 | Channel hijack     | Channel ID is 32 random bytes (256-bit entropy).                   |
 | Relay compromise   | Relay only sees encrypted `sealed` blobs and routing metadata. Response success/failure (`_ok`) is encrypted. |
 
-### 20.2.1 Pairing Code Security Analysis
+### 20.2.1 MITM Security Analysis
 
-The 4-digit pairing code is a **defense-in-depth** measure, not the primary
-MITM protection. The primary defense is **out-of-band public key delivery**,
-which is mandatory (Section 9.1).
+The primary MITM defense is **out-of-band public key delivery**, which is
+mandatory (Section 9.1).
 
-**Primary defense: out-of-band public key delivery.** The dApp's public key
-is embedded in the pairing URI. The wallet MUST obtain this URI through an
-out-of-band channel where the relay and network attackers cannot substitute
-content (see §9.1 for mandatory delivery methods). QR code optical scanning
-is the required primary method: the wallet reads the dApp's screen directly,
-and the relay is not in this path.
+**Out-of-band public key delivery.** The dApp's public key is embedded in
+the pairing URI. The wallet MUST obtain this URI through an out-of-band
+channel where the relay and network attackers cannot substitute content
+(see §9.1 for mandatory delivery methods). QR code optical scanning is the
+required primary method: the wallet reads the dApp's screen directly, and
+the relay is not in this path.
+
+**`sealed_join` as cryptographic proof.** When the dApp receives a `join`
+message and successfully decrypts `sealed_join`, this proves the wallet
+possesses the dApp's public key — which could only have been obtained
+through the out-of-band channel (QR code). A relay-positioned attacker
+cannot forge a valid `sealed_join` because it does not have the dApp's
+private key and therefore cannot compute the shared secret.
 
 A relay-positioned attacker can only attempt a **half-MITM**: substituting
 the wallet's public key in the forwarded `join` message. However, this
-causes both sides to derive different `root_key`, `transcript_hash`, and
-`traffic_key` values:
+causes `sealed_join` decryption to fail on the dApp side:
 
 ```text
 dApp side:   shared_secret = X25519(dapp_priv, attacker_pub)
 Wallet side: shared_secret = X25519(wallet_priv, dapp_pub)  ← real, from QR
 
-→ Different root_key → different transcript_hash → different traffic_key
-→ Channel is cryptographically non-functional (AEAD decryption fails)
-→ Different pairing_code (user sees mismatch)
+→ Different shared_secret → different join_encryption_key
+→ sealed_join decryption fails → dApp rejects the join
 ```
 
-Even if the 4-digit codes coincidentally match (1 in 10,000), the channel
-cannot carry any messages because the two sides have incompatible traffic
-keys. The attacker cannot complete a full MITM because it cannot substitute
-the dApp's public key (delivered via QR).
+The attacker cannot complete a full MITM because it cannot substitute the
+dApp's public key (delivered via QR).
 
-**What the pairing code guards against:** The pairing code provides
-human-verifiable confirmation as a secondary safeguard. It does NOT protect
-against phishing attacks where the attacker controls the QR code display
-itself (e.g., a fake dApp website) — in that scenario the attacker controls
-both ends and codes will match regardless of length.
-
-**Collision probability:** The attacker gets exactly one attempt per pairing
-session (one `join` per channel). The probability is 1/10,000 per attempt,
-but a successful collision does not yield a functional MITM channel due to
-the traffic key mismatch described above.
+**Why impersonating a wallet is not a security threat.** A malicious relay
+could generate its own key pair and send a valid `join` to the dApp
+(since the relay knows `dapp_pub` from the `create` message). However,
+this only achieves denial-of-service — the fake wallet cannot sign
+blockchain transactions (it lacks the user's private keys) and cannot
+cause financial loss. The user simply retries or switches relays.
 
 **Deep link and non-OOB delivery threat.** When the pairing URI is delivered
 through a software-controlled channel (deep link, clipboard, URL scheme
 handler, browser extension), a malicious intermediary can replace the entire
-URI — including the dApp public key and channel ID. In this scenario:
-
-1. The attacker creates its own channel and key pair.
-2. The attacker forwards the wallet's `join` to the real dApp (or runs a
-   full MITM proxy).
-3. Both sides derive keys based on the attacker's public key.
-4. The pairing codes **will match** because the attacker controls the key
-   material on both sides.
-5. The user cannot detect the MITM through pairing code comparison.
+URI — including the dApp public key and channel ID. The **session
+fingerprint** (§7.3) defends against this: the legitimate dApp in the
+user's browser displays a fingerprint derived from the real dApp public key,
+while the wallet displays a fingerprint derived from the attacker's public
+key. The user sees a mismatch and rejects the connection. This defense
+requires that the user's browser is displaying the legitimate dApp — it
+does not protect against phishing (fake dApp website).
 
 This is why §9.1 mandates out-of-band delivery and prohibits deep link as
 the sole pairing mechanism. Wallets that offer deep link convenience pairing
@@ -1942,12 +1974,11 @@ sessions to read-only methods (e.g., `wallet_getAccounts`) by default.
 1. `ch` must be cryptographically random (256 bits).
 2. `from` must match the sender's X25519 public key.
 3. `resume` is secret and must be stored like a session token.
-4. User confirmation of pairing code proves absence of MITM, not identity.
-5. Ephemeral key pairs must be generated per channel.
-6. Implementations must reject messages with sequence numbers that are not
+4. Ephemeral key pairs must be generated per channel.
+5. Implementations must reject messages with sequence numbers that are not
    strictly greater than the last accepted value.
-7. The relay must not log or store `sealed` content beyond delivery.
-8. Sequence counters must never be reset for a given traffic key.
+6. The relay must not log or store `sealed` content beyond delivery.
+7. Sequence counters must never be reset for a given traffic key.
 
 ### 20.4 Privacy Considerations
 
@@ -1993,9 +2024,9 @@ SHOULD use multiple relays for redundancy.
 
 ### 20.6 Icon and Image URL Safety
 
-URLs in `meta.icon`, `iconUrls`, and `image` fields may be used for
-tracking (the wallet loading an icon reveals its IP address to the URL
-host). Wallet implementations SHOULD either:
+URLs in `meta.icon` fields may be used for tracking (loading a remote
+icon reveals the peer's IP address to the URL host). Implementations
+SHOULD either:
 
 - Not load remote URLs automatically, or
 - Load them through a privacy proxy, or
@@ -2014,16 +2045,16 @@ are no longer needed. The following rules apply:
    `wallet_to_dapp_key`) are derived. Reconnect (Section 14) does not
    require the private key — it uses `resume` tokens and persisted
    traffic keys.
-3. **`root_key`**: MUST be securely erased after `join_encryption_key`,
-   traffic keys, and pairing code are derived. It is never needed again.
+3. **`root_key`**: MUST be securely erased after `join_encryption_key`
+   and traffic keys are derived. It is never needed again.
 4. **`join_encryption_key`**: MUST be securely erased after `sealed_join`
    is encrypted (wallet) or decrypted (dApp). It is a one-shot key.
 5. **`dapp_to_wallet_key` and `wallet_to_dapp_key`** (traffic keys):
    MUST be persisted for the channel lifetime (including across
    reconnects). MUST be securely erased when the channel is closed or
    the session expires (§16 rule 17).
-6. **`transcript_hash`**: MUST be securely erased after traffic keys and
-   pairing code are derived. It is never needed again.
+6. **`transcript_hash`**: MUST be securely erased after traffic keys
+   are derived. It is never needed again.
 7. **`resume` token**: MUST be securely erased when the channel is
    closed, the session expires, or a new `resume` token replaces it
    after reconnect.
@@ -2077,7 +2108,7 @@ hash comparison MUST use constant-time comparison.
 ### Pairing URI (shown as QR code)
 
 ```text
-walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.example.com%2Fv1&name=MyDApp&methods=wallet_signTransaction,wallet_signMessage&chains=eip155:1,eip155:137
+walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.example.com%2Fv1&name=MyDApp&url=https%3A%2F%2Fmydapp.com&icon=https%3A%2F%2Fmydapp.com%2Ficon.png&methods=wallet_signTransaction,wallet_signMessage&chains=eip155:1,eip155:137
 ```
 
 ### DApp creates channel
@@ -2090,7 +2121,12 @@ walletpair:?ch=aabb01...eeff&pubkey=dGhpcyBpcyBh...&relay=wss%3A%2F%2Frelay.exam
   "ts": 1779170000000,
   "from": "base64url-dapp-pubkey",
   "body": {
-    "meta": { "name": "MyDApp" },
+    "meta": {
+      "name": "MyDApp",
+      "description": "A decentralized exchange",
+      "url": "https://mydapp.com",
+      "icon": "https://mydapp.com/icon.png"
+    },
     "resume": null
   }
 }
@@ -2141,7 +2177,12 @@ The dApp decrypts `sealed_join` to recover the capabilities and metadata
     "events": ["accountsChanged", "chainChanged"],
     "chains": ["eip155:1", "eip155:137"]
   },
-  "meta": { "name": "Wallet" }
+  "meta": {
+    "name": "MyWallet",
+    "description": "A multi-chain wallet",
+    "url": "https://mywallet.app",
+    "icon": "https://mywallet.app/icon.png"
+  }
 }
 ```
 
@@ -2164,15 +2205,7 @@ The dApp decrypts `sealed_join` to recover the capabilities and metadata
 }
 ```
 
-### User compares pairing code and DApp accepts
-
-```text
-Wallet: "Pairing code: 8472"  (displayed after scanning)
-DApp:   "Pairing code: 8472"  (displayed after receiving join)
-User:   confirms both displays match
-```
-
-### DApp accepts
+### DApp verifies sealed_join and accepts
 
 ```json
 {
@@ -2401,21 +2434,22 @@ dapp_to_wallet_key   = 782ccebad576c74dede0ba376a324d06b6aa7008b90116bc57c693171
 wallet_to_dapp_key   = 26bb36c7e36a29df7b92cee30a6b16a09964b3b74833d0b742a2c01b4ab8c925
 ```
 
-### A.3 Pairing Code
+### A.3 Session Fingerprint
 
 ```text
-HKDF-SHA256(
-  ikm  = root_key,
-  salt = transcript_hash,
-  info = "walletpair-pairing-code"
-)[0:4]
+SHA256(
+  "walletpair-v1-session-fingerprint" ||
+  channel_id_bytes ||
+  dapp_pubkey_bytes
+)
 
-code_bytes  = 9b4c9732
-code_uint32 = 2605487922   (big-endian)
-pairing_code = 2605487922 mod 10000 = 7922
+sha256       = 7f301a56626650b08f11c99df3333237a66fae34e0c0d1512c19fe51d41a8604
+fp_bytes     = 7f301a56
+fp_uint32    = 2133858902   (big-endian)
+fingerprint  = 2133858902 mod 10000 = 8902
 ```
 
-Display: `7922`
+Display: `8902`
 
 ### A.4 AEAD Encryption (dapp→wallet, seq=0)
 
