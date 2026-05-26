@@ -14,7 +14,7 @@ accepts gaps), not dangerous counter reuse.
 
 | Platform | Backend |
 |----------|---------|
-| Browser | IndexedDB (not localStorage — may be cleared). Use dedicated object store. |
+| Browser | IndexedDB (not localStorage — may be cleared). Use dedicated object store with explicit `durableObjectStore` transactions where available. |
 | iOS | Keychain or encrypted file storage. Must survive process kills. |
 | Android | EncryptedSharedPreferences or Keystore-backed file. |
 | Desktop/Server | SQLite (WAL mode) or file with `fsync`. |
@@ -68,6 +68,11 @@ Map<request_id, {
 
 - Maximum 1024 entries, LRU eviction.
 - Broadcast tx hashes: separate persistent store, max 256 entries.
+- Cache security: store in non-swappable memory or encrypt at rest
+  using a key derived from the session's traffic key. Securely erase
+  (zero) when the channel is closed. On platforms without memory
+  locking (browser), minimize cache lifetime and clear entries as
+  soon as the dApp acknowledges receipt.
 
 ### Retry Flow (DApp Side)
 
@@ -106,7 +111,7 @@ storage.
 
 ### Anti-Abuse Mechanisms
 
-Beyond the required rate limits (spec §17.3), relay operators may
+Beyond the required rate limits (spec Section 17.3), relay operators may
 consider:
 
 - **Proof-of-work challenge on `create`:** Relay responds with a
@@ -130,7 +135,39 @@ No environment variables, API keys, or external dependencies required.
 Optional configuration: listen address, TLS certificate, channel TTL,
 max concurrent channels.
 
-## 5. Complete Session Example
+## 5. Reconnect Implementation
+
+Reconnect reuses the `create`/`join`/`accept` flow. The relay treats
+it as a new channel — no relay-side state is needed.
+
+### DApp Reconnect
+
+1. Detect transport disconnect.
+2. Apply backoff (1s -> 2s -> 5s -> 10s -> 30s).
+3. Send `create` with the **same** `ch` and `from`.
+4. Wait for wallet to rejoin.
+5. When `join` arrives with `sealed_join: null`, match `from` against
+   persisted wallet public key. If match, auto-send `accept`.
+6. Resume encrypted communication with persisted traffic keys and
+   sequence counters.
+
+### Wallet Reconnect
+
+1. Detect transport disconnect.
+2. Apply backoff.
+3. Send `join` with the **same** `ch` and `from`, set
+   `sealed_join: null`.
+4. Wait for `ready.connected`.
+5. Resume encrypted communication.
+
+### After Reconnect
+
+- Retry pending requests with the same `req.id` (new sequence number).
+- Wallet deduplicates via idempotency cache.
+- DApp should call `wallet_getAccounts` to refresh state if missed
+  events matter.
+
+## 6. Complete Session Example
 
 ### Step 1: Pairing URI (QR Code)
 
@@ -350,7 +387,66 @@ Decrypted `sealed`:
 }
 ```
 
-## 6. EIP-6963 Integration
+## 7. Join Wire Format Example
+
+```json
+{
+  "v": 1,
+  "t": "join",
+  "ch": "aabb01...eeff",
+  "ts": 1779170000000,
+  "from": "base64url-wallet-pubkey",
+  "body": {
+    "sealed_join": "base64url-encrypted-capabilities-and-meta"
+  }
+}
+```
+
+## 8. Deep Link Security Warning
+
+When a wallet supports deep link pairing as a convenience mechanism
+(e.g., same-device dApp-to-wallet), the wallet MUST display:
+
+"This connection was not established via secure out-of-band channel. A
+malicious app on this device could intercept the connection. For
+high-value transactions, use QR code pairing from a separate device."
+
+DApps that offer deep links alongside QR codes MUST label them as
+"Less secure — same device only."
+
+## 9. Sign-Only Wallet Flow
+
+Sign-only wallets (hardware wallets, air-gapped wallets) grant
+`wallet_signTransaction` but not `wallet_sendTransaction`.
+
+```text
+dApp URI:    methods=wallet_sendTransaction   (dApp's requirement)
+Cold wallet: grants wallet_signTransaction     (what it can do)
+
+→ dApp receives capabilities, adapts to sign-then-broadcast mode
+```
+
+1. DApp sends `req` with `_method: "wallet_signTransaction"`.
+2. Wallet signs and returns signed transaction bytes in `_result`.
+3. DApp broadcasts via its own RPC provider.
+
+Sign-only wallet capability declaration:
+
+```json
+{
+  "capabilities": {
+    "methods": [
+      "wallet_signTransaction",
+      "wallet_signMessage",
+      "wallet_getAccounts"
+    ],
+    "events": ["accountsChanged", "chainChanged"],
+    "chains": ["eip155:1"]
+  }
+}
+```
+
+## 10. EIP-6963 Integration
 
 SDK implementations that provide an EIP-1193 adapter for WalletPair
 connections SHOULD register as an EIP-6963 provider in browser contexts.
@@ -361,10 +457,10 @@ Recommended provider info:
 - `name`: Default "WalletPair Wallet". Update if the wallet provides
   a name via encrypted methods.
 - `icon`: Wallet's `meta.icon` if available, or generic WalletPair icon.
-  See spec §19.5 for icon URL privacy considerations.
+  See spec Section 19.5 for icon URL privacy considerations.
 - `rdns`: `io.walletpair.sdk`
 
-## 7. Testing Checklist
+## 11. Testing Checklist
 
 ### Cryptographic Correctness
 
@@ -380,24 +476,25 @@ Recommended provider info:
 
 ### Protocol Flow
 
-- [ ] Full pairing: create → join → accept → ready.connected
+- [ ] Full pairing: create -> join -> accept -> ready.connected
 - [ ] Request/response round-trip with encryption
 - [ ] Event delivery
 - [ ] Heartbeat ping/pong
 - [ ] Close from both sides
-- [ ] Reconnect by re-running create/join/accept (relay stateless)
+- [ ] Reconnect: dApp resends create (same ch/from), wallet resends
+      join (same ch/from, sealed_join=null)
 - [ ] Reconnect with sequence counter continuity
 - [ ] Request retry (idempotency cache hit)
 - [ ] Session expiry enforcement
 
 ### Error Handling
 
-- [ ] Unsupported method → unsupported_method
-- [ ] Unsupported chain → unsupported_chain
-- [ ] Rate limiting → rate_limited (32 pending requests)
-- [ ] Invalid sequence number → rejection
-- [ ] Decryption failure → close with decryption_failed
-- [ ] Second wallet join → already_connected
+- [ ] Unsupported method -> unsupported_method
+- [ ] Unsupported chain -> unsupported_chain
+- [ ] Rate limiting -> rate_limited (32 pending requests)
+- [ ] Invalid sequence number -> rejection
+- [ ] Decryption failure -> close with decryption_failed
+- [ ] Second wallet join -> already_connected
 
 ### Security
 
