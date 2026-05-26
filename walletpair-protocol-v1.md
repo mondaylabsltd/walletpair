@@ -537,7 +537,7 @@ walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-perc
 |-------|----------|-------------|
 | `ch` | yes | Channel ID (hex, 64 chars). |
 | `pubkey` | yes | DApp X25519 public key (base64url, no padding). |
-| `relay` | yes (relay transport) | WebSocket relay URL (percent-encoded). May repeat for multiple relays. |
+| `relay` | yes (relay transport) | WebSocket relay URL (percent-encoded). |
 | `name` | yes | DApp display name. |
 | `url` | yes | DApp website URL (percent-encoded). |
 | `icon` | yes | DApp icon URL (percent-encoded). MUST be `https:`. |
@@ -572,11 +572,8 @@ code so the wallet user can verify the connection. DApps MAY
 additionally offer deep links but MUST label them as "Less secure —
 same device only."
 
-Multiple relay endpoints can be specified by repeating the `relay`
-parameter. The dApp MUST create the channel on all listed relays. The
-wallet tries relays in order and uses the first that connects. Switching
-relays does not affect encryption (keys derive from peer keys, not
-relay).
+If the relay becomes unavailable, peers reconnect to the same relay
+(Section 13). To switch to a different relay, initiate a fresh pairing.
 
 ### 8.2 Pairing Sequence
 
@@ -988,17 +985,6 @@ the implementation guide for recommended values).
 When a rate limit is exceeded, the relay MUST respond with `terminate`
 using reason `rate_limited`. Peers that receive `rate_limited` SHOULD
 back off before retrying.
-
-### 17.4 Multiple Relays
-
-When the pairing URI lists multiple `relay` parameters:
-
-- DApp MUST create the channel on all listed relays.
-- Wallet tries relays in order, uses first that connects.
-- Switching relays does not affect encryption (keys derive from peer
-  keys, not relay).
-- After pairing completes on one relay, dApp MUST close channels on
-  other relays.
 
 ## 18. Bluetooth Binding
 
