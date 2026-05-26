@@ -434,7 +434,17 @@ high-value transactions, use QR code pairing from a separate device."
 DApps that offer deep links alongside QR codes MUST label them as
 "Less secure — same device only."
 
-## 9. Sign-Only Wallet Flow
+## 9. Icon URL Safety
+
+`meta.icon` URLs (in both dApp and wallet metadata) may be used for
+tracking — each load reveals the user's IP to the icon host.
+Implementations SHOULD:
+
+- Not load remote icon URLs automatically, or
+- Load through a privacy proxy, or
+- Only load `https:` URLs and warn on other schemes.
+
+## 10. Sign-Only Wallet Flow
 
 Sign-only wallets (hardware wallets, air-gapped wallets) grant
 `wallet_signTransaction` but not `wallet_sendTransaction`.
@@ -466,7 +476,7 @@ Sign-only wallet capability declaration:
 }
 ```
 
-## 10. EIP-6963 Integration
+## 11. EIP-6963 Integration
 
 SDK implementations that provide an EIP-1193 adapter for WalletPair
 connections SHOULD register as an EIP-6963 provider in browser contexts.
@@ -480,7 +490,7 @@ Recommended provider info:
   See spec Section 19.5 for icon URL privacy considerations.
 - `rdns`: `io.walletpair.sdk`
 
-## 11. Testing Checklist
+## 12. Testing Checklist
 
 ### Cryptographic Correctness
 

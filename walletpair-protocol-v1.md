@@ -1111,16 +1111,7 @@ A malicious relay can terminate any session at will (by sending
 `terminate` with `from` = `"_adapter"`). The relay cannot forge encrypted
 messages or impersonate a peer (it lacks traffic keys), so the worst case
 is denial of service. Peers SHOULD implement reconnect logic (Section 13)
-to recover from relay-initiated disconnections. For critical operations,
-peers SHOULD use multiple relays for redundancy.
-
-### 19.6 Icon URL Safety
-
-`meta.icon` URLs may be used for tracking. Implementations SHOULD:
-
-- Not load remote URLs automatically, or
-- Load through a privacy proxy, or
-- Only load `https:` URLs and warn on other schemes.
+to recover from relay-initiated disconnections.
 
 ## Appendix A: Cryptographic Test Vectors
 
