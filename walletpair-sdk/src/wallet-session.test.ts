@@ -59,11 +59,11 @@ describe('WalletSession', () => {
     });
   }
 
-  function receiveConnected(resume = 'tok'): void {
+  function receiveConnected(): void {
     transport.receive({
       v: 1, t: 'ready', ch: channelId,
       ts: Date.now(), from: '_adapter',
-      body: { state: 'connected', resume, remote: dappKp.publicKeyB64 },
+      body: { state: 'connected', reconnect: false, remote: dappKp.publicKeyB64 },
     } as ProtocolMessage);
   }
 
@@ -83,7 +83,6 @@ describe('WalletSession', () => {
       expect(joinMsg).toBeTruthy();
       // Capabilities are now inside sealed_join, not plaintext
       expect((joinMsg as any).body.sealed_join).toBeTruthy();
-      expect((joinMsg as any).body.resume).toBeNull();
     });
 
     it('computes and emits session fingerprint', async () => {
@@ -113,7 +112,7 @@ describe('WalletSession', () => {
 
       await session.joinFromUri(makePairingUri());
 
-      receiveConnected('wallet-tok');
+      receiveConnected();
 
       expect(session.phase).toBe('connected');
       expect(phases).toContain('waiting');
@@ -128,7 +127,7 @@ describe('WalletSession', () => {
       transport.receive({
         v: 1, t: 'ready', ch: channelId,
         ts: Date.now(), from: '_adapter',
-        body: { state: 'connected', resume: 'wallet-tok', remote: null },
+        body: { state: 'connected', reconnect: false, remote: null },
       } as ProtocolMessage);
 
       expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({

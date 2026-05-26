@@ -73,12 +73,10 @@ pub struct Channel {
     // DApp
     pub dapp_peer_id: PeerId,
     pub dapp_conn: Option<PeerConn>,
-    pub dapp_resume: Option<String>,
 
     // Wallet (set when wallet joins)
     pub wallet_peer_id: Option<PeerId>,
     pub wallet_conn: Option<PeerConn>,
-    pub wallet_resume: Option<String>,
 
     // Pending request IDs (for limit enforcement)
     pub pending_requests: HashSet<String>,
@@ -93,10 +91,8 @@ impl Channel {
             connected_at: None,
             dapp_peer_id,
             dapp_conn: Some(dapp_conn),
-            dapp_resume: None,
             wallet_peer_id: None,
             wallet_conn: None,
-            wallet_resume: None,
             pending_requests: HashSet::new(),
         }
     }

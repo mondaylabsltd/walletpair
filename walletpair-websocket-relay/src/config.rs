@@ -20,10 +20,8 @@ pub struct Config {
     pub metrics_enabled: bool,
     pub allowed_origins: Option<Vec<String>>,
     /// Path to persist channel state on shutdown. When set, the relay saves
-    /// all channel metadata and resume tokens to this file during graceful
-    /// shutdown, and restores them on the next startup. This allows peers to
-    /// reconnect with their saved resume tokens after a relay restart without
-    /// re-pairing. Set to `None` or omit to disable persistence.
+    /// all channel metadata to this file during graceful shutdown, and restores
+    /// them on the next startup. Set to `None` or omit to disable persistence.
     pub state_file: Option<String>,
 }
 

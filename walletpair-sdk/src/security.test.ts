@@ -54,7 +54,7 @@ async function connectDAppManual(ctx: ReturnType<typeof setupDAppManual>) {
   transport.receive({
     v: 1, t: 'ready', ch: session.channelId,
     ts: Date.now(), from: '_adapter',
-    body: { state: 'connected', resume: 'tok', remote: walletKp.publicKeyB64 },
+    body: { state: 'connected', reconnect: false, remote: walletKp.publicKeyB64 },
   } as ProtocolMessage);
 
   // Derive the wallet's send key (walletToDappKey) which is what
@@ -84,7 +84,7 @@ async function connectWalletManual(ctx: ReturnType<typeof setupWalletManual>) {
   transport.receive({
     v: 1, t: 'ready', ch: channelId,
     ts: Date.now(), from: '_adapter',
-    body: { state: 'connected', resume: 'tok', remote: dappKp.publicKeyB64 },
+    body: { state: 'connected', reconnect: false, remote: dappKp.publicKeyB64 },
   } as ProtocolMessage);
 
   // The wallet's recvKey is dappToWalletKey

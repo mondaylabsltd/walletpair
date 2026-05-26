@@ -8,9 +8,9 @@ The relay acts as a blind message router for the WalletPair protocol. It manages
 
 - **Section 3 (Roles)**: Distinguishes between `dapp` and `wallet` roles and enforces role-based message direction.
 - **Sections 5-6 (Message Format/Types)**: Parses and validates the WalletPair v1 JSON envelope (`v`, `t`, `ch`, `from`, etc.) and recognizes all message types (`create`, `join`, `accept`, `req`, `res`, `evt`, `ping`, `pong`, `close`, `ready`).
-- **Section 9 (Pairing Flow)**: Manages the create/join/accept handshake, generates `ready` messages with resume tokens, and transitions channels through `WaitingForWallet` -> `PendingAccept` -> `Connected` states.
+- **Section 9 (Pairing Flow)**: Manages the create/join/accept handshake, generates `ready` messages, and transitions channels through `WaitingForWallet` -> `PendingAccept` -> `Connected` states.
 - **Sections 10-13 (Request/Response/Events/Heartbeat/Close)**: Forwards `req`, `res`, `evt`, `ping`, `pong`, and `close` messages to the other peer. Tracks pending request IDs and enforces the pending request limit.
-- **Section 14 (Reconnect)**: Supports resume tokens for reconnection. Peers can reconnect to an existing channel by including a `resume` token in their `create` or `join` message.
+- **Section 14 (Reconnect)**: Peers reconnect by re-running the create/join/accept flow on the same channel ID. The relay is stateless — no resume tokens or persistent state needed.
 - **Sections 15-16 (State Machine/Rules)**: Enforces which message types are valid in each channel state and from which role. Rejects messages that violate the state machine with appropriate close reasons.
 - **Sections 17-18 (Transport Requirements / WebSocket Relay Binding)**: Implements the WebSocket transport layer with subprotocol negotiation (`walletpair.v1`), text-only frames, message size limits, connection limits, and graceful shutdown.
 
@@ -116,7 +116,7 @@ Relay responds:
   "state": "waiting",
   "role": "dapp",
   "self": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-  "resume": "<uuid-resume-token>"
+  "reconnect": false
 }
 ```
 
@@ -147,7 +147,7 @@ Relay forwards the raw `join` message to the dApp and sends `ready` (state: `wai
 }
 ```
 
-Relay sends `ready` (state: `connected`) to both peers with new resume tokens.
+Relay sends `ready` (state: `connected`) to both peers.
 
 ### 4. dApp sends a request
 

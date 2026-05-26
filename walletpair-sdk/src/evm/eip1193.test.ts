@@ -49,7 +49,7 @@ describe('WalletPairProvider', () => {
     transport.receive({
       v: 1, t: 'ready', ch: session.channelId,
       ts: Date.now(), from: '_adapter',
-      body: { state: 'connected', resume: 'tok', remote: walletKp.publicKeyB64 },
+      body: { state: 'connected', reconnect: false, remote: walletKp.publicKeyB64 },
     } as ProtocolMessage);
   }
 

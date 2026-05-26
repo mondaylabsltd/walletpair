@@ -199,7 +199,7 @@ Docker support is planned but not yet available.
 
 ### Reconnection
 
-Sessions survive disconnects via relay-issued resume tokens. Sequence counters persist across reconnects to prevent nonce reuse. Wallets deduplicate retried requests using an idempotency cache keyed on request ID and params hash.
+Sessions survive disconnects by re-running the create/join/accept flow on the same channel — the relay is stateless and needs no persistent storage. Sequence counters persist across reconnects to prevent nonce reuse. Wallets deduplicate retried requests using an idempotency cache keyed on request ID and params hash.
 
 ## Tech Stack
 

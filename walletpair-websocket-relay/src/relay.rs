@@ -56,15 +56,13 @@ pub fn process_message(
     at_capacity: bool,
 ) -> ProcessResult {
     match msg {
-        ClientMessage::Create {
-            ch, from, resume, ..
-        } => handle_create(store, conn_id, sender, &ch, &from, resume, metrics, at_capacity),
+        ClientMessage::Create { ch, from, .. } => {
+            handle_create(store, conn_id, sender, &ch, &from, metrics, at_capacity)
+        }
 
-        ClientMessage::Join {
-            ch, from, resume, ..
-        } => handle_join(
-            store, conn_id, sender, raw_text, &ch, &from, resume, metrics,
-        ),
+        ClientMessage::Join { ch, from, .. } => {
+            handle_join(store, conn_id, sender, raw_text, &ch, &from, metrics)
+        }
 
         ClientMessage::Accept {
             ch, from, target, ..
@@ -96,31 +94,15 @@ pub fn process_message(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn handle_create(
     store: &mut ChannelStore,
     conn_id: u64,
     sender: &mpsc::Sender<String>,
     ch: &str,
     from: &PeerId,
-    resume: Option<String>,
     metrics: &Metrics,
     at_capacity: bool,
 ) -> ProcessResult {
-    // Reconnect path
-    if let Some(token) = resume {
-        return handle_reconnect(
-            store,
-            conn_id,
-            sender,
-            ch,
-            from,
-            &token,
-            Role::DApp,
-            metrics,
-        );
-    }
-
     // Channel already exists?
     if store.contains(ch) {
         metrics
@@ -152,16 +134,14 @@ fn handle_create(
     metrics.active_channels.inc();
     metrics.channels_created_total.inc();
 
-    // Generate resume token and send ready.waiting
-    let token = store.generate_resume_token(ch, Role::DApp, from);
-    let ready = build_ready_waiting(ch, Role::DApp, from, &token);
+    // Send ready.waiting
+    let ready = build_ready_waiting(ch, Role::DApp, from);
     let _ = try_send(sender, ready, metrics);
 
     tracing::info!(ch = %ch, peer = %from, "channel created");
     ProcessResult::OkCreated
 }
 
-#[allow(clippy::too_many_arguments)]
 fn handle_join(
     store: &mut ChannelStore,
     conn_id: u64,
@@ -169,23 +149,8 @@ fn handle_join(
     raw_text: &str,
     ch: &str,
     from: &PeerId,
-    resume: Option<String>,
     metrics: &Metrics,
 ) -> ProcessResult {
-    // Reconnect path
-    if let Some(token) = resume {
-        return handle_reconnect(
-            store,
-            conn_id,
-            sender,
-            ch,
-            from,
-            &token,
-            Role::Wallet,
-            metrics,
-        );
-    }
-
     // Channel must exist
     let channel = match store.get(ch) {
         Some(c) => c,
@@ -239,8 +204,7 @@ fn handle_join(
         .inc();
 
     // Send ready.waiting to wallet
-    let token = store.generate_resume_token(ch, Role::Wallet, from);
-    let ready = build_ready_waiting(ch, Role::Wallet, from, &token);
+    let ready = build_ready_waiting(ch, Role::Wallet, from);
     let _ = try_send(sender, ready, metrics);
 
     tracing::info!(ch = %ch, peer = %from, "wallet joined");
@@ -298,23 +262,16 @@ fn handle_accept(
     channel.connected_at = Some(tokio::time::Instant::now());
     metrics.channels_connected_total.inc();
 
-    // Revoke old resume tokens and generate new ones
-    store.revoke_resume_tokens(ch, Role::DApp);
-    store.revoke_resume_tokens(ch, Role::Wallet);
-    let dapp_token = store.generate_resume_token(ch, Role::DApp, from);
-    let wallet_id = store.get(ch).unwrap().wallet_peer_id.clone().unwrap();
-    let wallet_token = store.generate_resume_token(ch, Role::Wallet, &wallet_id);
-
-    let channel = store.get(ch).unwrap();
+    let wallet_id = channel.wallet_peer_id.clone().unwrap();
 
     // Send ready.connected to dApp
-    let dapp_ready = build_ready_connected(ch, Role::DApp, from, &wallet_id, &dapp_token);
+    let dapp_ready = build_ready_connected(ch, Role::DApp, from, &wallet_id);
     if let Some(ref conn) = channel.dapp_conn {
         let _ = try_send(&conn.sender, dapp_ready, metrics);
     }
 
     // Send ready.connected to wallet
-    let wallet_ready = build_ready_connected(ch, Role::Wallet, &wallet_id, from, &wallet_token);
+    let wallet_ready = build_ready_connected(ch, Role::Wallet, &wallet_id, from);
     if let Some(ref conn) = channel.wallet_conn {
         let _ = try_send(&conn.sender, wallet_ready, metrics);
     }
@@ -480,99 +437,6 @@ fn handle_close(
 
     tracing::info!(ch = %ch, reason = %reason, "channel closed by peer");
     ProcessResult::OkRemoved
-}
-
-#[allow(clippy::too_many_arguments)]
-fn handle_reconnect(
-    store: &mut ChannelStore,
-    conn_id: u64,
-    sender: &mpsc::Sender<String>,
-    ch: &str,
-    from: &PeerId,
-    token: &str,
-    expected_role: Role,
-    metrics: &Metrics,
-) -> ProcessResult {
-    // Validate token
-    let info = match store.validate_resume_token(token) {
-        Some(info) => info,
-        None => {
-            metrics
-                .reconnect_attempts_total
-                .with_label_values(&["invalid_token"])
-                .inc();
-            return ProcessResult::Reject(protocol::build_terminate(ch, CloseReason::InvalidResume));
-        }
-    };
-
-    // Token must match channel, role, and peer ID
-    if info.channel_id != ch || info.role != expected_role || info.peer_id != from.as_str() {
-        metrics
-            .reconnect_attempts_total
-            .with_label_values(&["token_mismatch"])
-            .inc();
-        return ProcessResult::Reject(protocol::build_terminate(ch, CloseReason::InvalidResume));
-    }
-
-    // Channel must still exist and not be closed
-    let channel = match store.get(ch) {
-        Some(c) if c.state != ChannelState::Closed => c,
-        _ => {
-            metrics
-                .reconnect_attempts_total
-                .with_label_values(&["channel_gone"])
-                .inc();
-            return ProcessResult::Reject(protocol::build_terminate(ch, CloseReason::ChannelNotFound));
-        }
-    };
-
-    let other_connected = channel.is_other_connected(expected_role);
-    // Only send ready.connected if the channel was fully accepted.
-    // PendingAccept means the accept step hasn't happened yet — sending
-    // ready.connected would bypass pairing code verification (MITM risk).
-    let was_connected = channel.state == ChannelState::Connected;
-
-    // Reconnect: restore connection
-    let channel = store.get_mut(ch).unwrap();
-    let new_conn = PeerConn {
-        sender: sender.clone(),
-        conn_id,
-    };
-    match expected_role {
-        Role::DApp => channel.dapp_conn = Some(new_conn),
-        Role::Wallet => channel.wallet_conn = Some(new_conn),
-    }
-
-    // Revoke old token, generate new one
-    store.revoke_resume_tokens(ch, expected_role);
-    let new_token = store.generate_resume_token(ch, expected_role, from);
-
-    let result_label = if other_connected && was_connected {
-        // Other peer is still connected — send ready.connected
-        let channel = store.get(ch).unwrap();
-        let other_id = channel.other_peer_id(expected_role).unwrap().to_string();
-        let ready = build_ready_connected(ch, expected_role, from, &other_id, &new_token);
-        let _ = try_send(sender, ready, metrics);
-        "success_connected"
-    } else {
-        // Other peer not connected — send ready.waiting
-        let ready = build_ready_waiting(ch, expected_role, from, &new_token);
-        let _ = try_send(sender, ready, metrics);
-        "success_waiting"
-    };
-
-    metrics
-        .reconnect_attempts_total
-        .with_label_values(&[result_label])
-        .inc();
-    tracing::info!(
-        ch = %ch,
-        role = %expected_role,
-        peer = %from,
-        result = %result_label,
-        "peer reconnected"
-    );
-    ProcessResult::Ok
 }
 
 #[cfg(test)]
@@ -1280,68 +1144,6 @@ mod tests {
             ProcessResult::Reject(close_json) => {
                 let v: serde_json::Value = serde_json::from_str(&close_json).unwrap();
                 assert_eq!(v["body"]["reason"], "invalid_role");
-            }
-            _ => panic!("expected Reject"),
-        }
-    }
-
-    // --- handle_reconnect tests ---
-
-    #[test]
-    fn reconnect_with_valid_token() {
-        let config = test_config();
-        let metrics = test_metrics();
-        let mut store = ChannelStore::new(&config);
-        let ch = make_channel_id();
-        let dapp = make_peer_id(1);
-
-        let _ = setup_channel(&mut store, &metrics, &ch, &dapp);
-
-        // Get the resume token
-        let token = store.get(&ch).unwrap().dapp_resume.clone().unwrap();
-
-        // Reconnect
-        let (tx, mut rx) = mpsc::channel(64);
-        let raw = serde_json::json!({
-            "v": 1, "t": "create", "ch": ch, "ts": 1234, "from": dapp,
-            "body": {"resume": token}
-        })
-        .to_string();
-        let msg = protocol::parse_message(&raw).unwrap();
-        let result = process_message(&mut store, 10, &tx, &raw, msg, &metrics, false);
-
-        assert!(matches!(result, ProcessResult::Ok));
-
-        let ready = rx.try_recv().unwrap();
-        let v: serde_json::Value = serde_json::from_str(&ready).unwrap();
-        assert_eq!(v["t"], "ready");
-        // Old token should be revoked
-        assert!(store.validate_resume_token(&token).is_none());
-    }
-
-    #[test]
-    fn reconnect_with_invalid_token() {
-        let config = test_config();
-        let metrics = test_metrics();
-        let mut store = ChannelStore::new(&config);
-        let ch = make_channel_id();
-        let dapp = make_peer_id(1);
-
-        let _ = setup_channel(&mut store, &metrics, &ch, &dapp);
-
-        let (tx, _rx) = mpsc::channel(64);
-        let raw = serde_json::json!({
-            "v": 1, "t": "create", "ch": ch, "ts": 1234, "from": dapp,
-            "body": {"resume": "bogus-token"}
-        })
-        .to_string();
-        let msg = protocol::parse_message(&raw).unwrap();
-        let result = process_message(&mut store, 10, &tx, &raw, msg, &metrics, false);
-
-        match result {
-            ProcessResult::Reject(close_json) => {
-                let v: serde_json::Value = serde_json::from_str(&close_json).unwrap();
-                assert_eq!(v["body"]["reason"], "invalid_resume");
             }
             _ => panic!("expected Reject"),
         }

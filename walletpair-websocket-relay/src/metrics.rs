@@ -10,7 +10,6 @@ pub struct Metrics {
     pub channels_closed_total: IntCounterVec,
     pub messages_rejected_total: IntCounterVec,
     pub messages_forwarded_total: IntCounterVec,
-    pub reconnect_attempts_total: IntCounterVec,
     pub outbound_queue_drops_total: IntCounter,
     pub slow_consumer_closes_total: IntCounter,
     pub registry: Registry,
@@ -63,14 +62,6 @@ impl Metrics {
             &["type"],
         )
         .unwrap();
-        let reconnect_attempts_total = IntCounterVec::new(
-            Opts::new(
-                "walletpair_reconnect_attempts_total",
-                "Reconnect attempts by result",
-            ),
-            &["result"],
-        )
-        .unwrap();
         let outbound_queue_drops_total = IntCounter::new(
             "walletpair_outbound_queue_drops_total",
             "Messages dropped due to full outbound queue",
@@ -108,9 +99,6 @@ impl Metrics {
             .register(Box::new(messages_forwarded_total.clone()))
             .unwrap();
         registry
-            .register(Box::new(reconnect_attempts_total.clone()))
-            .unwrap();
-        registry
             .register(Box::new(outbound_queue_drops_total.clone()))
             .unwrap();
         registry
@@ -126,7 +114,6 @@ impl Metrics {
             channels_closed_total,
             messages_rejected_total,
             messages_forwarded_total,
-            reconnect_attempts_total,
             outbound_queue_drops_total,
             slow_consumer_closes_total,
             registry,

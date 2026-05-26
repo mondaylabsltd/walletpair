@@ -2,7 +2,7 @@
  * Session persistence via AsyncStorage.
  *
  * Stores all state needed to survive page refresh / app restart
- * and reconnect to the relay (with or without resume token).
+ * and reconnect to the relay.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -34,7 +34,6 @@ export interface SessionData {
   remotePubKeyB64: string; // dApp's X25519 public key
   sessionKeyHex: string;
   sendSeq: number;
-  resumeToken: string | null;
   relayUrl: string;
   ethKeyHex: string;
 }

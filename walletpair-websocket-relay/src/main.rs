@@ -114,9 +114,6 @@ async fn main() {
                 for (id, channel) in shard.channels.drain() {
                     snapshot_store.channels.insert(id, channel);
                 }
-                for (token, info) in shard.resume_tokens.drain() {
-                    snapshot_store.resume_tokens.insert(token, info);
-                }
             });
 
             match persist::save_state(&snapshot_store, std::path::Path::new(path)) {

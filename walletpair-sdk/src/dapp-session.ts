@@ -41,7 +41,7 @@ const BACKOFF = [1000, 2000, 5000, 10000, 30000];
 const DEFAULT_REQUEST_TIMEOUT = 120_000;
 const PENDING_ACCEPT_TIMEOUT = 60_000;
 const MAX_SEND_SEQ = 2 ** 31;
-const DEFAULT_SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours (§16 rule 17)
+const DEFAULT_SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours (§16 rule 16)
 
 function validateCapabilities(cap: unknown): cap is Capabilities {
   if (cap == null || typeof cap !== 'object') return false;
@@ -73,7 +73,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   private declaredChains: string[] | undefined;
   private requestTimeout: number;
   private autoAccept: boolean;
-  /** Session lifetime in ms (§16 rule 17). */
+  /** Session lifetime in ms (§16 rule 16). */
   private sessionTtl: number;
   private sessionTtlTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionStartTime: number | null = null;
@@ -86,7 +86,6 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   private recvKey: Uint8Array | null = null;
   private sendSeq = 0;
   private recvSeq = -1;
-  private resumeToken: string | null = null;
   private paired = false;
   private intentionalClose = false;
   private reqCounter = 0;
@@ -140,8 +139,6 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     this.approvedScopeRecorded = false;
     this.reqCounter = 0;
     this.paired = false;
-    this.resumeToken = null;
-
     // Build pairing URI first (before transport connect, so BLE can show QR first)
     let relayUrl: string | undefined;
     if ('url' in this.transport) {
@@ -181,7 +178,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     this.sendRaw({
       v: 1, t: 'create', ch: this.channelId,
       ts: Date.now(), from: this.pubKeyB64,
-      body: { meta: this.meta, resume: null },
+      body: { meta: this.meta },
     } as ProtocolMessage);
   }
 
@@ -293,7 +290,6 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       recvKey: this.recvKey ? bytesToHex(this.recvKey) : null,
       sendSeq: this.sendSeq,
       recvSeq: this.recvSeq,
-      resumeToken: this.resumeToken,
       reqCounter: this.reqCounter,
       paired: this.paired,
       dappMeta: this.meta,
@@ -319,7 +315,6 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       if (!this.sendKey || !this.recvKey) return false;
       this.sendSeq = d.sendSeq || 0;
       this.recvSeq = d.recvSeq ?? -1;
-      this.resumeToken = d.resumeToken;
       this.reqCounter = d.reqCounter || 0;
       this.paired = d.paired || false;
       this.approvedScopeRecorded = d.approvedScopeRecorded === true;
@@ -347,8 +342,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   private handleMessage(msg: ProtocolMessage): void {
     switch (msg.t) {
       case 'ready': {
-        const readyBody = msg.body as { state?: string; resume?: string | null; remote?: string | null };
-        this.resumeToken = readyBody.resume ?? null;
+        const readyBody = msg.body as { state?: string; reconnect?: boolean; remote?: string | null };
         this.stopReconnect();
         if (readyBody.state === 'connected') {
           const expectedRemote = this.remotePubKey ? b64urlEncode(this.remotePubKey) : null;
@@ -368,7 +362,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       }
 
       case 'join': {
-        const joinBody = msg.body as { sealed_join?: string | null; resume?: string | null };
+        const joinBody = msg.body as { sealed_join?: string | null };
         const joinPubKey = msg.from;
         if (!joinPubKey) {
           this.emit('error', new Error('Malformed wallet join: missing from'));
@@ -394,10 +388,10 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
         // §20.7: erase shared_secret immediately
         shared.fill(0);
 
-        // For reconnect (resume set), skip sealed_join decryption
+        // For reconnect (sealed_join is null), skip sealed_join decryption
         let joinCapabilities: Capabilities | undefined;
         let joinMeta: WalletMeta | undefined;
-        if (joinBody.resume) {
+        if (joinBody.sealed_join === null) {
           // Reconnect — capabilities/meta come from previously approved scope
           joinCapabilities = this.approvedCapabilities;
           joinMeta = this.approvedWalletMeta;
@@ -551,11 +545,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
 
       case 'close': {
         const closeBody = msg.body as { reason?: string };
-        if (closeBody.reason === 'invalid_resume') {
-          this.resumeToken = null;
-          this.transport.disconnect();
-          this.doReconnectAttempt(false);
-        } else if (closeBody.reason === 'channel_exists') {
+        if (closeBody.reason === 'channel_exists') {
           this.startReconnect();
         } else if (this.phase !== 'disconnected') {
           this.setPhase('closed');
@@ -654,19 +644,19 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     const base = BACKOFF[Math.min(this.reconnectAttempt, BACKOFF.length - 1)]!;
     const delay = base + Math.floor(Math.random() * base * 0.3); // ±30% jitter
     this.reconnectTimer = setTimeout(() => {
-      this.doReconnectAttempt(this.reconnectAttempt === 0 && !!this.resumeToken);
+      this.doReconnectAttempt();
       this.reconnectAttempt++;
     }, delay);
   }
 
-  private async doReconnectAttempt(useResume: boolean): Promise<void> {
+  private async doReconnectAttempt(): Promise<void> {
     if (this.intentionalClose || this.phase === 'closed') return;
     try {
       await this.transport.connect();
       this.sendRaw({
         v: 1, t: 'create', ch: this.channelId,
         ts: Date.now(), from: this.pubKeyB64,
-        body: { meta: this.meta, resume: (useResume && this.resumeToken) ? this.resumeToken : null },
+        body: { meta: this.meta },
       } as ProtocolMessage);
     } catch {
       this.scheduleReconnect();
@@ -688,7 +678,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   }
 
   // -------------------------------------------------------------------------
-  // Internal: session TTL (§16 rule 17)
+  // Internal: session TTL (§16 rule 16)
   // -------------------------------------------------------------------------
 
   private startSessionTtl(): void {

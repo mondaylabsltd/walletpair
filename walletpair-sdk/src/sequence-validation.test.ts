@@ -122,7 +122,7 @@ async function connectDAppManually(ctx: ReturnType<typeof setupDAppWithManualWal
   transport.receive({
     v: 1, t: 'ready', ch: session.channelId,
     ts: Date.now(), from: '_adapter',
-    body: { state: 'connected', resume: 'tok', remote: walletKp.publicKeyB64 },
+    body: { state: 'connected', reconnect: false, remote: walletKp.publicKeyB64 },
   } as ProtocolMessage);
 
   return { sessionKey: (session as any).recvKey as Uint8Array, dappPubB64 };
@@ -174,7 +174,7 @@ async function connectWalletManually(ctx: ReturnType<typeof setupWalletWithManua
   transport.receive({
     v: 1, t: 'ready', ch: channelId,
     ts: Date.now(), from: '_adapter',
-    body: { state: 'connected', resume: 'tok', remote: dappKp.publicKeyB64 },
+    body: { state: 'connected', reconnect: false, remote: dappKp.publicKeyB64 },
   } as ProtocolMessage);
 
   return { sessionKey: (session as any).recvKey as Uint8Array, walletPubB64 };
@@ -649,7 +649,7 @@ describe('Sequence validation', () => {
       transport.receive({
         v: 1, t: 'join', ch: session.channelId,
         ts: Date.now(), from: walletKp.publicKeyB64,
-        body: { sealed_join: null, resume: null },
+        body: { sealed_join: null },
       } as ProtocolMessage);
 
       expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
@@ -672,7 +672,7 @@ describe('Sequence validation', () => {
       transport.receive({
         v: 1, t: 'join', ch: session.channelId,
         ts: Date.now(), from: walletKp.publicKeyB64,
-        body: { sealed_join: 'invalid-ciphertext', resume: null },
+        body: { sealed_join: 'invalid-ciphertext' },
       } as ProtocolMessage);
 
       expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({

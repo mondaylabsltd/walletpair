@@ -172,8 +172,8 @@ fn close_msg(ch: &str, from: &str, reason: &str) -> Value {
     })
 }
 
-/// Helper: create channel, join wallet, accept -- return (dapp_ws, wallet_ws, dapp_resume, wallet_resume).
-async fn setup_connected_pair(addr: &str) -> (WsStream, WsStream, String, String) {
+/// Helper: create channel, join wallet, accept -- return (dapp_ws, wallet_ws).
+async fn setup_connected_pair(addr: &str) -> (WsStream, WsStream) {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
     let wallet_peer = make_peer_id(2);
@@ -184,7 +184,6 @@ async fn setup_connected_pair(addr: &str) -> (WsStream, WsStream, String, String
     let ready = recv_json(&mut dapp).await;
     assert_eq!(ready["t"], "ready");
     assert_eq!(ready["body"]["state"], "waiting");
-    let _dapp_resume_1 = ready["body"]["resume"].as_str().unwrap().to_string();
 
     // Wallet joins
     let mut wallet = ws_connect(addr).await;
@@ -194,7 +193,6 @@ async fn setup_connected_pair(addr: &str) -> (WsStream, WsStream, String, String
     let wallet_ready = recv_json(&mut wallet).await;
     assert_eq!(wallet_ready["t"], "ready");
     assert_eq!(wallet_ready["body"]["state"], "waiting");
-    let _wallet_resume_1 = wallet_ready["body"]["resume"].as_str().unwrap().to_string();
 
     // dApp gets the raw join forwarded
     let join_fwd = recv_json(&mut dapp).await;
@@ -207,14 +205,12 @@ async fn setup_connected_pair(addr: &str) -> (WsStream, WsStream, String, String
     let dapp_connected = recv_json(&mut dapp).await;
     assert_eq!(dapp_connected["t"], "ready");
     assert_eq!(dapp_connected["body"]["state"], "connected");
-    let dapp_resume = dapp_connected["body"]["resume"].as_str().unwrap().to_string();
 
     let wallet_connected = recv_json(&mut wallet).await;
     assert_eq!(wallet_connected["t"], "ready");
     assert_eq!(wallet_connected["body"]["state"], "connected");
-    let wallet_resume = wallet_connected["body"]["resume"].as_str().unwrap().to_string();
 
-    (dapp, wallet, dapp_resume, wallet_resume)
+    (dapp, wallet)
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +235,6 @@ async fn dapp_create_receives_ready_waiting() {
     assert_eq!(ready["body"]["state"], "waiting");
     assert_eq!(ready["body"]["role"], "dapp");
     assert_eq!(ready["body"]["self"], dapp_peer);
-    assert!(ready["body"]["resume"].as_str().is_some());
 }
 
 #[tokio::test]
@@ -296,7 +291,6 @@ async fn dapp_accept_both_receive_ready_connected() {
     assert_eq!(dapp_ready["body"]["state"], "connected");
     assert_eq!(dapp_ready["body"]["role"], "dapp");
     assert_eq!(dapp_ready["body"]["remote"], wallet_peer);
-    assert!(dapp_ready["body"]["resume"].as_str().is_some());
 
     // Wallet gets ready.connected
     let wallet_ready = recv_json(&mut wallet).await;
@@ -304,7 +298,6 @@ async fn dapp_accept_both_receive_ready_connected() {
     assert_eq!(wallet_ready["body"]["state"], "connected");
     assert_eq!(wallet_ready["body"]["role"], "wallet");
     assert_eq!(wallet_ready["body"]["remote"], dapp_peer);
-    assert!(wallet_ready["body"]["resume"].as_str().is_some());
 }
 
 #[tokio::test]
@@ -313,7 +306,7 @@ async fn connected_req_forwarded_to_wallet() {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // dApp sends req
     let req = req_msg(&ch, &dapp_peer, "r1");
@@ -332,7 +325,7 @@ async fn connected_res_forwarded_to_dapp() {
     let dapp_peer = make_peer_id(1);
     let wallet_peer = make_peer_id(2);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // dApp sends req first (to have a pending request)
     send_json(&mut dapp, &req_msg(&ch, &dapp_peer, "r1")).await;
@@ -355,7 +348,7 @@ async fn connected_evt_forwarded_to_dapp() {
     let ch = make_channel_id();
     let wallet_peer = make_peer_id(2);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // Wallet sends evt
     let evt = evt_msg(&ch, &wallet_peer);
@@ -372,7 +365,7 @@ async fn dapp_cannot_send_evt() {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
 
-    let (mut dapp, mut _wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut _wallet) = setup_connected_pair(&addr).await;
 
     // dApp sends evt (not allowed)
     let evt = evt_msg(&ch, &dapp_peer);
@@ -390,7 +383,7 @@ async fn wallet_cannot_send_req() {
     let ch = make_channel_id();
     let wallet_peer = make_peer_id(2);
 
-    let (mut _dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut _dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // Wallet sends req (not allowed)
     let req = req_msg(&ch, &wallet_peer, "r1");
@@ -557,7 +550,7 @@ async fn close_from_dapp_forwarded_to_wallet() {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // dApp sends close
     send_json(&mut dapp, &close_msg(&ch, &dapp_peer, "normal")).await;
@@ -567,99 +560,6 @@ async fn close_from_dapp_forwarded_to_wallet() {
     assert_eq!(received["t"], "close");
     assert_eq!(received["body"]["reason"], "normal");
     assert_eq!(received["from"], dapp_peer);
-}
-
-#[tokio::test]
-async fn dapp_reconnect_with_valid_resume() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let dapp_peer = make_peer_id(1);
-
-    let (mut dapp, mut _wallet, dapp_resume, _wallet_resume) = setup_connected_pair(&addr).await;
-
-    // dApp disconnects
-    dapp.close(None).await.unwrap();
-
-    // dApp reconnects with resume token
-    let mut dapp2 = ws_connect(&addr).await;
-    let reconnect_msg = json!({
-        "v": 1,
-        "t": "create",
-        "ch": ch,
-        "ts": 1234,
-        "from": dapp_peer,
-        "body": {"resume": dapp_resume}
-    });
-    send_json(&mut dapp2, &reconnect_msg).await;
-
-    // Should get ready.connected (wallet is still connected)
-    let ready = recv_json(&mut dapp2).await;
-    assert_eq!(ready["t"], "ready");
-    assert_eq!(ready["body"]["state"], "connected");
-    assert_eq!(ready["body"]["role"], "dapp");
-    assert!(ready["body"]["resume"].as_str().is_some());
-    // New resume token should be different from old one
-    assert_ne!(ready["body"]["resume"].as_str().unwrap(), dapp_resume);
-}
-
-#[tokio::test]
-async fn wallet_reconnect_with_valid_resume() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let wallet_peer = make_peer_id(2);
-
-    let (mut _dapp, mut wallet, _dapp_resume, wallet_resume) = setup_connected_pair(&addr).await;
-
-    // Wallet disconnects
-    wallet.close(None).await.unwrap();
-
-    // Wallet reconnects with resume token
-    let mut wallet2 = ws_connect(&addr).await;
-    let reconnect_msg = json!({
-        "v": 1,
-        "t": "join",
-        "ch": ch,
-        "ts": 1234,
-        "from": wallet_peer,
-        "body": {"resume": wallet_resume}
-    });
-    send_json(&mut wallet2, &reconnect_msg).await;
-
-    // Should get ready.connected (dapp is still connected)
-    let ready = recv_json(&mut wallet2).await;
-    assert_eq!(ready["t"], "ready");
-    assert_eq!(ready["body"]["state"], "connected");
-    assert_eq!(ready["body"]["role"], "wallet");
-    assert!(ready["body"]["resume"].as_str().is_some());
-    assert_ne!(ready["body"]["resume"].as_str().unwrap(), wallet_resume);
-}
-
-#[tokio::test]
-async fn invalid_resume_returns_close() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let dapp_peer = make_peer_id(1);
-
-    // First create a channel so channel exists
-    let mut dapp = ws_connect(&addr).await;
-    send_json(&mut dapp, &create_msg(&ch, &dapp_peer)).await;
-    let _ = recv_json(&mut dapp).await;
-
-    // Try to reconnect with bogus token on a new connection
-    let mut dapp2 = ws_connect(&addr).await;
-    let reconnect_msg = json!({
-        "v": 1,
-        "t": "create",
-        "ch": ch,
-        "ts": 1234,
-        "from": dapp_peer,
-        "body": {"resume": "bogus-token-that-does-not-exist"}
-    });
-    send_json(&mut dapp2, &reconnect_msg).await;
-
-    let close = recv_json(&mut dapp2).await;
-    assert_eq!(close["t"], "terminate");
-    assert_eq!(close["body"]["reason"], "invalid_resume");
 }
 
 #[tokio::test]
@@ -725,7 +625,7 @@ async fn ping_forwarded_to_other_peer_in_connected_state() {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // dApp sends ping
     let ping = json!({"v":1, "t":"ping", "ch":ch, "ts": 12345, "from":dapp_peer, "body": {}});
@@ -745,7 +645,7 @@ async fn pong_forwarded_to_other_peer_in_connected_state() {
     let dapp_peer = make_peer_id(1);
     let wallet_peer = make_peer_id(2);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // dApp pings, wallet receives
     let ping = json!({"v":1, "t":"ping", "ch":ch, "ts": 100, "from":dapp_peer, "body": {}});
@@ -767,7 +667,7 @@ async fn close_from_wallet_forwarded_to_dapp() {
     let ch = make_channel_id();
     let wallet_peer = make_peer_id(2);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     send_json(&mut wallet, &close_msg(&ch, &wallet_peer, "normal")).await;
 
@@ -843,7 +743,7 @@ async fn multiple_req_res_in_sequence() {
     let dapp_peer = make_peer_id(1);
     let wallet_peer = make_peer_id(2);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     for i in 0..5 {
         let id = format!("req-{i}");
@@ -864,7 +764,7 @@ async fn sealed_field_passes_through_untouched() {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     let req = json!({
         "v":1, "t":"req", "ch":ch, "ts":1234, "from":dapp_peer,
@@ -874,134 +774,6 @@ async fn sealed_field_passes_through_untouched() {
 
     let received = recv_json(&mut wallet).await;
     assert_eq!(received["body"]["sealed"], "dGhpcyBpcyBlbmNyeXB0ZWQgZGF0YQ");
-}
-
-#[tokio::test]
-async fn resume_token_rejected_when_wrong_peer_id() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let _dapp_peer = make_peer_id(1);
-    let impersonator = make_peer_id(99);
-
-    let (mut dapp, _wallet, dapp_resume, _) = setup_connected_pair(&addr).await;
-    dapp.close(None).await.unwrap();
-
-    // Impersonator tries to use dApp's resume token
-    let mut fake = ws_connect(&addr).await;
-    let msg = json!({
-        "v":1, "t":"create", "ch":ch, "ts":1234,
-        "from":impersonator,
-        "body": {"resume": dapp_resume}
-    });
-    send_json(&mut fake, &msg).await;
-
-    let close = recv_json(&mut fake).await;
-    assert_eq!(close["t"], "terminate");
-    assert_eq!(close["body"]["reason"], "invalid_resume");
-}
-
-#[tokio::test]
-async fn resume_token_rejected_when_wrong_role() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let dapp_peer = make_peer_id(1);
-
-    let (mut dapp, _wallet, dapp_resume, _) = setup_connected_pair(&addr).await;
-    dapp.close(None).await.unwrap();
-
-    // DApp tries to use its resume token as a wallet (join instead of create)
-    let mut ws = ws_connect(&addr).await;
-    let msg = json!({
-        "v":1, "t":"join", "ch":ch, "ts":1234,
-        "from":dapp_peer,
-        "body": {"resume": dapp_resume}
-    });
-    send_json(&mut ws, &msg).await;
-
-    let close = recv_json(&mut ws).await;
-    assert_eq!(close["t"], "terminate");
-    assert_eq!(close["body"]["reason"], "invalid_resume");
-}
-
-#[tokio::test]
-async fn reconnect_both_peers_disconnect_then_reconnect() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let dapp_peer = make_peer_id(1);
-    let wallet_peer = make_peer_id(2);
-
-    let (mut dapp, mut wallet, dapp_resume, wallet_resume) = setup_connected_pair(&addr).await;
-
-    // Both disconnect
-    dapp.close(None).await.unwrap();
-    wallet.close(None).await.unwrap();
-    // Small yield to let cleanup run
-    tokio::task::yield_now().await;
-
-    // dApp reconnects first — should get ready.waiting (wallet not yet connected)
-    let mut dapp2 = ws_connect(&addr).await;
-    send_json(
-        &mut dapp2,
-        &json!({
-            "v":1, "t":"create", "ch":ch, "ts":1234,
-            "from":dapp_peer,
-            "body": {"resume": dapp_resume}
-        }),
-    )
-    .await;
-    let ready = recv_json(&mut dapp2).await;
-    assert_eq!(ready["body"]["state"], "waiting");
-
-    // wallet reconnects — should get ready.connected (dApp just reconnected)
-    let mut wallet2 = ws_connect(&addr).await;
-    send_json(
-        &mut wallet2,
-        &json!({
-            "v":1, "t":"join", "ch":ch, "ts":1234,
-            "from":wallet_peer,
-            "body": {"resume": wallet_resume}
-        }),
-    )
-    .await;
-    let ready = recv_json(&mut wallet2).await;
-    assert_eq!(ready["body"]["state"], "connected");
-}
-
-#[tokio::test]
-async fn data_flows_after_reconnect() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let dapp_peer = make_peer_id(1);
-    let wallet_peer = make_peer_id(2);
-
-    let (mut dapp, mut wallet, dapp_resume, _) = setup_connected_pair(&addr).await;
-
-    // dApp disconnects
-    dapp.close(None).await.unwrap();
-    tokio::task::yield_now().await;
-
-    // dApp reconnects
-    let mut dapp2 = ws_connect(&addr).await;
-    send_json(
-        &mut dapp2,
-        &json!({
-            "v":1, "t":"create", "ch":ch, "ts":1234,
-            "from":dapp_peer,
-            "body": {"resume": dapp_resume}
-        }),
-    )
-    .await;
-    let ready = recv_json(&mut dapp2).await;
-    assert_eq!(ready["body"]["state"], "connected");
-
-    // Data should flow again
-    send_json(&mut dapp2, &req_msg(&ch, &dapp_peer, "after-reconnect")).await;
-    let received = recv_json(&mut wallet).await;
-    assert_eq!(received["body"]["id"], "after-reconnect");
-
-    send_json(&mut wallet, &res_msg(&ch, &wallet_peer, "after-reconnect")).await;
-    let received = recv_json(&mut dapp2).await;
-    assert_eq!(received["body"]["id"], "after-reconnect");
 }
 
 #[tokio::test]
@@ -1209,79 +981,12 @@ async fn create_with_meta_sends_ready_waiting() {
 }
 
 #[tokio::test]
-async fn resume_token_changes_on_each_ready() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let dapp_peer = make_peer_id(1);
-    let wallet_peer = make_peer_id(2);
-
-    let mut dapp = ws_connect(&addr).await;
-    send_json(&mut dapp, &create_msg(&ch, &dapp_peer)).await;
-    let ready1 = recv_json(&mut dapp).await;
-    let resume_waiting = ready1["body"]["resume"].as_str().unwrap().to_string();
-
-    let mut wallet = ws_connect(&addr).await;
-    send_json(&mut wallet, &join_msg(&ch, &wallet_peer)).await;
-    let _ = recv_json(&mut wallet).await;
-    let _ = recv_json(&mut dapp).await; // join
-
-    send_json(&mut dapp, &accept_msg(&ch, &dapp_peer, &wallet_peer)).await;
-    let ready2 = recv_json(&mut dapp).await;
-    let resume_connected = ready2["body"]["resume"].as_str().unwrap().to_string();
-
-    // Resume tokens should be different between waiting and connected
-    assert_ne!(resume_waiting, resume_connected);
-}
-
-#[tokio::test]
-async fn old_resume_token_invalidated_after_accept() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let dapp_peer = make_peer_id(1);
-    let wallet_peer = make_peer_id(2);
-
-    let mut dapp = ws_connect(&addr).await;
-    send_json(&mut dapp, &create_msg(&ch, &dapp_peer)).await;
-    let ready1 = recv_json(&mut dapp).await;
-    let old_resume = ready1["body"]["resume"].as_str().unwrap().to_string();
-
-    let mut wallet = ws_connect(&addr).await;
-    send_json(&mut wallet, &join_msg(&ch, &wallet_peer)).await;
-    let _ = recv_json(&mut wallet).await;
-    let _ = recv_json(&mut dapp).await;
-
-    send_json(&mut dapp, &accept_msg(&ch, &dapp_peer, &wallet_peer)).await;
-    let _ = recv_json(&mut dapp).await; // ready.connected
-    let _ = recv_json(&mut wallet).await;
-
-    // Disconnect dApp
-    dapp.close(None).await.unwrap();
-    tokio::task::yield_now().await;
-
-    // Try reconnect with OLD (pre-accept) resume token
-    let mut dapp2 = ws_connect(&addr).await;
-    send_json(
-        &mut dapp2,
-        &json!({
-            "v":1, "t":"create", "ch":ch, "ts":1234,
-            "from":dapp_peer,
-            "body": {"resume": old_resume}
-        }),
-    )
-    .await;
-
-    let close = recv_json(&mut dapp2).await;
-    assert_eq!(close["t"], "terminate");
-    assert_eq!(close["body"]["reason"], "invalid_resume");
-}
-
-#[tokio::test]
 async fn wallet_sends_evt_with_id_and_sealed() {
     let (addr, _shutdown) = start_server().await;
     let ch = make_channel_id();
     let wallet_peer = make_peer_id(2);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     let evt = json!({
         "v":1, "t":"evt", "ch":ch, "ts":1234, "from":wallet_peer,
@@ -1386,7 +1091,7 @@ async fn pending_request_limit_33rd_req_rejected() {
     let dapp_peer = make_peer_id(1);
     let wallet_peer = make_peer_id(2);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // Send 32 req messages (the limit) — wallet reads each one so they forward
     for i in 0..32_u32 {
@@ -1426,7 +1131,7 @@ async fn slow_consumer_overflow_queue() {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     // Fire many req messages without the wallet reading any, so the wallet's
     // 1-slot outbound queue fills up immediately and subsequent sends are dropped.
@@ -1573,7 +1278,7 @@ async fn dapp_cannot_send_res_in_connected_state() {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
 
-    let (mut dapp, mut _wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut _wallet) = setup_connected_pair(&addr).await;
 
     send_json(&mut dapp, &res_msg(&ch, &dapp_peer, "r1")).await;
 
@@ -1701,7 +1406,7 @@ async fn multiple_events_forwarded_in_sequence() {
     let ch = make_channel_id();
     let wallet_peer = make_peer_id(2);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     for i in 0..5 {
         let evt = json!({
@@ -1724,7 +1429,7 @@ async fn req_with_sealed_field_forwarded_unchanged() {
     let ch = make_channel_id();
     let dapp_peer = make_peer_id(1);
 
-    let (mut dapp, mut wallet, _, _) = setup_connected_pair(&addr).await;
+    let (mut dapp, mut wallet) = setup_connected_pair(&addr).await;
 
     let sealed_value = "U2VhbGVkUGF5bG9hZEhlcmU"; // base64url of arbitrary bytes
     let req = json!({
@@ -1739,84 +1444,16 @@ async fn req_with_sealed_field_forwarded_unchanged() {
     assert_eq!(received["body"]["sealed"], sealed_value);
 }
 
-// 12. Full reconnect cycle — both disconnect, both reconnect, data flows again.
-//     Protocol: dApp reconnects → ready.waiting; wallet reconnects → ready.connected.
-//     After wallet reconnects, the channel is live again for both sides.
-#[tokio::test]
-async fn full_reconnect_cycle_data_flows() {
-    let (addr, _shutdown) = start_server().await;
-    let ch = make_channel_id();
-    let dapp_peer = make_peer_id(1);
-    let wallet_peer = make_peer_id(2);
-
-    let (mut dapp, mut wallet, dapp_resume, wallet_resume) = setup_connected_pair(&addr).await;
-
-    // Both peers disconnect
-    dapp.close(None).await.unwrap();
-    wallet.close(None).await.unwrap();
-    tokio::task::yield_now().await;
-
-    // dApp reconnects first — gets ready.waiting (wallet not yet back)
-    let mut dapp2 = ws_connect(&addr).await;
-    send_json(
-        &mut dapp2,
-        &json!({
-            "v":1, "t":"create", "ch":ch, "ts":1234,
-            "from":dapp_peer,
-            "body": {"resume": dapp_resume}
-        }),
-    )
-    .await;
-    let r1 = recv_json(&mut dapp2).await;
-    assert_eq!(r1["t"], "ready");
-    assert_eq!(r1["body"]["state"], "waiting");
-    let new_dapp_resume = r1["body"]["resume"].as_str().unwrap().to_string();
-    // Token must have rotated
-    assert_ne!(new_dapp_resume, dapp_resume);
-
-    // Wallet reconnects — gets ready.connected (dApp is already present)
-    let mut wallet2 = ws_connect(&addr).await;
-    send_json(
-        &mut wallet2,
-        &json!({
-            "v":1, "t":"join", "ch":ch, "ts":1234,
-            "from":wallet_peer,
-            "body": {"resume": wallet_resume}
-        }),
-    )
-    .await;
-    let r2 = recv_json(&mut wallet2).await;
-    assert_eq!(r2["t"], "ready");
-    assert_eq!(r2["body"]["state"], "connected");
-    let new_wallet_resume = r2["body"]["resume"].as_str().unwrap().to_string();
-    assert_ne!(new_wallet_resume, wallet_resume);
-
-    // After wallet reconnects, the relay has live connections for both sides.
-    // Data should flow: dApp → req → wallet, wallet → res → dApp.
-    send_json(&mut dapp2, &req_msg(&ch, &dapp_peer, "post-reconnect")).await;
-    let received = recv_json(&mut wallet2).await;
-    assert_eq!(received["t"], "req");
-    assert_eq!(received["body"]["id"], "post-reconnect");
-
-    send_json(&mut wallet2, &res_msg(&ch, &wallet_peer, "post-reconnect")).await;
-    let received = recv_json(&mut dapp2).await;
-    assert_eq!(received["t"], "res");
-    assert_eq!(received["body"]["id"], "post-reconnect");
-    assert_eq!(received["body"]["sealed"], "encrypted_result");
-}
-
 // ---------------------------------------------------------------------------
 // Persistence test — relay restart with state file
 // ---------------------------------------------------------------------------
 
 /// Verify that state persistence across relay restart works:
-/// 1. Start server A, create+join+accept a channel, get resume tokens.
-/// 2. Shut down server A (state saved to file).
-/// 3. Start server B from the same state file.
-/// 4. Both peers reconnect with their resume tokens — no re-pairing needed.
-/// 5. Data flows.
+/// 1. Write a state file with a connected channel.
+/// 2. Start server B from that state file.
+/// 3. Verify the channel was restored.
 #[tokio::test]
-async fn relay_restart_with_persistence_allows_reconnect() {
+async fn relay_restart_with_persistence_restores_channels() {
     use std::io::Write as _;
 
     let ch = make_channel_id();
@@ -1829,57 +1466,7 @@ async fn relay_restart_with_persistence_allows_reconnect() {
         std::process::id()
     ));
 
-    // --- Phase 1: Start server A, establish a connected channel ---
-    let config_a = walletpair_websocket_relay::config::Config {
-        listen_addr: "127.0.0.1:0".parse().unwrap(),
-        metrics_enabled: false,
-        max_message_bytes: 65_536,
-        state_file: Some(state_path.to_string_lossy().into_owned()),
-        ..Default::default()
-    };
-
-    let (addr_a, shutdown_tx_a) = start_server_with_config(config_a).await;
-
-    // dApp creates
-    let mut dapp = ws_connect(&addr_a).await;
-    send_json(&mut dapp, &create_msg(&ch, &dapp_peer)).await;
-    let ready = recv_json(&mut dapp).await;
-    assert_eq!(ready["body"]["state"], "waiting");
-
-    // Wallet joins
-    let mut wallet = ws_connect(&addr_a).await;
-    send_json(&mut wallet, &join_msg(&ch, &wallet_peer)).await;
-    let _ = recv_json(&mut wallet).await; // ready.waiting
-    let _ = recv_json(&mut dapp).await; // join forwarded
-
-    // Accept
-    send_json(&mut dapp, &accept_msg(&ch, &dapp_peer, &wallet_peer)).await;
-    let dapp_ready = recv_json(&mut dapp).await;
-    assert_eq!(dapp_ready["body"]["state"], "connected");
-    let dapp_resume = dapp_ready["body"]["resume"].as_str().unwrap().to_string();
-
-    let wallet_ready = recv_json(&mut wallet).await;
-    assert_eq!(wallet_ready["body"]["state"], "connected");
-    let wallet_resume = wallet_ready["body"]["resume"].as_str().unwrap().to_string();
-
-    // Disconnect clients before shutdown
-    dapp.close(None).await.unwrap();
-    wallet.close(None).await.unwrap();
-    tokio::task::yield_now().await;
-
-    // --- Phase 2: Manually persist state and shut down ---
-    // We simulate the shutdown persistence by writing state from the store
-    // directly, since the test server doesn't run main.rs shutdown logic.
-    {
-        // Access the store through the test infrastructure — we need to
-        // rebuild AppState. Instead, let's just call persist::save_state
-        // from a fresh server with the same state.
-        // Actually, the simplest approach: the start_server_with_config
-        // returns shutdown_tx. We'll persist by hand.
-    }
-    // The test start_server_with_config doesn't persist on shutdown, so
-    // let's manually create the state file from what we know.
-    // Better approach: build the snapshot by hand from known state.
+    // Build a snapshot by hand
     let snapshot = serde_json::json!({
         "version": 1,
         "channels": [{
@@ -1889,35 +1476,15 @@ async fn relay_restart_with_persistence_allows_reconnect() {
             "connected_age_secs": 0,
             "dapp_peer_id": dapp_peer,
             "wallet_peer_id": wallet_peer,
-            "dapp_resume": dapp_resume,
-            "wallet_resume": wallet_resume,
             "pending_requests": []
-        }],
-        "resume_tokens": [
-            {
-                "token": dapp_resume,
-                "channel_id": ch,
-                "role": "dapp",
-                "peer_id": dapp_peer
-            },
-            {
-                "token": wallet_resume,
-                "channel_id": ch,
-                "role": "wallet",
-                "peer_id": wallet_peer
-            }
-        ]
+        }]
     });
 
     let mut f = std::fs::File::create(&state_path).unwrap();
     f.write_all(snapshot.to_string().as_bytes()).unwrap();
     drop(f);
 
-    // Shut down server A
-    let _ = shutdown_tx_a.send(());
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // --- Phase 3: Start server B with state_file ---
+    // Load state
     let config_b = walletpair_websocket_relay::config::Config {
         listen_addr: "127.0.0.1:0".parse().unwrap(),
         metrics_enabled: false,
@@ -1926,7 +1493,6 @@ async fn relay_restart_with_persistence_allows_reconnect() {
         ..Default::default()
     };
 
-    // Manually load state and create server
     let metrics_b = walletpair_websocket_relay::metrics::Metrics::new();
     let store_b = walletpair_websocket_relay::persist::load_or_new(
         &config_b,
@@ -1939,81 +1505,7 @@ async fn relay_restart_with_persistence_allows_reconnect() {
         store_b.channels.contains_key(&ch),
         "channel should be restored from state file"
     );
-    assert!(
-        store_b.validate_resume_token(&dapp_resume).is_some(),
-        "dApp resume token should be restored"
-    );
-    assert!(
-        store_b.validate_resume_token(&wallet_resume).is_some(),
-        "wallet resume token should be restored"
-    );
-
-    let listener_b = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr_b = listener_b.local_addr().unwrap().to_string();
-
-    let config_b = std::sync::Arc::new(config_b);
-    let (shutdown_tx_b, _) = tokio::sync::broadcast::channel(1);
-
-    let sharded_b = walletpair_websocket_relay::store::ShardedStore::from_single(store_b, &config_b);
-    let app_state_b = walletpair_websocket_relay::http::AppState {
-        store: std::sync::Arc::new(sharded_b),
-        config: config_b.clone(),
-        metrics: metrics_b,
-        shutdown_tx: shutdown_tx_b.clone(),
-        conn_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
-    };
-
-    let router_b = walletpair_websocket_relay::http::router(app_state_b);
-    tokio::spawn(async move {
-        axum::serve(listener_b, router_b).await.unwrap();
-    });
-
-    // --- Phase 4: Reconnect both peers to server B ---
-
-    // dApp reconnects with old resume token
-    let mut dapp2 = ws_connect(&addr_b).await;
-    send_json(
-        &mut dapp2,
-        &json!({
-            "v":1, "t":"create", "ch":ch, "ts":1234,
-            "from":dapp_peer,
-            "body": {"resume": dapp_resume}
-        }),
-    )
-    .await;
-    let r = recv_json(&mut dapp2).await;
-    assert_eq!(r["t"], "ready");
-    // Other peer not connected yet → ready.waiting
-    assert_eq!(r["body"]["state"], "waiting");
-
-    // Wallet reconnects
-    let mut wallet2 = ws_connect(&addr_b).await;
-    send_json(
-        &mut wallet2,
-        &json!({
-            "v":1, "t":"join", "ch":ch, "ts":1234,
-            "from":wallet_peer,
-            "body": {"resume": wallet_resume}
-        }),
-    )
-    .await;
-    let r = recv_json(&mut wallet2).await;
-    assert_eq!(r["t"], "ready");
-    assert_eq!(r["body"]["state"], "connected");
-
-    // --- Phase 5: Data flows after restart ---
-    send_json(&mut dapp2, &req_msg(&ch, &dapp_peer, "after-restart")).await;
-    let received = recv_json(&mut wallet2).await;
-    assert_eq!(received["t"], "req");
-    assert_eq!(received["body"]["id"], "after-restart");
-
-    send_json(&mut wallet2, &res_msg(&ch, &wallet_peer, "after-restart")).await;
-    let received = recv_json(&mut dapp2).await;
-    assert_eq!(received["t"], "res");
-    assert_eq!(received["body"]["id"], "after-restart");
-    assert_eq!(received["body"]["sealed"], "encrypted_result");
 
     // Cleanup
     let _ = std::fs::remove_file(&state_path);
-    let _ = shutdown_tx_b.send(());
 }

@@ -40,7 +40,6 @@ interface Session {
   remotePubKey: Uint8Array | null;
   sessionKey: Uint8Array | null;
   sendSeq: number;
-  resumeToken: string | null;
   relayUrl: string;
   ethKeyHex: string;
   ethAddr: string;
@@ -130,7 +129,6 @@ export default function WalletScreen() {
       remotePubKeyB64: s.remotePubKey ? wp.b64urlEncode(s.remotePubKey) : '',
       sessionKeyHex: wp.bytesToHex(s.sessionKey),
       sendSeq: s.sendSeq,
-      resumeToken: s.resumeToken,
       relayUrl: s.relayUrl,
       ethKeyHex: s.ethKeyHex,
     });
@@ -163,7 +161,6 @@ export default function WalletScreen() {
 
     switch (msg.t) {
       case 'ready':
-        s.resumeToken = msg.resume;
         stopReconnect();
         if (msg.state === 'waiting') {
           updatePhase('waiting');
@@ -219,12 +216,7 @@ export default function WalletScreen() {
 
       case 'close':
         addLog('err', 'close', `reason=${msg.reason}`);
-        if (msg.reason === 'invalid_resume' && phaseRef.current !== 'closed') {
-          s.resumeToken = null;
-          addLog('in', 'reconnect', 'resume rejected, re-joining');
-          wsRef.current?.close();
-          connectAndJoin(false);
-        } else if (msg.reason === 'channel_not_found' && phaseRef.current !== 'closed') {
+        if (msg.reason === 'channel_not_found' && phaseRef.current !== 'closed') {
           addLog('in', 'reconnect', 'channel gone, waiting for dApp');
           wsRef.current?.close();
           startReconnect();
@@ -243,7 +235,7 @@ export default function WalletScreen() {
   // Connect to relay and send join (used for fresh first-time connect)
   // ---------------------------------------------------------------------------
 
-  const connectAndJoin = useCallback((useResume: boolean) => {
+  const connectAndJoin = useCallback(() => {
     const s = session.current!;
     const ws = new WebSocket(s.relayUrl, 'walletpair.v1');
     wsRef.current = ws;
@@ -260,7 +252,6 @@ export default function WalletScreen() {
         },
         meta: { name: 'WalletPair Mobile Wallet', description: 'WalletPair example mobile wallet', url: '', icon: '' },
       };
-      if (useResume && s.resumeToken) msg.resume = s.resumeToken;
       sendRaw(msg);
     };
 
@@ -305,7 +296,6 @@ export default function WalletScreen() {
 
     function tryConnect() {
       if (intentionalClose.current || phaseRef.current === 'closed') return;
-      const useResume = attempt === 0 && !!session.current?.resumeToken;
       attempt++;
 
       const s = session.current;
@@ -326,7 +316,6 @@ export default function WalletScreen() {
             chains: ['eip155:1'],
           },
         };
-        if (useResume) msg.resume = s.resumeToken;
         sendRaw(msg);
       };
 
@@ -378,7 +367,6 @@ export default function WalletScreen() {
       remotePubKey: remotePub,
       sessionKey,
       sendSeq: 0,
-      resumeToken: null,
       relayUrl: '',
       ethKeyHex: ethKeyInput,
       ethAddr,
@@ -511,7 +499,6 @@ export default function WalletScreen() {
       remotePubKey: remotePub,
       sessionKey,
       sendSeq: 0,
-      resumeToken: null,
       relayUrl: parsed.relay,
       ethKeyHex: ethKeyInput,
       ethAddr,
@@ -519,7 +506,7 @@ export default function WalletScreen() {
     };
 
     setRequests([]);
-    connectAndJoin(false);
+    connectAndJoin();
   }, [ethAddr, ethKeyInput, connectAndJoin, freshJoinBle]);
 
   // ---------------------------------------------------------------------------
@@ -551,7 +538,6 @@ export default function WalletScreen() {
         remotePubKey: saved.remotePubKeyB64 ? wp.b64urlDecode(saved.remotePubKeyB64) : null,
         sessionKey,
         sendSeq: saved.sendSeq,
-        resumeToken: saved.resumeToken,
         relayUrl: saved.relayUrl,
         ethKeyHex: saved.ethKeyHex,
         ethAddr: eth.privateKeyToAddress(saved.ethKeyHex),

@@ -40,12 +40,11 @@ function receiveConnected(
   transport: MockTransport,
   session: DAppSession,
   walletPubKeyB64: string,
-  resume = 'tok',
 ): void {
   transport.receive({
     v: 1, t: 'ready', ch: session.channelId,
     ts: Date.now(), from: '_adapter',
-    body: { state: 'connected', resume, remote: walletPubKeyB64 },
+    body: { state: 'connected', reconnect: false, remote: walletPubKeyB64 },
   } as ProtocolMessage);
 }
 
@@ -146,7 +145,7 @@ describe('DAppSession', () => {
       expect((acceptMsg as any).body.target).toBe(walletKp.publicKeyB64);
 
       // Simulate relay responding with ready.connected
-      receiveConnected(transport, session, walletKp.publicKeyB64, 'token-123');
+      receiveConnected(transport, session, walletKp.publicKeyB64);
 
       expect(session.phase).toBe('connected');
     });
@@ -162,7 +161,7 @@ describe('DAppSession', () => {
       transport.receive({
         v: 1, t: 'ready', ch: session.channelId,
         ts: Date.now(), from: '_adapter',
-        body: { state: 'connected', resume: 'token-123', remote: null },
+        body: { state: 'connected', reconnect: false, remote: null },
       } as ProtocolMessage);
 
       expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
@@ -211,7 +210,7 @@ describe('DAppSession', () => {
       sessionKey = deriveSessionKey(shared, session.channelId);
 
       // Auto-accepted; simulate relay ready.connected
-      receiveConnected(transport, session, walletKp.publicKeyB64, 'token-123');
+      receiveConnected(transport, session, walletKp.publicKeyB64);
       walletToDappKey = (session as any).recvKey;
     });
 
@@ -426,7 +425,7 @@ describe('DAppSession', () => {
   });
 
   describe('auto-accept on rejoin', () => {
-    it('auto-accepts known wallet with matching capabilities (no sealed_join on resume)', async () => {
+    it('auto-accepts known wallet on rejoin (no sealed_join on reconnect)', async () => {
       await session.createPairing();
       const walletKp = generateX25519KeyPair();
 
@@ -434,11 +433,11 @@ describe('DAppSession', () => {
       receiveFreshJoin(transport, session, walletKp);
       receiveConnected(transport, session, walletKp.publicKeyB64);
 
-      // Second join (rejoin) with resume — should auto-accept (same wallet, same approved scope)
+      // Second join (rejoin) without sealed_join — should auto-accept (same wallet, same approved scope)
       transport.receive({
         v: 1, t: 'join', ch: session.channelId,
         ts: Date.now(), from: walletKp.publicKeyB64,
-        body: { sealed_join: null, resume: 'tok' },
+        body: { sealed_join: null },
       } as ProtocolMessage);
 
       // First join auto-accepted + rejoin auto-accepted = 2 accept messages
@@ -504,7 +503,7 @@ describe('DAppSession', () => {
       expect(acceptMsg).toBeTruthy();
 
       // Simulate relay responding with ready.connected
-      receiveConnected(transport, session, walletKp.publicKeyB64, 'tok-auto');
+      receiveConnected(transport, session, walletKp.publicKeyB64);
 
       expect(session.phase).toBe('connected');
       // Phase should go waiting → (accepting) → connected, never pending_accept
@@ -565,7 +564,7 @@ describe('DAppSession', () => {
       shortTtlTransport.receive({
         v: 1, t: 'ready', ch: shortTtlSession.channelId,
         ts: Date.now(), from: '_adapter',
-        body: { state: 'connected', resume: 'tok', remote: walletKp.publicKeyB64 },
+        body: { state: 'connected', reconnect: false, remote: walletKp.publicKeyB64 },
       } as ProtocolMessage);
 
       expect(shortTtlSession.phase).toBe('connected');

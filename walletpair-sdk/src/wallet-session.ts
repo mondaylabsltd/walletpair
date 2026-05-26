@@ -36,7 +36,7 @@ import { Emitter } from './emitter.js';
 
 const BACKOFF = [1000, 2000, 5000, 10000, 30000];
 const MAX_SEND_SEQ = 2 ** 31;
-const DEFAULT_SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours (§16 rule 17)
+const DEFAULT_SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours (§16 rule 16)
 const IDEMPOTENCY_CACHE_LIMIT = 1024;
 const IDEMPOTENCY_RESPONSE_LIMIT_BYTES = 16 * 1024;
 
@@ -71,7 +71,6 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   private recvKey: Uint8Array | null = null;
   private sendSeq = 0;
   private recvSeq = -1;
-  private resumeToken: string | null = null;
   private relayUrl = '';
   private dappName: string | undefined;
   private intentionalClose = false;
@@ -82,7 +81,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   private dappDeclaredChains: string[] | undefined;
   /** Effective capabilities after scope intersection (§8.1). */
   private effectiveCapabilities!: Capabilities;
-  /** Session TTL in ms (§16 rule 17). */
+  /** Session TTL in ms (§16 rule 16). */
   private sessionTtl: number;
   private sessionTtlTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionStartTime: number | null = null;
@@ -178,7 +177,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
 
     await this.transport.connect();
     this.setPhase('waiting');
-    this.sendJoin(false);
+    this.sendJoin();
   }
 
   /**
@@ -275,7 +274,6 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       recvKey: this.recvKey ? bytesToHex(this.recvKey) : null,
       sendSeq: this.sendSeq,
       recvSeq: this.recvSeq,
-      resumeToken: this.resumeToken,
       relayUrl: this.relayUrl,
       capabilities: this.capabilities,
       meta: this.meta ?? null,
@@ -297,7 +295,6 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       if (!this.sendKey || !this.recvKey) return false;
       this.sendSeq = d.sendSeq || 0;
       this.recvSeq = d.recvSeq ?? -1;
-      this.resumeToken = d.resumeToken;
       this.relayUrl = d.relayUrl;
       if ('capabilities' in d && canonicalJson(d.capabilities ?? null) !== canonicalJson(this.capabilities ?? null)) {
         return false;
@@ -323,8 +320,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   private handleMessage(msg: ProtocolMessage): void {
     switch (msg.t) {
       case 'ready': {
-        const readyBody = msg.body as { state?: string; resume?: string | null; remote?: string | null };
-        this.resumeToken = readyBody.resume ?? null;
+        const readyBody = msg.body as { state?: string; reconnect?: boolean; remote?: string | null };
         this.stopReconnect();
         if (readyBody.state === 'connected') {
           const expectedRemote = this.remotePubKey ? b64urlEncode(this.remotePubKey) : null;
@@ -418,11 +414,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
 
       case 'close': {
         const closeBody = msg.body as { reason?: string };
-        if (closeBody.reason === 'invalid_resume') {
-          this.resumeToken = null;
-          this.transport.disconnect();
-          this.doReconnectAttempt(false);
-        } else if (closeBody.reason === 'channel_not_found') {
+        if (closeBody.reason === 'channel_not_found') {
           this.transport.disconnect();
           this.startReconnect();
         } else if (this.phase !== 'disconnected') {
@@ -520,17 +512,18 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     this.transport.send(msg);
   }
 
-  private sendJoin(useResume: boolean): void {
+  private sendJoin(): void {
     const body: Record<string, unknown> = {
       sealed_join: null,
-      resume: useResume ? this.resumeToken : null,
     };
-    if (!useResume && this.sessionKey) {
+    if (this.sessionKey) {
+      // Initial join: encrypt capabilities/meta in sealed_join
       body.sealed_join = sealJoin(this.sessionKey, this.channelId, this.effectiveCapabilities, this.meta);
       // §20.7: erase join_encryption_key after one-shot use
       this.sessionKey.fill(0);
       this.sessionKey = null;
     }
+    // else: reconnect — sealed_join stays null (capabilities already negotiated)
     this.sendRaw({
       v: 1, t: 'join', ch: this.channelId,
       ts: Date.now(), from: this.pubKeyB64,
@@ -601,17 +594,17 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     const base = BACKOFF[Math.min(this.reconnectAttempt, BACKOFF.length - 1)]!;
     const delay = base + Math.floor(Math.random() * base * 0.3); // ±30% jitter
     this.reconnectTimer = setTimeout(() => {
-      this.doReconnectAttempt(this.reconnectAttempt === 0 && !!this.resumeToken);
+      this.doReconnectAttempt();
       this.reconnectAttempt++;
     }, delay);
   }
 
-  private async doReconnectAttempt(useResume: boolean): Promise<void> {
+  private async doReconnectAttempt(): Promise<void> {
     if (this.intentionalClose || this.phase === 'closed') return;
     try {
       await this.transport.connect();
       this.setPhase('waiting');
-      this.sendJoin(useResume);
+      this.sendJoin();
     } catch {
       this.scheduleReconnect();
     }
@@ -625,7 +618,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   }
 
   // -------------------------------------------------------------------------
-  // Internal: session TTL (§16 rule 17)
+  // Internal: session TTL (§16 rule 16)
   // -------------------------------------------------------------------------
 
   private startSessionTtl(): void {

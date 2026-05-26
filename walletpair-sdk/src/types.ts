@@ -35,12 +35,12 @@ export interface ProtocolMessageBase {
 
 export interface CreateMessage extends ProtocolMessageBase {
   t: 'create';
-  body: { meta: DAppMeta; resume: string | null };
+  body: { meta: DAppMeta };
 }
 
 export interface JoinMessage extends ProtocolMessageBase {
   t: 'join';
-  body: { sealed_join: string | null; resume: string | null };
+  body: { sealed_join: string | null };
 }
 
 export interface AcceptMessage extends ProtocolMessageBase {
@@ -50,7 +50,7 @@ export interface AcceptMessage extends ProtocolMessageBase {
 
 export interface ReadyMessage extends ProtocolMessageBase {
   t: 'ready';
-  body: { state: 'waiting' | 'connected'; role?: string; self?: string; remote: string | null; resume: string | null };
+  body: { state: 'waiting' | 'connected'; role?: string; self?: string; remote: string | null; reconnect: boolean };
 }
 
 export interface RequestMessage extends ProtocolMessageBase {
@@ -111,7 +111,6 @@ export type CloseReason =
   | 'already_connected'
   | 'invalid_state'
   | 'invalid_role'
-  | 'invalid_resume'
   | 'timeout'
   | 'rate_limited'
   | 'payload_too_large'
@@ -237,7 +236,7 @@ export interface DAppSessionOptions {
   chains?: string[] | undefined;
   /** Request timeout in ms (default 120_000). */
   requestTimeout?: number | undefined;
-  /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 17. */
+  /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 16. */
   sessionTtl?: number | undefined;
   /** Auto-accept known wallets on rejoin (default true). */
   autoAccept?: boolean | undefined;
@@ -249,7 +248,7 @@ export interface WalletSessionOptions {
   capabilities: Capabilities;
   /** Wallet metadata (name, description, url, icon). */
   meta: WalletMeta;
-  /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 17. */
+  /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 16. */
   sessionTtl?: number | undefined;
 }
 

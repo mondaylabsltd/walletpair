@@ -232,10 +232,7 @@ async fn abrupt_disconnect_handled_gracefully() {
     )
     .await;
     let _ = recv_json(&mut dapp_ws).await;
-    let dapp_resume = recv_json(&mut wallet_ws).await["body"]["resume"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let _ = recv_json(&mut wallet_ws).await;
 
     // Drop wallet abruptly (no close frame)
     drop(wallet_ws);
@@ -259,8 +256,6 @@ async fn abrupt_disconnect_handled_gracefully() {
         &json!({"v":1,"t":"close","ch":ch,"ts":1234,"from":dapp,"body":{"reason":"normal"}}),
     )
     .await;
-
-    let _ = dapp_resume; // suppress unused warning
 }
 
 /// Multiple invalid JSON messages don't crash the server.

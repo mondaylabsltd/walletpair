@@ -48,7 +48,6 @@ pub enum CloseReason {
     AlreadyConnected,
     InvalidState,
     InvalidRole,
-    InvalidResume,
     Timeout,
     PayloadTooLarge,
     ProtocolError,
@@ -70,7 +69,6 @@ impl CloseReason {
             Self::AlreadyConnected => "already_connected",
             Self::InvalidState => "invalid_state",
             Self::InvalidRole => "invalid_role",
-            Self::InvalidResume => "invalid_resume",
             Self::Timeout => "timeout",
             Self::PayloadTooLarge => "payload_too_large",
             Self::ProtocolError => "protocol_error",
@@ -97,12 +95,10 @@ pub enum ClientMessage {
     Create {
         ch: ChannelId,
         from: PeerId,
-        resume: Option<String>,
     },
     Join {
         ch: ChannelId,
         from: PeerId,
-        resume: Option<String>,
     },
     Accept {
         ch: ChannelId,
@@ -256,10 +252,6 @@ fn get_str<'a>(
         .ok_or(ParseError::MissingField(key))
 }
 
-fn get_optional_str<'a>(obj: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
-    obj.get(key).and_then(|v| v.as_str())
-}
-
 pub fn parse_message(raw: &str) -> Result<ClientMessage, ParseError> {
     let value: Value = serde_json::from_str(raw)?;
     let obj = value.as_object().ok_or(ParseError::NotAnObject)?;
@@ -296,21 +288,11 @@ pub fn parse_message(raw: &str) -> Result<ClientMessage, ParseError> {
     match t {
         "create" => {
             validate_peer_id(&from)?;
-            let resume = get_optional_str(body, "resume").map(String::from);
-            Ok(ClientMessage::Create {
-                ch,
-                from,
-                resume,
-            })
+            Ok(ClientMessage::Create { ch, from })
         }
         "join" => {
             validate_peer_id(&from)?;
-            let resume = get_optional_str(body, "resume").map(String::from);
-            Ok(ClientMessage::Join {
-                ch,
-                from,
-                resume,
-            })
+            Ok(ClientMessage::Join { ch, from })
         }
         "accept" => {
             validate_peer_id(&from)?;
@@ -366,7 +348,7 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-pub fn build_ready_waiting(ch: &str, role: Role, peer_id: &str, resume: &str) -> String {
+pub fn build_ready_waiting(ch: &str, role: Role, peer_id: &str) -> String {
     serde_json::json!({
         "v": 1,
         "t": "ready",
@@ -378,7 +360,7 @@ pub fn build_ready_waiting(ch: &str, role: Role, peer_id: &str, resume: &str) ->
             "role": role.as_str(),
             "self": peer_id,
             "remote": null,
-            "resume": resume,
+            "reconnect": false,
         }
     })
     .to_string()
@@ -389,7 +371,6 @@ pub fn build_ready_connected(
     role: Role,
     self_id: &str,
     remote_id: &str,
-    resume: &str,
 ) -> String {
     serde_json::json!({
         "v": 1,
@@ -402,7 +383,7 @@ pub fn build_ready_connected(
             "role": role.as_str(),
             "self": self_id,
             "remote": remote_id,
-            "resume": resume,
+            "reconnect": false,
         }
     })
     .to_string()
@@ -575,7 +556,6 @@ mod tests {
     fn close_reason_mapping() {
         assert_eq!(CloseReason::Normal.as_str(), "normal");
         assert_eq!(CloseReason::ChannelNotFound.as_str(), "channel_not_found");
-        assert_eq!(CloseReason::InvalidResume.as_str(), "invalid_resume");
         assert_eq!(CloseReason::PayloadTooLarge.as_str(), "payload_too_large");
         assert_eq!(
             CloseReason::UnsupportedVersion.as_str(),
@@ -585,7 +565,7 @@ mod tests {
 
     #[test]
     fn build_ready_waiting_valid_json() {
-        let json = build_ready_waiting("ab".repeat(32).as_str(), Role::DApp, "peer", "tok");
+        let json = build_ready_waiting("ab".repeat(32).as_str(), Role::DApp, "peer");
         let v: Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["t"], "ready");
         assert_eq!(v["from"], "_adapter");
@@ -594,7 +574,7 @@ mod tests {
         assert_eq!(v["body"]["role"], "dapp");
         assert_eq!(v["body"]["self"], "peer");
         assert!(v["body"]["remote"].is_null());
-        assert_eq!(v["body"]["resume"], "tok");
+        assert_eq!(v["body"]["reconnect"], false);
     }
 
     #[test]
@@ -604,7 +584,6 @@ mod tests {
             Role::Wallet,
             "self",
             "remote",
-            "tok",
         );
         let v: Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["t"], "ready");
@@ -612,6 +591,7 @@ mod tests {
         assert!(v["ts"].as_u64().is_some());
         assert_eq!(v["body"]["state"], "connected");
         assert_eq!(v["body"]["remote"], "remote");
+        assert_eq!(v["body"]["reconnect"], false);
     }
 
     #[test]
@@ -809,21 +789,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_create_with_resume() {
-        let pid = make_peer_id();
-        let ch = make_channel_id();
-        let json = serde_json::json!({
-            "v": 1, "t": "create", "ch": ch, "ts": 1234, "from": pid,
-            "body": {"resume": "some-token"}
-        });
-        let msg = parse_message(&json.to_string()).unwrap();
-        match msg {
-            ClientMessage::Create { resume, .. } => assert_eq!(resume.unwrap(), "some-token"),
-            _ => panic!("expected Create"),
-        }
-    }
-
-    #[test]
     fn all_close_reasons_as_str() {
         let reasons = vec![
             (CloseReason::Normal, "normal"),
@@ -834,7 +799,6 @@ mod tests {
             (CloseReason::AlreadyConnected, "already_connected"),
             (CloseReason::InvalidState, "invalid_state"),
             (CloseReason::InvalidRole, "invalid_role"),
-            (CloseReason::InvalidResume, "invalid_resume"),
             (CloseReason::Timeout, "timeout"),
             (CloseReason::PayloadTooLarge, "payload_too_large"),
             (CloseReason::ProtocolError, "protocol_error"),

@@ -44,10 +44,9 @@ export function makeJoinBody(
   walletKp: X25519KeyPair,
   capabilities: Capabilities = DEFAULT_TEST_CAPABILITIES,
   meta: WalletMeta = DEFAULT_TEST_WALLET_META,
-): { sealed_join: string; resume: null } {
+): { sealed_join: string } {
   return {
     sealed_join: makeSealedJoin(channelId, dappPubKeyB64, walletKp, capabilities, meta),
-    resume: null,
   };
 }
 
@@ -149,7 +148,7 @@ export class MockRelay {
         this.dappTransport.receive({
           v: 1, t: 'ready', ch: msg.ch,
           ts: Date.now(), from: '_adapter',
-          body: { state: 'waiting', resume: 'dapp-resume-token', remote: null },
+          body: { state: 'waiting', reconnect: false, remote: null },
         } as ProtocolMessage);
       });
     } else if (msg.t === 'accept') {
@@ -158,12 +157,12 @@ export class MockRelay {
         this.dappTransport.receive({
           v: 1, t: 'ready', ch: msg.ch,
           ts: Date.now(), from: '_adapter',
-          body: { state: 'connected', resume: 'dapp-resume-token-2', remote: target },
+          body: { state: 'connected', reconnect: false, remote: target },
         } as ProtocolMessage);
         this.walletTransport.receive({
           v: 1, t: 'ready', ch: msg.ch,
           ts: Date.now(), from: '_adapter',
-          body: { state: 'connected', resume: 'wallet-resume-token-2', remote: msg.from },
+          body: { state: 'connected', reconnect: false, remote: msg.from },
         } as ProtocolMessage);
       });
     } else if (msg.t === 'req') {
@@ -184,7 +183,7 @@ export class MockRelay {
         this.walletTransport.receive({
           v: 1, t: 'ready', ch: msg.ch,
           ts: Date.now(), from: '_adapter',
-          body: { state: 'waiting', resume: 'wallet-resume-token', remote: null },
+          body: { state: 'waiting', reconnect: false, remote: null },
         } as ProtocolMessage);
         // Relay forwards join to dApp
         this.dappTransport.receive(msg);
