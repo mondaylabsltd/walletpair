@@ -52,10 +52,13 @@ walletpair/
 
 ## Quick Start
 
-### Install the SDK
+### Install the SDK (not yet published)
 
 ```bash
-npm install walletpair-sdk
+# Clone the repo and link locally
+git clone https://github.com/user/walletpair.git
+cd walletpair/walletpair-sdk
+npm install && npm link
 ```
 
 ### dApp Side
@@ -139,12 +142,6 @@ const accounts = await provider.request({ method: 'eth_accounts' });
 
 The relay is a stateless Rust binary. It routes encrypted messages between peers without reading them.
 
-### Run with Docker
-
-```bash
-docker run -p 8080:8080 walletpair-relay
-```
-
 ### Build from Source
 
 ```bash
@@ -152,6 +149,8 @@ cd walletpair-websocket-relay
 cargo build --release
 ./target/release/walletpair-relay --config config.toml
 ```
+
+Docker support is planned but not yet available.
 
 ### Endpoints
 
