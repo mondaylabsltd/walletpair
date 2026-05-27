@@ -46,6 +46,7 @@ walletpair/
   walletpair-websocket-relay/  # Rust relay server - production-grade message router
   walletpair-examples/         # Demo apps - standalone HTML, React Native, SvelteKit
   walletpair.org/              # Marketing site and interactive demo
+  formal-verification/         # ProVerif model - mathematically proven security properties
   walletpair-protocol-v1.md    # Protocol specification
   walletpair-evm-subprotocol-v1.md  # EVM sub-protocol specification
 ```
@@ -113,9 +114,6 @@ const session = new WalletSession({
   },
   meta: {
     name: 'My Wallet',
-    description: 'Example wallet',
-    url: 'https://wallet.example',
-    icon: 'https://wallet.example/icon.png',
   },
   persistence: {
     save: (snapshot) => secureStore.set('walletpair.session', snapshot),
@@ -190,11 +188,13 @@ Docker support is planned but not yet available.
 
 ### Cryptography
 
-- **Key exchange**: X25519 ephemeral keypairs
-- **Key derivation**: HKDF-SHA256 with channel ID as salt
-- **Encryption**: ChaCha20-Poly1305 AEAD with length-prefixed AAD
-- **Session fingerprint**: Derived from SHA256(prefix || channel_id || dapp_pubkey) for visual MITM prevention
-- **Replay protection**: Per-peer sequence counters with monotonic enforcement
+- **Key exchange**: X25519 ephemeral keypairs (with all-zero / low-order point rejection per RFC 7748 §6)
+- **Key derivation**: HKDF-SHA256 with channel ID salt and domain-separated info strings
+- **Encryption**: ChaCha20-Poly1305 AEAD with type-byte AAD (0x01/0x02/0x03 prevent cross-type confusion)
+- **Canonical JSON**: RFC 8785 (JCS) — sole normative reference, with SHA-256 verified test vectors
+- **Session fingerprint**: SHA256(prefix || channel_id || dapp_pubkey) mod 10000 for visual MITM prevention
+- **Replay protection**: Per-peer monotonic sequence counters, HMAC-SHA256 snapshot integrity
+- **Formal verification**: Protocol security properties proven with ProVerif (see below)
 
 ### Message Types
 
@@ -240,10 +240,44 @@ The wagmi connector wires this automatically through `config.storage` and uses t
 | Website | SvelteKit, Cloudflare Workers |
 | Examples | HTML/JS, React Native (Expo), SvelteKit |
 
+## Formal Verification
+
+The protocol's security properties have been formally verified using [ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/) under a Dolev-Yao attacker model (attacker controls the relay and the entire network):
+
+| Property | Status |
+|----------|--------|
+| Request confidentiality | **Proved** |
+| Response confidentiality | **Proved** |
+| Event confidentiality | **Proved** |
+| Request authentication (dApp → wallet) | **Proved** |
+| Response authentication (wallet → dApp) | **Proved** |
+| Event authentication (wallet → dApp) | **Proved** |
+| `sealed_join` handshake authentication | **Proved** |
+
+Run the verification yourself:
+
+```bash
+opam install proverif
+proverif formal-verification/walletpair.pv
+```
+
+The model is in [formal-verification/walletpair.pv](formal-verification/walletpair.pv). See inline comments for threat model assumptions and modeling decisions.
+
+## Testing
+
+| Component | Tests | Framework |
+|-----------|-------|-----------|
+| SDK | 422 | Vitest |
+| Extension | 236 | Vitest |
+| Relay | 212+ | cargo test |
+
+CI runs on every PR for all three components (lint, type check, test).
+
 ## Specifications
 
-- [WalletPair Protocol v1](walletpair-protocol-v1.md) - Full protocol specification
+- [WalletPair Protocol v1](walletpair-protocol-v1.md) - Full protocol specification (RFC 8785 canonical JSON, X25519 + HKDF + ChaCha20-Poly1305)
 - [WalletPair EVM Sub-Protocol v1](walletpair-evm-subprotocol-v1.md) - EVM-specific methods, events, and validation rules
+- [Formal Verification Model](formal-verification/walletpair.pv) - ProVerif model with 7 proven security properties
 
 ## License
 
