@@ -11,78 +11,74 @@
  *   - walletpair-sdk/ble        BLE transport + framing utilities
  */
 
+export type { DirectionalSessionKeys, SessionCryptoContext, X25519KeyPair } from './crypto.js'
+// Crypto
+export {
+  b64urlDecode,
+  b64urlEncode,
+  buildPairingUri,
+  bytesToHex,
+  canonicalJson,
+  computeHandshakeTranscriptHash,
+  computeSessionFingerprint,
+  computeSharedSecret,
+  deriveDirectionalSessionKeys,
+  deriveJoinEncryptionKey,
+  deriveSessionKey,
+  generateChannelId,
+  generateX25519KeyPair,
+  getPublicKey,
+  hexToBytes,
+  parsePairingUri,
+  sealJoin,
+  sealPayload,
+  sha256Hex,
+  unsealJoin,
+  unsealPayload,
+} from './crypto.js'
+// Sessions
+export { DAppSession } from './dapp-session.js'
+// Emitter
+export { Emitter } from './emitter.js'
 // Types
 export type {
-  Transport,
-  TransportState,
+  AcceptMessage,
+  Capabilities,
+  CloseMessage,
+  CloseReason,
+  CreateMessage,
+  DAppMeta,
+  DAppPhase,
+  DAppSessionEvents,
+  DAppSessionOptions,
+  EventMessage,
+  JoinMessage,
+  PairingParams,
+  PendingRequest,
+  PingMessage,
+  PongMessage,
   ProtocolMessage,
   ProtocolMessageBase,
-  CreateMessage,
-  JoinMessage,
-  AcceptMessage,
   ReadyMessage,
   RequestMessage,
   ResponseMessage,
-  EventMessage,
-  PingMessage,
-  PongMessage,
-  CloseMessage,
+  SessionPersistence,
   TerminateMessage,
-  CloseReason,
-  Capabilities,
-  DAppMeta,
+  Transport,
+  TransportState,
   WalletMeta,
-  DAppPhase,
   WalletPhase,
-  DAppSessionEvents,
   WalletSessionEvents,
-  PairingParams,
-  PendingRequest,
-  DAppSessionOptions,
   WalletSessionOptions,
-} from './types.js';
-
+} from './types.js'
 // Chain ID helpers (CAIP-2)
 export {
-  parseChainId,
-  formatChainId,
   evmChainId,
   evmNumericChainId,
-} from './types.js';
-
-// Crypto
-export {
-  generateX25519KeyPair,
-  getPublicKey,
-  computeSharedSecret,
-  deriveSessionKey,
-  deriveDirectionalSessionKeys,
-  deriveJoinEncryptionKey,
-  computeHandshakeTranscriptHash,
-  computeSessionFingerprint,
-  canonicalJson,
-  sealPayload,
-  unsealPayload,
-  sealJoin,
-  unsealJoin,
-  generateChannelId,
-  buildPairingUri,
-  parsePairingUri,
-  b64urlEncode,
-  b64urlDecode,
-  bytesToHex,
-  hexToBytes,
-  sha256Hex,
-} from './crypto.js';
-export type { X25519KeyPair, SessionCryptoContext, DirectionalSessionKeys } from './crypto.js';
-
-// Emitter
-export { Emitter } from './emitter.js';
-
+  formatChainId,
+  parseChainId,
+} from './types.js'
+export { WalletSession } from './wallet-session.js'
+export type { WebSocketTransportOptions } from './ws-transport.js'
 // Transport
-export { WebSocketTransport } from './ws-transport.js';
-export type { WebSocketTransportOptions } from './ws-transport.js';
-
-// Sessions
-export { DAppSession } from './dapp-session.js';
-export { WalletSession } from './wallet-session.js';
+export { WebSocketTransport } from './ws-transport.js'

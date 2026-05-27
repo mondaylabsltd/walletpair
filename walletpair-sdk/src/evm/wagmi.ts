@@ -17,67 +17,76 @@
  *   })
  */
 
-import { DAppSession } from '../dapp-session.js';
-import { WalletPairProvider } from './eip1193.js';
-import { WebSocketTransport } from '../ws-transport.js';
-import { evmNumericChainId } from '../types.js';
-import type { Transport } from '../types.js';
+import { DAppSession } from '../dapp-session.js'
+import type { SessionPersistence, Transport } from '../types.js'
+import { evmNumericChainId } from '../types.js'
+import { WebSocketTransport } from '../ws-transport.js'
+import { WalletPairProvider } from './eip1193.js'
 
 // ---------------------------------------------------------------------------
 // Wagmi types (minimal subset to avoid hard dependency)
 // ---------------------------------------------------------------------------
 
 interface Chain {
-  id: number;
-  name: string;
-  [key: string]: unknown;
+  id: number
+  name: string
+  [key: string]: unknown
 }
 
 interface ConnectorEventMap {
-  change: { accounts?: readonly string[] | undefined; chainId?: number | undefined };
-  connect: { accounts: readonly string[]; chainId: number };
-  disconnect: never;
-  error: { error: Error };
-  message: { type: string; data?: unknown | undefined };
+  change: { accounts?: readonly string[] | undefined; chainId?: number | undefined }
+  connect: { accounts: readonly string[]; chainId: number }
+  disconnect: never
+  error: { error: Error }
+  message: { type: string; data?: unknown | undefined }
 }
 
 interface WagmiEmitter {
-  emit<K extends keyof ConnectorEventMap>(event: K, data: ConnectorEventMap[K]): void;
-  on<K extends keyof ConnectorEventMap>(event: K, handler: (data: ConnectorEventMap[K]) => void): void;
-  off<K extends keyof ConnectorEventMap>(event: K, handler: (data: ConnectorEventMap[K]) => void): void;
-  listenerCount(event: keyof ConnectorEventMap): number;
+  emit<K extends keyof ConnectorEventMap>(event: K, data: ConnectorEventMap[K]): void
+  on<K extends keyof ConnectorEventMap>(
+    event: K,
+    handler: (data: ConnectorEventMap[K]) => void,
+  ): void
+  off<K extends keyof ConnectorEventMap>(
+    event: K,
+    handler: (data: ConnectorEventMap[K]) => void,
+  ): void
+  listenerCount(event: keyof ConnectorEventMap): number
 }
 
 interface Storage {
-  getItem(key: string): Promise<string | null>;
-  setItem(key: string, value: string): Promise<void>;
-  removeItem(key: string): Promise<void>;
+  getItem(key: string): Promise<string | null>
+  setItem(key: string, value: string): Promise<void>
+  removeItem(key: string): Promise<void>
 }
 
 interface ConnectorConfig {
-  chains: readonly [Chain, ...Chain[]];
-  emitter: WagmiEmitter;
-  storage?: Storage | null | undefined;
+  chains: readonly [Chain, ...Chain[]]
+  emitter: WagmiEmitter
+  storage?: Storage | null | undefined
 }
 
 type CreateConnectorFn = (config: ConnectorConfig) => {
-  id: string;
-  name: string;
-  type: string;
-  icon?: string | undefined;
-  connect(params?: { chainId?: number | undefined; isReconnecting?: boolean | undefined }): Promise<{ accounts: readonly string[]; chainId: number }>;
-  disconnect(): Promise<void>;
-  getAccounts(): Promise<readonly string[]>;
-  getChainId(): Promise<number>;
-  getProvider(params?: { chainId?: number | undefined }): Promise<WalletPairProvider>;
-  isAuthorized(): Promise<boolean>;
-  onAccountsChanged(accounts: string[]): void;
-  onChainChanged(chainId: string): void;
-  onConnect?(connectInfo: { chainId: string }): void;
-  onDisconnect(error?: Error | undefined): void;
-  setup?(): Promise<void>;
-  switchChain?(params: { chainId: number }): Promise<Chain>;
-};
+  id: string
+  name: string
+  type: string
+  icon?: string | undefined
+  connect(params?: {
+    chainId?: number | undefined
+    isReconnecting?: boolean | undefined
+  }): Promise<{ accounts: readonly string[]; chainId: number }>
+  disconnect(): Promise<void>
+  getAccounts(): Promise<readonly string[]>
+  getChainId(): Promise<number>
+  getProvider(params?: { chainId?: number | undefined }): Promise<WalletPairProvider>
+  isAuthorized(): Promise<boolean>
+  onAccountsChanged(accounts: string[]): void
+  onChainChanged(chainId: string): void
+  onConnect?(connectInfo: { chainId: string }): void
+  onDisconnect(error?: Error | undefined): void
+  setup?(): Promise<void>
+  switchChain?(params: { chainId: number }): Promise<Chain>
+}
 
 // ---------------------------------------------------------------------------
 // Connector options
@@ -85,24 +94,24 @@ type CreateConnectorFn = (config: ConnectorConfig) => {
 
 export interface WalletPairConnectorOptions {
   /** WebSocket relay URL. Used when `transport` is not provided. */
-  relayUrl?: string | undefined;
+  relayUrl?: string | undefined
   /** Custom transport instance. Overrides relayUrl when provided. */
-  transport?: Transport | undefined;
+  transport?: Transport | undefined
   /** DApp metadata (name, description, url, icon). */
-  meta: { name: string; description: string; url: string; icon: string };
+  meta: { name: string; description: string; url: string; icon: string }
   /** Request timeout in ms. */
-  requestTimeout?: number | undefined;
+  requestTimeout?: number | undefined
   /** Called when a pairing URI is generated (display QR code). */
-  onPairingUri?: ((uri: string) => void) | undefined;
+  onPairingUri?: ((uri: string) => void) | undefined
   /** Called when the session fingerprint is ready (display alongside QR). */
-  onSessionFingerprint?: ((fingerprint: string) => void) | undefined;
+  onSessionFingerprint?: ((fingerprint: string) => void) | undefined
   /**
    * Called after QR is shown but before transport connects (BLE mode).
    * The returned Promise must resolve when the user is ready to scan.
    * This gives the wallet time to scan the QR before the BLE device picker opens.
    * Only relevant when using a custom transport (e.g. WebBleCentralTransport).
    */
-  onBeforeTransportConnect?: (() => Promise<void>) | undefined;
+  onBeforeTransportConnect?: (() => Promise<void>) | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -110,29 +119,107 @@ export interface WalletPairConnectorOptions {
 // ---------------------------------------------------------------------------
 
 export function walletPair(options: WalletPairConnectorOptions): CreateConnectorFn {
-  let session: DAppSession | null = null;
-  let provider: WalletPairProvider | null = null;
+  let session: DAppSession | null = null
+  let provider: WalletPairProvider | null = null
+  let sessionEventsBound = false
 
-  function getOrCreateSession(): DAppSession {
+  function persistenceFromStorage(
+    storage?: Storage | null | undefined,
+  ): SessionPersistence | undefined {
+    if (!storage) return undefined
+    return {
+      save: (snapshot) => storage.setItem('walletPair.session', snapshot),
+      load: () => storage.getItem('walletPair.session'),
+      clear: () => storage.removeItem('walletPair.session'),
+    }
+  }
+
+  function getOrCreateSession(config?: ConnectorConfig): DAppSession {
     if (!session) {
-      const transport = options.transport ?? new WebSocketTransport(options.relayUrl!);
+      const transport =
+        options.transport ??
+        (() => {
+          if (!options.relayUrl) {
+            throw new Error('WalletPair requires either relayUrl or transport')
+          }
+          return new WebSocketTransport(options.relayUrl)
+        })()
       session = new DAppSession({
         transport,
         meta: options.meta,
         requestTimeout: options.requestTimeout,
-      });
+        persistence: persistenceFromStorage(config?.storage),
+      })
     }
-    return session;
+    return session
   }
 
-  function getOrCreateProvider(chainId?: number): WalletPairProvider {
+  function getOrCreateProvider(chainId?: number, config?: ConnectorConfig): WalletPairProvider {
     if (!provider) {
       provider = new WalletPairProvider({
-        session: getOrCreateSession(),
+        session: getOrCreateSession(config),
         chainId,
-      });
+      })
     }
-    return provider;
+    return provider
+  }
+
+  function bindSessionEvents(config: ConnectorConfig, chainId: number): void {
+    const s = getOrCreateSession(config)
+    if (sessionEventsBound) return
+    sessionEventsBound = true
+
+    // Bridge WalletPair events → wagmi emitter
+    s.on('event', ({ event, data }) => {
+      if (event === 'accountsChanged') {
+        const accts = (data as { accounts?: string[] })?.accounts ?? (data as string[])
+        if (Array.isArray(accts)) {
+          config.emitter.emit('change', { accounts: accts })
+        }
+      } else if (event === 'chainChanged') {
+        const raw = (data as { chainId?: string | number })?.chainId ?? data
+        let newId: number
+        if (typeof raw === 'string' && raw.startsWith('eip155:')) {
+          newId = evmNumericChainId(raw) ?? chainId
+        } else if (typeof raw === 'string') {
+          newId = Number.parseInt(raw, raw.startsWith('0x') ? 16 : 10)
+        } else {
+          newId = raw as number
+        }
+        config.emitter.emit('change', { chainId: newId })
+      }
+    })
+  }
+
+  async function requestAccountsWhenConnected(
+    s: DAppSession,
+    p: WalletPairProvider,
+  ): Promise<readonly string[]> {
+    if (s.phase === 'connected') {
+      return (await p.request({ method: 'eth_requestAccounts' })) as string[]
+    }
+
+    return new Promise<readonly string[]>((resolve, reject) => {
+      const cleanup: (() => void)[] = []
+
+      cleanup.push(
+        s.on('phase', async (phase) => {
+          if (phase === 'connected') {
+            try {
+              const accts = (await p.request({ method: 'eth_requestAccounts' })) as string[]
+              for (const off of cleanup) off()
+              resolve(accts)
+            } catch (e) {
+              for (const off of cleanup) off()
+              reject(e)
+            }
+          } else if (phase === 'closed') {
+            for (const off of cleanup) off()
+            reject(new Error('Session closed'))
+          }
+        }),
+      )
+    })
   }
 
   return (config: ConnectorConfig) => {
@@ -142,126 +229,93 @@ export function walletPair(options: WalletPairConnectorOptions): CreateConnector
       type: 'walletPair',
 
       async connect(params) {
-        const chainId = params?.chainId ?? config.chains[0].id;
-        const s = getOrCreateSession();
-        const p = getOrCreateProvider(chainId);
+        const chainId = params?.chainId ?? config.chains[0].id
+        const s = getOrCreateSession(config)
+        const p = getOrCreateProvider(chainId, config)
 
-        // Bridge WalletPair events → wagmi emitter
-        s.on('event', ({ event, data }) => {
-          if (event === 'accountsChanged') {
-            const accts = (data as { accounts?: string[] })?.accounts ?? (data as string[]);
-            if (Array.isArray(accts)) {
-              config.emitter.emit('change', { accounts: accts });
-            }
-          } else if (event === 'chainChanged') {
-            const raw = (data as { chainId?: string | number })?.chainId ?? data;
-            let newId: number;
-            if (typeof raw === 'string' && raw.startsWith('eip155:')) {
-              newId = evmNumericChainId(raw) ?? chainId;
-            } else if (typeof raw === 'string') {
-              newId = Number.parseInt(raw, raw.startsWith('0x') ? 16 : 10);
-            } else {
-              newId = raw as number;
-            }
-            config.emitter.emit('change', { chainId: newId });
-          }
-        });
+        bindSessionEvents(config, chainId)
+
+        if (params?.isReconnecting) {
+          const restored = await s.restoreFromPersistence()
+          if (!restored) throw new Error('No persisted WalletPair session')
+          await s.reconnect()
+          const accounts = await requestAccountsWhenConnected(s, p)
+          return { accounts, chainId }
+        }
 
         // Start pairing flow
         // If onBeforeTransportConnect is set (BLE mode), defer transport connection
         // so the wallet can scan the QR before the BLE device picker opens.
-        const deferTransport = !!options.onBeforeTransportConnect;
-        const uri = await s.createPairing({ deferTransport });
-        options.onPairingUri?.(uri);
+        const deferTransport = !!options.onBeforeTransportConnect
+        const uri = await s.createPairing({ deferTransport })
+        options.onPairingUri?.(uri)
 
         if (deferTransport && options.onBeforeTransportConnect) {
-          await options.onBeforeTransportConnect();
-          await s.connectTransport();
+          await options.onBeforeTransportConnect()
+          await s.connectTransport()
         }
 
         // Emit session fingerprint for display alongside QR
-        options.onSessionFingerprint?.(s.sessionFingerprint);
+        options.onSessionFingerprint?.(s.sessionFingerprint)
 
         // Wait for wallet to join (auto-accepted after sealed_join verification)
-        const accounts = await new Promise<readonly string[]>((resolve, reject) => {
-          const cleanup: (() => void)[] = [];
+        const accounts = await requestAccountsWhenConnected(s, p)
 
-          cleanup.push(s.on('phase', async (phase) => {
-            if (phase === 'connected') {
-              try {
-                const accts = await p.request({ method: 'eth_requestAccounts' }) as string[];
-                for (const off of cleanup) off();
-                resolve(accts);
-              } catch (e) {
-                for (const off of cleanup) off();
-                reject(e);
-              }
-            } else if (phase === 'closed') {
-              for (const off of cleanup) off();
-              reject(new Error('Session closed'));
-            }
-          }));
-        });
+        // DAppSession persists snapshots write-ahead through config.storage.
 
-        // Persist session for reconnect
-        if (config.storage) {
-          await config.storage.setItem('walletPair.session', s.serialize());
-        }
-
-        return { accounts, chainId };
+        return { accounts, chainId }
       },
 
       async disconnect() {
-        session?.close();
-        session = null;
-        provider = null;
+        session?.close()
+        session = null
+        provider = null
+        sessionEventsBound = false
         if (config.storage) {
-          await config.storage.removeItem('walletPair.session');
+          await config.storage.removeItem('walletPair.session')
         }
       },
 
       async getAccounts() {
-        return getOrCreateProvider().getAccounts();
+        return getOrCreateProvider(undefined, config).getAccounts()
       },
 
       async getChainId() {
-        return Number.parseInt(getOrCreateProvider().getChainId(), 16);
+        return Number.parseInt(getOrCreateProvider(undefined, config).getChainId(), 16)
       },
 
       async getProvider() {
-        return getOrCreateProvider();
+        return getOrCreateProvider(undefined, config)
       },
 
       async isAuthorized() {
-        if (!config.storage) return false;
-        const saved = await config.storage.getItem('walletPair.session');
-        if (!saved) return false;
-        return getOrCreateSession().restore(saved);
+        if (!config.storage) return false
+        return getOrCreateSession(config).restoreFromPersistence()
       },
 
       onAccountsChanged(accounts: string[]) {
-        config.emitter.emit('change', { accounts });
+        config.emitter.emit('change', { accounts })
       },
 
       onChainChanged(chainId: string) {
-        config.emitter.emit('change', { chainId: Number.parseInt(chainId, 16) });
+        config.emitter.emit('change', { chainId: Number.parseInt(chainId, 16) })
       },
 
       onDisconnect() {
-        config.emitter.emit('disconnect', undefined as never);
+        config.emitter.emit('disconnect', undefined as never)
       },
 
       async switchChain(params) {
-        const p = getOrCreateProvider();
+        const p = getOrCreateProvider(undefined, config)
         await p.request({
           method: 'wallet_switchEthereumChain',
           params: [{ chainId: `0x${params.chainId.toString(16)}` }],
-        });
-        config.emitter.emit('change', { chainId: params.chainId });
-        const chain = config.chains.find(c => c.id === params.chainId);
-        if (!chain) throw new Error(`Chain ${params.chainId} not configured`);
-        return chain;
+        })
+        config.emitter.emit('change', { chainId: params.chainId })
+        const chain = config.chains.find((c) => c.id === params.chainId)
+        if (!chain) throw new Error(`Chain ${params.chainId} not configured`)
+        return chain
       },
-    };
-  };
+    }
+  }
 }

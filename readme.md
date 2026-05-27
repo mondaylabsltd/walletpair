@@ -66,24 +66,34 @@ npm install && npm link
 ```typescript
 import { DAppSession, WebSocketTransport } from 'walletpair-sdk';
 
-const transport = new WebSocketTransport({
-  url: 'wss://relay.walletpair.org/v1',
-  subprotocol: 'walletpair.v1',
+const transport = new WebSocketTransport('wss://relay.walletpair.org/v1');
+const session = new DAppSession({
+  transport,
+  meta: {
+    name: 'My dApp',
+    description: 'Example dApp',
+    url: 'https://dapp.example',
+    icon: 'https://dapp.example/icon.png',
+  },
+  methods: ['wallet_getAccounts', 'wallet_sendTransaction', 'wallet_signMessage'],
+  chains: ['eip155:1', 'eip155:137'],
+  persistence: {
+    save: (snapshot) => localStorage.setItem('walletpair.session', snapshot),
+    load: () => localStorage.getItem('walletpair.session'),
+    clear: () => localStorage.removeItem('walletpair.session'),
+  },
 });
-const session = new DAppSession(transport);
 
 // Create pairing - display URI as QR code
-const uri = await session.createPairing({
-  methods: ['wallet_sendTransaction', 'wallet_signMessage'],
-  chains: ['eip155:1', 'eip155:137'],
-});
+const uri = await session.createPairing();
 
 session.on('sessionFingerprint', (fingerprint) => {
   console.log('Session fingerprint (verify matches wallet):', fingerprint);
 });
 
-session.on('ready', async () => {
-  const result = await session.call('wallet_getAccounts');
+session.on('phase', async (phase) => {
+  if (phase !== 'connected') return;
+  const result = await session.request('wallet_getAccounts');
   console.log('Accounts:', result);
 });
 ```
@@ -93,11 +103,26 @@ session.on('ready', async () => {
 ```typescript
 import { WalletSession, WebSocketTransport } from 'walletpair-sdk';
 
-const transport = new WebSocketTransport({
-  url: 'wss://relay.walletpair.org/v1',
-  subprotocol: 'walletpair.v1',
+const transport = new WebSocketTransport('wss://relay.walletpair.org/v1');
+const session = new WalletSession({
+  transport,
+  capabilities: {
+    methods: ['wallet_getAccounts', 'wallet_sendTransaction', 'wallet_signMessage'],
+    events: ['accountsChanged', 'chainChanged'],
+    chains: ['eip155:1', 'eip155:137'],
+  },
+  meta: {
+    name: 'My Wallet',
+    description: 'Example wallet',
+    url: 'https://wallet.example',
+    icon: 'https://wallet.example/icon.png',
+  },
+  persistence: {
+    save: (snapshot) => secureStore.set('walletpair.session', snapshot),
+    load: () => secureStore.get('walletpair.session'),
+    clear: () => secureStore.delete('walletpair.session'),
+  },
 });
-const session = new WalletSession(transport);
 
 // Parse scanned QR code and join
 await session.prepareJoin(pairingUri);
@@ -108,7 +133,7 @@ await session.confirmJoin();
 
 session.on('request', async (req) => {
   // Review and respond to requests
-  await session.sendResponse(req.id, true, { accounts: ['0x...'] });
+  await session.approve(req.id, { accounts: ['0x...'] });
 });
 ```
 
@@ -199,7 +224,11 @@ Docker support is planned but not yet available.
 
 ### Reconnection
 
-Sessions survive disconnects by re-running the create/join/accept flow on the same channel — the relay is stateless and needs no persistent storage. Sequence counters persist across reconnects to prevent nonce reuse. Wallets deduplicate retried requests using an idempotency cache keyed on request ID and params hash.
+Production reconnect requires durable `SessionPersistence` on both peers. The SDK persists full session snapshots write-ahead: after advancing `sendSeq`, it waits for `save()` to resolve before sending the encrypted `req`, `res`, or `evt`; after accepting an inbound sequence number, it persists `recvSeq` before resolving a response or emitting a request/event callback.
+
+Sessions survive disconnects by re-running the create/join/accept flow on the same channel. The relay is stateless and needs no persistent storage. Sequence counters must survive process termination; if persistence is unavailable or corrupted, the peer must start a fresh pairing instead of reconnecting. Wallets deduplicate retried requests using an idempotency cache keyed on request ID and params hash.
+
+The wagmi connector wires this automatically through `config.storage` and uses the stored snapshot when wagmi calls `connect({ isReconnecting: true })`.
 
 ## Tech Stack
 

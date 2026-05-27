@@ -8,16 +8,16 @@
 // Transport
 // ---------------------------------------------------------------------------
 
-export type TransportState = 'disconnected' | 'connecting' | 'connected';
+export type TransportState = 'disconnected' | 'connecting' | 'connected'
 
 export interface Transport {
-  readonly state: TransportState;
-  send(msg: ProtocolMessage): void;
-  connect(): Promise<void>;
-  disconnect(): void;
-  onMessage(handler: (msg: ProtocolMessage) => void): void;
-  onClose(handler: () => void): void;
-  onOpen(handler: () => void): void;
+  readonly state: TransportState
+  send(msg: ProtocolMessage): void
+  connect(): Promise<void>
+  disconnect(): void
+  onMessage(handler: (msg: ProtocolMessage) => void): void
+  onClose(handler: () => void): void
+  onOpen(handler: () => void): void
 }
 
 // ---------------------------------------------------------------------------
@@ -25,68 +25,74 @@ export interface Transport {
 // ---------------------------------------------------------------------------
 
 export interface ProtocolMessageBase {
-  v: 1;
-  t: string;
-  ch: string;
-  ts: number;
-  from: string;
-  body: Record<string, unknown>;
+  v: 1
+  t: string
+  ch: string
+  ts: number
+  from: string
+  body: Record<string, unknown>
 }
 
 export interface CreateMessage extends ProtocolMessageBase {
-  t: 'create';
-  body: { meta: DAppMeta };
+  t: 'create'
+  body: { meta: DAppMeta }
 }
 
 export interface JoinMessage extends ProtocolMessageBase {
-  t: 'join';
-  body: { sealed_join: string | null };
+  t: 'join'
+  body: { sealed_join: string | null }
 }
 
 export interface AcceptMessage extends ProtocolMessageBase {
-  t: 'accept';
-  body: { target: string };
+  t: 'accept'
+  body: { target: string }
 }
 
 export interface ReadyMessage extends ProtocolMessageBase {
-  t: 'ready';
-  body: { state: 'waiting' | 'connected'; role: 'dapp' | 'wallet'; self: string; remote: string | null; reconnect: boolean };
+  t: 'ready'
+  body: {
+    state: 'waiting' | 'connected'
+    role: 'dapp' | 'wallet'
+    self: string
+    remote: string | null
+    reconnect: boolean
+  }
 }
 
 export interface RequestMessage extends ProtocolMessageBase {
-  t: 'req';
-  body: { id: string; sealed: string };
+  t: 'req'
+  body: { id: string; sealed: string }
 }
 
 export interface ResponseMessage extends ProtocolMessageBase {
-  t: 'res';
-  body: { id: string; sealed: string };
+  t: 'res'
+  body: { id: string; sealed: string }
 }
 
 export interface EventMessage extends ProtocolMessageBase {
-  t: 'evt';
-  body: { id: string; sealed: string };
+  t: 'evt'
+  body: { id: string; sealed: string }
 }
 
 export interface PingMessage extends ProtocolMessageBase {
-  t: 'ping';
-  body: Record<string, never>;
+  t: 'ping'
+  body: Record<string, never>
 }
 
 export interface PongMessage extends ProtocolMessageBase {
-  t: 'pong';
-  body: Record<string, never>;
+  t: 'pong'
+  body: Record<string, never>
 }
 
 export interface CloseMessage extends ProtocolMessageBase {
-  t: 'close';
-  body: { reason: CloseReason };
+  t: 'close'
+  body: { reason: CloseReason }
 }
 
 export interface TerminateMessage extends ProtocolMessageBase {
-  t: 'terminate';
-  from: '_adapter';
-  body: { reason: CloseReason };
+  t: 'terminate'
+  from: '_adapter'
+  body: { reason: CloseReason }
 }
 
 export type ProtocolMessage =
@@ -100,7 +106,7 @@ export type ProtocolMessage =
   | PingMessage
   | PongMessage
   | CloseMessage
-  | TerminateMessage;
+  | TerminateMessage
 
 export type CloseReason =
   | 'normal'
@@ -116,7 +122,7 @@ export type CloseReason =
   | 'payload_too_large'
   | 'protocol_error'
   | 'unsupported_version'
-  | 'decryption_failed';
+  | 'decryption_failed'
 
 // ---------------------------------------------------------------------------
 // Capabilities & metadata (multi-chain via CAIP-2)
@@ -124,28 +130,28 @@ export type CloseReason =
 
 export interface Capabilities {
   /** Supported RPC methods (e.g. "wallet_getAccounts", "wallet_signMessage"). */
-  methods: string[];
+  methods: string[]
   /** Supported events (e.g. "accountsChanged", "chainChanged"). */
-  events: string[];
+  events: string[]
   /** CAIP-2 chain IDs (e.g. "eip155:1", "solana:mainnet"). */
-  chains: string[];
+  chains: string[]
   /** Sub-protocol version map (e.g. { evm: 1 }). §8 */
-  version?: Record<string, number> | undefined;
+  version?: Record<string, number> | undefined
 }
 
 export interface DAppMeta {
-  name: string;
-  description: string;
-  url: string;
-  icon: string;
+  name: string
+  description: string
+  url: string
+  icon: string
 }
 
 export interface WalletMeta {
-  name: string;
-  description: string;
-  url: string;
-  icon: string;
-  [key: string]: unknown;
+  name: string
+  description: string
+  url: string
+  icon: string
+  [key: string]: unknown
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +164,7 @@ export type DAppPhase =
   | 'pending_accept'
   | 'connected'
   | 'disconnected'
-  | 'closed';
+  | 'closed'
 
 export type WalletPhase =
   | 'idle'
@@ -166,29 +172,29 @@ export type WalletPhase =
   | 'waiting_accept'
   | 'connected'
   | 'disconnected'
-  | 'closed';
+  | 'closed'
 
 // ---------------------------------------------------------------------------
 // Session events
 // ---------------------------------------------------------------------------
 
 export interface DAppSessionEvents {
-  [key: string]: unknown;
-  phase: DAppPhase;
-  pairingUri: string;
-  sessionFingerprint: string;
-  walletJoined: { capabilities?: Capabilities | undefined; meta?: WalletMeta | undefined };
-  response: { id: string; ok: boolean; result: unknown };
-  event: { event: string; data: unknown };
-  error: Error;
+  [key: string]: unknown
+  phase: DAppPhase
+  pairingUri: string
+  sessionFingerprint: string
+  walletJoined: { capabilities?: Capabilities | undefined; meta?: WalletMeta | undefined }
+  response: { id: string; ok: boolean; result: unknown }
+  event: { event: string; data: unknown }
+  error: Error
 }
 
 export interface WalletSessionEvents {
-  [key: string]: unknown;
-  phase: WalletPhase;
-  sessionFingerprint: string;
-  request: { id: string; method: string; params: unknown };
-  error: Error;
+  [key: string]: unknown
+  phase: WalletPhase
+  sessionFingerprint: string
+  request: { id: string; method: string; params: unknown }
+  error: Error
 }
 
 // ---------------------------------------------------------------------------
@@ -196,19 +202,19 @@ export interface WalletSessionEvents {
 // ---------------------------------------------------------------------------
 
 export interface PairingParams {
-  ch: string;
-  pubkey: string;
+  ch: string
+  pubkey: string
   /** Empty string = BLE mode (no relay). */
-  relay: string;
-  name: string;
+  relay: string
+  name: string
   /** DApp website URL. */
-  url: string;
+  url: string
   /** DApp icon URL. */
-  icon: string;
+  icon: string
   /** Methods the dApp intends to call (§9.1). */
-  methods?: string[] | undefined;
+  methods?: string[] | undefined
   /** CAIP-2 chains the dApp intends to use (§9.1). */
-  chains?: string[] | undefined;
+  chains?: string[] | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -216,11 +222,24 @@ export interface PairingParams {
 // ---------------------------------------------------------------------------
 
 export interface PendingRequest {
-  id: string;
-  method: string;
-  resolve: (result: unknown) => void;
-  reject: (error: Error) => void;
-  timer?: ReturnType<typeof setTimeout>;
+  id: string
+  method: string
+  resolve: (result: unknown) => void
+  reject: (error: Error) => void
+  timer?: ReturnType<typeof setTimeout>
+}
+
+export interface SessionPersistence {
+  /**
+   * Persist a complete serialized session snapshot. Implementations used for
+   * reconnect MUST make this durable before resolving; the SDK calls this
+   * before sending each encrypted message after advancing `sendSeq`.
+   */
+  save(snapshot: string): void | Promise<void>
+  /** Load the most recent durable snapshot. */
+  load?(): string | null | Promise<string | null>
+  /** Remove the durable snapshot when the channel closes. */
+  clear?(): void | Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -228,29 +247,33 @@ export interface PendingRequest {
 // ---------------------------------------------------------------------------
 
 export interface DAppSessionOptions {
-  transport: Transport;
+  transport: Transport
   /** DApp metadata (name, description, url, icon). Included in pairing URI and create message. */
-  meta: DAppMeta;
+  meta: DAppMeta
   /** Methods the dApp intends to call (included in pairing URI §9.1). */
-  methods?: string[] | undefined;
+  methods?: string[] | undefined
   /** CAIP-2 chains the dApp intends to use (included in pairing URI §9.1). */
-  chains?: string[] | undefined;
+  chains?: string[] | undefined
   /** Request timeout in ms (default 120_000). */
-  requestTimeout?: number | undefined;
+  requestTimeout?: number | undefined
   /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 16. */
-  sessionTtl?: number | undefined;
+  sessionTtl?: number | undefined
   /** Auto-accept known wallets on rejoin (default true). */
-  autoAccept?: boolean | undefined;
+  autoAccept?: boolean | undefined
+  /** Durable snapshot persistence for reconnect and write-ahead counters. */
+  persistence?: SessionPersistence | undefined
 }
 
 export interface WalletSessionOptions {
-  transport: Transport;
+  transport: Transport
   /** Wallet capabilities to advertise. */
-  capabilities: Capabilities;
+  capabilities: Capabilities
   /** Wallet metadata (name, description, url, icon). */
-  meta: WalletMeta;
+  meta: WalletMeta
   /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 16. */
-  sessionTtl?: number | undefined;
+  sessionTtl?: number | undefined
+  /** Durable snapshot persistence for reconnect and write-ahead counters. */
+  persistence?: SessionPersistence | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -259,24 +282,24 @@ export interface WalletSessionOptions {
 
 /** Parse CAIP-2 chain ID into namespace and reference. */
 export function parseChainId(caip2: string): { namespace: string; reference: string } {
-  const [namespace, reference] = caip2.split(':');
-  if (!namespace || !reference) throw new Error(`Invalid CAIP-2 chain ID: ${caip2}`);
-  return { namespace, reference };
+  const [namespace, reference] = caip2.split(':')
+  if (!namespace || !reference) throw new Error(`Invalid CAIP-2 chain ID: ${caip2}`)
+  return { namespace, reference }
 }
 
 /** Build CAIP-2 chain ID from namespace and reference. */
 export function formatChainId(namespace: string, reference: string): string {
-  return `${namespace}:${reference}`;
+  return `${namespace}:${reference}`
 }
 
 /** Convert EVM numeric chain ID to CAIP-2. */
 export function evmChainId(id: number): string {
-  return `eip155:${id}`;
+  return `eip155:${id}`
 }
 
 /** Extract EVM numeric chain ID from CAIP-2. Returns null if not eip155. */
 export function evmNumericChainId(caip2: string): number | null {
-  const { namespace, reference } = parseChainId(caip2);
-  if (namespace !== 'eip155') return null;
-  return Number.parseInt(reference, 10);
+  const { namespace, reference } = parseChainId(caip2)
+  if (namespace !== 'eip155') return null
+  return Number.parseInt(reference, 10)
 }
