@@ -1,6 +1,6 @@
 # WalletPair Protocol v1
 
-Status: Draft
+Status: Release Candidate
 
 WalletPair is a minimal, permissionless two-party channel protocol for
 connecting dApps and wallets. All payloads are end-to-end encrypted. The
@@ -438,6 +438,12 @@ DApp processing:
   wallet's `from` key.
 - Parse first 12 bytes as nonce, decrypt remainder.
 - Decryption failure -> close with `decryption_failed`.
+- Decryption success proves that the sender controls the private key
+  corresponding to `from` and used the dApp public key from the pairing
+  URI. It does **not** prove that the sender is the intended user's
+  wallet; a malicious relay can create its own wallet key pair and cause
+  a denial-of-service or connect the dApp to an attacker-controlled
+  wallet identity.
 - Use decrypted capabilities and meta for transcript hash and traffic
   key derivation.
 
@@ -619,9 +625,12 @@ Adapter forwards `join` to dApp and replies to wallet with
 
 **Step 3: DApp accepts.**
 
-DApp decrypts `sealed_join`. Successful decryption authenticates the
-wallet (it obtained dApp's public key from QR code). DApp MAY
-auto-accept.
+DApp decrypts `sealed_join`. Successful decryption binds the join to the
+pairing URI and to the wallet public key in `from`; it does not by
+itself authenticate a real-world wallet vendor or user identity. The
+dApp MAY auto-accept, but applications that need user identity MUST
+verify accounts or signatures through encrypted methods after the
+session connects.
 
 ```json
 {
@@ -1081,7 +1090,7 @@ The relay or transport may be compromised. It MUST NOT be able to:
 |--------|-----------|
 | Eavesdropping | E2E encryption (X25519 + ChaCha20-Poly1305). |
 | Man-in-the-middle | Out-of-band key delivery (QR); session fingerprint (Section 6.3); `sealed_join` binds wallet to QR-scanned key. |
-| Peer impersonation | Peer ID = X25519 public key; end-to-end AEAD verification on reconnect. |
+| Peer impersonation | Peer ID = X25519 public key; end-to-end AEAD verification after pairing and on reconnect. Initial wallet joins can be squatted by a relay-created key pair, which is treated as denial-of-service or connection to an attacker-controlled wallet identity, not compromise of the user's wallet keys. |
 | Replay | Sequence-number nonce; reject non-increasing seq. |
 | Channel hijack | Channel ID = 256-bit random. |
 | Relay compromise | Relay sees only encrypted blobs and routing metadata. `_ok` status is encrypted. |
@@ -1094,6 +1103,9 @@ The relay or transport may be compromised. It MUST NOT be able to:
 4. Reject messages with non-increasing sequence numbers.
 5. Relay MUST NOT log or store `sealed` content.
 6. Sequence counters MUST NEVER be reset for a given traffic key.
+7. Applications MUST NOT treat initial `join` as proof of user identity.
+   User identity and account ownership must be established through
+   encrypted wallet methods and user-approved signatures where needed.
 
 ### 19.4 Privacy
 

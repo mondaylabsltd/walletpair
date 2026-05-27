@@ -313,6 +313,8 @@ describe('buildPairingUri', () => {
       pubkeyB64: 'AQID',
       relayUrl: 'wss://relay.example.com/v1',
       name: 'My dApp',
+      url: 'https://dapp.example.com',
+      icon: 'https://dapp.example.com/icon.png',
     });
     expect(uri).toContain('walletpair:?ch=abcd1234');
     expect(uri).toContain('&pubkey=AQID');
@@ -373,6 +375,8 @@ describe('parsePairingUri', () => {
       pubkeyB64: b64urlEncode(generateX25519KeyPair().publicKey),
       relayUrl: 'wss://relay.walletpair.org/v1',
       name: 'Test dApp',
+      url: 'https://dapp.example.com',
+      icon: 'https://dapp.example.com/icon.png',
     };
     const uri = buildPairingUri(original);
     const parsed = parsePairingUri(uri);

@@ -418,6 +418,7 @@ describe('WalletSession', () => {
       const idleSession = new WalletSession({
         transport: new MockTransport(),
         capabilities: { methods: [], events: [], chains: [] },
+        meta: { name: 'Test Wallet', description: 'Test', url: 'https://wallet.test', icon: 'https://wallet.test/icon.png' },
       });
       idleSession.pushEvent('test', {});
       // Should not throw, just no-op

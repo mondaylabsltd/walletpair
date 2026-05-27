@@ -62,16 +62,24 @@ cannot intercept. This is why QR is the mandatory primary pairing method.
 ### 3.2 sealed_join as Cryptographic Proof
 
 When the dApp receives `join` and successfully decrypts `sealed_join`,
-this proves the wallet possesses the dApp's public key. The wallet could
-only obtain this key from the QR code. A relay-positioned attacker
-cannot forge a valid `sealed_join` because:
+this proves the sender controls the private key corresponding to the
+`from` public key and used the dApp public key from the pairing URI. It
+also detects relay tampering with the wallet public key in transit.
 
 ```text
-Attacker does not have dapp_private_key
-→ Cannot compute shared_secret with wallet
-→ Cannot derive join_encryption_key
-→ Cannot encrypt a valid sealed_join that dApp can decrypt
+Relay substitutes wallet key in forwarded join
+→ dApp and real wallet compute different shared_secret
+→ different join_encryption_key
+→ sealed_join decryption fails
 ```
+
+It does not prove that the sender is the intended user's wallet. A
+malicious relay can see the dApp public key in `create`, generate its
+own wallet key pair, and send a valid `join`. This cannot give the relay
+the user's blockchain private keys or signatures, but it can squat the
+channel or connect the dApp to an attacker-controlled wallet identity.
+Applications that need user identity must verify accounts or signatures
+after the encrypted session is established.
 
 ### 3.3 Half-MITM Attack (Relay Substitutes Wallet Key)
 

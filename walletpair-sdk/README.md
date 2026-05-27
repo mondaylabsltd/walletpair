@@ -8,7 +8,7 @@ TypeScript SDK for the [WalletPair Protocol](../walletpair-protocol-v1.md) -- co
 - **EVM support** -- EIP-1193 provider + wagmi connector (under `walletpair-sdk/evm`)
 - **Transport-agnostic** -- WebSocket relay and Web Bluetooth (BLE) transports included, pluggable `Transport` interface for custom transports
 - **End-to-end encrypted** -- X25519 key exchange + ChaCha20-Poly1305 AEAD, relay never sees payload content
-- **Session persistence** -- `serialize()` / `restore()` for page reload survival
+- **Session snapshots** -- `serialize()` / `restore()` for controlled reconnect flows; production crash recovery requires write-ahead counter persistence
 - **Zero native dependencies** -- pure JS crypto via [noble](https://github.com/paulmillr/noble-curves) libraries
 
 ## Architecture
@@ -135,7 +135,10 @@ import { DAppSession, WebSocketTransport } from 'walletpair-sdk'
 import { WalletPairProvider } from 'walletpair-sdk/evm'
 
 const transport = new WebSocketTransport('wss://relay.walletpair.org/v1')
-const session = new DAppSession({ transport })
+const session = new DAppSession({
+  transport,
+  meta: { name: 'My dApp', description: 'Example dApp', url: 'https://example.com', icon: 'https://example.com/icon.png' },
+})
 const provider = new WalletPairProvider({ session, chainId: 1 })
 
 // Use like any EIP-1193 provider
@@ -160,7 +163,7 @@ const config = createConfig({
   connectors: [
     walletPair({
       relayUrl: 'wss://relay.walletpair.org/v1',
-      name: 'My dApp',
+      meta: { name: 'My dApp', description: 'Example dApp', url: 'https://example.com', icon: 'https://example.com/icon.png' },
       onPairingUri: (uri) => {
         // Display QR code with this URI
         showQrCode(uri)
@@ -186,7 +189,10 @@ import { WebBleCentralTransport, isWebBleSupported } from 'walletpair-sdk/ble'
 
 if (isWebBleSupported()) {
   const transport = new WebBleCentralTransport()
-  const session = new DAppSession({ transport })
+  const session = new DAppSession({
+    transport,
+    meta: { name: 'My dApp', description: 'Example dApp', url: 'https://example.com', icon: 'https://example.com/icon.png' },
+  })
 
   // BLE pairing URI has no relay parameter
   const uri = await session.createPairing()
@@ -194,9 +200,19 @@ if (isWebBleSupported()) {
 }
 ```
 
-## Session Persistence
+## Session Snapshots
 
-Sessions can survive page reloads:
+`serialize()` and `restore()` can be used in controlled reconnect flows,
+but they are not enough for production crash recovery by themselves. The
+protocol requires sequence counters to be persisted before every encrypted
+send. A crash after sending but before saving a new snapshot can roll back a
+counter and cause nonce reuse with the same traffic key.
+
+For production, persist `{ traffic_keys, sendSeq, recvSeq }` with a
+write-ahead store before each send, or disable reconnect after process/page
+termination and require fresh pairing.
+
+Demo-only page reload snapshot:
 
 ```ts
 // Save before unload
@@ -230,8 +246,8 @@ new DAppSession({ transport, meta: { name, description, url, icon }, requestTime
 | `ping()` | Send heartbeat ping |
 | `close()` | Gracefully close session |
 | `destroy()` | Close + remove all event listeners |
-| `serialize(): string` | Serialize session state for persistence |
-| `restore(json): boolean` | Restore session from serialized state |
+| `serialize(): string` | Serialize a session snapshot |
+| `restore(json): boolean` | Restore a session snapshot |
 | `reconnect(): Promise<void>` | Reconnect after restore |
 
 **Events:**
@@ -263,7 +279,7 @@ new WalletSession({ transport, capabilities, meta: { name, description, url, ico
 | `ping()` | Send heartbeat ping |
 | `close()` | Gracefully close session |
 | `destroy()` | Close + remove all event listeners |
-| `serialize()` / `restore(json)` | Session persistence |
+| `serialize()` / `restore(json)` | Session snapshot/restore |
 
 **Events:**
 
@@ -345,7 +361,7 @@ import { walletPair } from 'walletpair-sdk/evm/wagmi'
 
 walletPair({
   relayUrl: string,          // WebSocket relay URL
-  meta?: { name, description, url, icon }, // DApp metadata (all required)
+  meta: { name, description, url, icon }, // DApp metadata
   requestTimeout?: number,   // Request timeout in ms
   onPairingUri?: (uri) => void,            // QR code display callback
   onSessionFingerprint?: (fingerprint) => void, // Session fingerprint display callback

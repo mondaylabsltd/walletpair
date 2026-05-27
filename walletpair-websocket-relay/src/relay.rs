@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::metrics::Metrics;
 use crate::protocol::{
-    self, build_ready_connected, build_ready_waiting, build_terminate, build_terminate_with_target,
+    build_ready_connected, build_ready_waiting, build_terminate, build_terminate_with_target,
     ClientMessage, CloseReason, PeerId, Role,
 };
 use crate::state::{Channel, ChannelState, PeerConn};
@@ -142,6 +142,7 @@ fn handle_create(
     ProcessResult::OkCreated
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_join(
     store: &mut ChannelStore,
     conn_id: u64,
@@ -446,6 +447,7 @@ fn handle_close(
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::protocol;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
 

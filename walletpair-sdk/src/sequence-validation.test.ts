@@ -439,7 +439,7 @@ describe('Sequence validation', () => {
       // Serialize and restore
       const json = session.serialize();
       const newTransport = new MockTransport();
-      const restored = new DAppSession({ transport: newTransport });
+      const restored = new DAppSession({ transport: newTransport, meta: { name: 'Test dApp', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' } });
       expect(restored.restore(json)).toBe(true);
 
       // Manually set phase to connected so we can send requests

@@ -78,7 +78,14 @@ function setupWalletManual() {
 
 async function connectWalletManual(ctx: ReturnType<typeof setupWalletManual>) {
   const { transport, session, dappKp, channelId } = ctx;
-  const uri = buildPairingUri({ channelId, pubkeyB64: dappKp.publicKeyB64, relayUrl: 'ws://localhost/v1' });
+  const uri = buildPairingUri({
+    channelId,
+    pubkeyB64: dappKp.publicKeyB64,
+    relayUrl: 'ws://localhost/v1',
+    name: 'Test dApp',
+    url: 'https://dapp.test',
+    icon: 'https://dapp.test/icon.png',
+  });
   await session.joinFromUri(uri);
 
   transport.receive({

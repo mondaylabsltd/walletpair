@@ -304,7 +304,7 @@ pub fn parse_message(raw: &str) -> Result<ClientMessage, ParseError> {
             if !body.contains_key("sealed_join") {
                 return Err(ParseError::MissingField("body.sealed_join"));
             }
-            let sealed_join_null = body.get("sealed_join").map_or(false, |v| v.is_null());
+            let sealed_join_null = body.get("sealed_join").is_some_and(|v| v.is_null());
             Ok(ClientMessage::Join { ch, from, sealed_join_null })
         }
         "accept" => {

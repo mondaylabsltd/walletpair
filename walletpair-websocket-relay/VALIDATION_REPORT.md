@@ -1,5 +1,10 @@
 # WalletPair WebSocket Relay — Validation Report
 
+> Historical report: this document records the 2026-05-19 validation run.
+> Some findings and line references may be stale after subsequent fixes. Re-run
+> `cargo test` and `cargo clippy --all-targets --all-features -- -D warnings`
+> for the current relay state.
+
 **Date:** 2026-05-19
 **Validator:** Independent protocol/reliability/performance review
 **Relay version:** 0.1.0 (commit 9394ebd)

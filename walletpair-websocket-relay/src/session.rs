@@ -23,6 +23,7 @@ struct SessionBinding {
 }
 
 /// Handle a single WebSocket connection.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_ws(
     ws: WebSocket,
     conn_id: u64,

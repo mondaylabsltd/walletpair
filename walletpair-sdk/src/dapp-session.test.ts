@@ -127,7 +127,7 @@ describe('DAppSession', () => {
 
       expect(handler).toHaveBeenCalledWith({
         capabilities: expect.objectContaining({ methods: expect.any(Array) }),
-        meta: { name: 'Test Wallet' },
+        meta: expect.objectContaining({ name: 'Test Wallet' }),
       });
     });
   });
@@ -413,13 +413,13 @@ describe('DAppSession', () => {
       expect(json).toBeTruthy();
 
       const newTransport = new MockTransport();
-      const restored = new DAppSession({ transport: newTransport });
+      const restored = new DAppSession({ transport: newTransport, meta: { name: 'Test dApp', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' } });
       expect(restored.restore(json)).toBe(true);
       expect(restored.channelId).toBe(session.channelId);
     });
 
     it('returns false for invalid JSON', () => {
-      const s = new DAppSession({ transport: new MockTransport() });
+      const s = new DAppSession({ transport: new MockTransport(), meta: { name: 'Test dApp', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' } });
       expect(s.restore('not json')).toBe(false);
       expect(s.restore('{}')).toBe(false);
       expect(s.restore('{"channelId":"abc"}')).toBe(false); // missing privKey

@@ -100,9 +100,17 @@ Sec-WebSocket-Protocol: walletpair.v1
 {
   "v": 1,
   "t": "create",
-  "ch": "a]1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "ch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ts": 1779170000000,
   "from": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-  "pubkey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+  "body": {
+    "meta": {
+      "name": "Example dApp",
+      "description": "Example",
+      "url": "https://example.com",
+      "icon": "https://example.com/icon.png"
+    }
+  }
 }
 ```
 
@@ -112,11 +120,16 @@ Relay responds:
 {
   "v": 1,
   "t": "ready",
-  "ch": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-  "state": "waiting",
-  "role": "dapp",
-  "self": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-  "reconnect": false
+  "ch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ts": 1779170000000,
+  "from": "_adapter",
+  "body": {
+    "state": "waiting",
+    "role": "dapp",
+    "self": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "remote": null,
+    "reconnect": false
+  }
 }
 ```
 
@@ -126,10 +139,12 @@ Relay responds:
 {
   "v": 1,
   "t": "join",
-  "ch": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "ch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ts": 1779170000000,
   "from": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
-  "pubkey": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
-  "capabilities": { "methods": ["eth_signTransaction"], "events": ["chainChanged"], "chains": ["eip155:1"] }
+  "body": {
+    "sealed_join": "<base64url-encrypted-capabilities-and-meta>"
+  }
 }
 ```
 
@@ -141,9 +156,12 @@ Relay forwards the raw `join` message to the dApp and sends `ready` (state: `wai
 {
   "v": 1,
   "t": "accept",
-  "ch": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "ch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ts": 1779170000000,
   "from": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-  "target": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+  "body": {
+    "target": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+  }
 }
 ```
 
@@ -155,11 +173,13 @@ Relay sends `ready` (state: `connected`) to both peers.
 {
   "v": 1,
   "t": "req",
-  "ch": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-  "id": "req-001",
+  "ch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ts": 1779170000000,
   "from": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-  "method": "eth_signTransaction",
-  "sealed": "<base64url-encrypted-payload>"
+  "body": {
+    "id": "req-001",
+    "sealed": "<base64url-encrypted-payload>"
+  }
 }
 ```
 
@@ -171,10 +191,13 @@ Relay forwards the raw JSON verbatim to the wallet. The `sealed` field is never 
 {
   "v": 1,
   "t": "res",
-  "ch": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-  "id": "req-001",
+  "ch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "ts": 1779170000000,
   "from": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
-  "sealed": "<base64url-encrypted-payload>"
+  "body": {
+    "id": "req-001",
+    "sealed": "<base64url-encrypted-payload>"
+  }
 }
 ```
 
@@ -218,11 +241,18 @@ All metrics use the `walletpair_` prefix.
 
 ## Known protocol issues
 
-**CRITICAL: Nonce reuse vulnerability in the protocol specification.**
-Both peers derive AEAD nonces from `HMAC-SHA256(session_key, seq_bytes)`, but both start their sequence counter at 0 using the same `session_key`. Since both the key and nonce are identical for the first message from each direction, AEAD security guarantees are broken (an attacker observing both ciphertexts can XOR them to recover the XOR of the plaintexts). The fix is to include a direction byte in the nonce derivation (e.g., prefix the HMAC input with `0x00` for dApp-to-wallet and `0x01` for wallet-to-dApp). This relay is unaffected because it never decrypts `sealed` payloads, but **client implementations must be aware of this issue**.
-
 **The `from` field is self-reported and not cryptographically authenticated by the relay.**
-A malicious client can set any `from` value. The relay validates only that `from` is a syntactically valid base64url-encoded 32-byte value and that `from == pubkey` in `create`/`join` messages. It does not verify that the sender possesses the corresponding private key. Authentication of peer identity is the responsibility of the end-to-end encryption layer.
+A malicious client can set any syntactically valid `from` value. The relay
+does not verify possession of the corresponding private key. Peer identity is
+verified end-to-end by the SDK through `sealed_join`, directional traffic keys,
+AAD binding, and sequence counters.
+
+**Initial wallet join is not user identity proof.**
+A relay can generate its own wallet key pair and send a valid first `join`.
+That can squat the channel or connect the dApp to an attacker-controlled wallet
+identity, but it cannot produce the user's blockchain signatures. dApps that
+need user identity must verify accounts or signatures through encrypted wallet
+methods after the session connects.
 
 ## Testing
 
@@ -239,7 +269,7 @@ This runs 34 unit tests and 22 integration tests. Tests use random ports (bindin
 Add JSON message fixtures to the test helper functions (see `tests/integration.rs` and the `#[cfg(test)]` modules in source files). Use `protocol::parse_message()` to validate that fixtures parse correctly:
 
 ```rust
-let raw = r#"{"v":1,"t":"create","ch":"aa...(64 hex)","from":"...","pubkey":"..."}"#;
+let raw = r#"{"v":1,"t":"create","ch":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ts":1779170000000,"from":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","body":{"meta":{"name":"Test","description":"Test","url":"https://example.com","icon":"https://example.com/icon.png"}}}"#;
 let msg = protocol::parse_message(raw).expect("fixture should parse");
 assert!(matches!(msg, protocol::ClientMessage::Create { .. }));
 ```

@@ -18,7 +18,12 @@ export const DEFAULT_TEST_CAPABILITIES: Capabilities = {
   chains: ['eip155:1'],
 };
 
-export const DEFAULT_TEST_WALLET_META: WalletMeta = { name: 'Test Wallet' };
+export const DEFAULT_TEST_WALLET_META: WalletMeta = {
+  name: 'Test Wallet',
+  description: 'Test wallet',
+  url: 'https://wallet.test',
+  icon: 'https://wallet.test/icon.png',
+};
 
 export function makeSealedJoin(
   channelId: string,
