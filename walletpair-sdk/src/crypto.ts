@@ -74,7 +74,18 @@ export function computeSharedSecret(
   myPrivateKey: Uint8Array,
   remotePubKey: Uint8Array,
 ): Uint8Array {
-  return x25519.getSharedSecret(myPrivateKey, remotePubKey);
+  if (remotePubKey.length !== 32) {
+    throw new Error('Remote public key must be exactly 32 bytes');
+  }
+  const shared = x25519.getSharedSecret(myPrivateKey, remotePubKey);
+  // RFC 7748 §6: low-order points produce all-zero output — reject to
+  // prevent invalid key derivation.
+  let acc = 0;
+  for (let i = 0; i < shared.length; i++) acc |= shared[i]!;
+  if (acc === 0) {
+    throw new Error('X25519 produced all-zero shared secret (low-order public key)');
+  }
+  return shared;
 }
 
 export function deriveSessionKey(

@@ -221,6 +221,17 @@ root_key = HKDF-SHA256(
 )[0:32]
 ```
 
+**Input validation (MUST):**
+
+- The remote public key MUST be exactly 32 bytes. Reject otherwise.
+- After computing the X25519 shared secret, implementations MUST
+  perform a constant-time check that the result is not all-zero.
+  An all-zero shared secret indicates that the remote public key is a
+  low-order point (see RFC 7748 §6). If the check fails, abort the
+  handshake immediately and close the channel.
+- Implementations MUST NOT continue key derivation with a shared
+  secret that is all-zero bytes.
+
 Transcript hash (computed after `join` is received by dApp / sent by
 wallet):
 
@@ -271,14 +282,18 @@ join_encryption_key = HKDF-SHA256(
 
 #### Canonical JSON
 
-Deterministic JSON serialization, compatible with RFC 8785 (JCS):
+Deterministic JSON serialization, compatible with RFC 8785 (JCS) and
+conforming to I-JSON (RFC 7493):
 
 1. **Object keys** are sorted lexicographically by their UTF-8 byte
    representation (not by Unicode code point — in practice these are
    identical for ASCII keys used in this protocol).
 2. **No insignificant whitespace** — no spaces after `:` or `,`, no
    newlines or indentation.
-3. **`undefined`** is represented as `null`.
+3. **Duplicate object member names MUST be rejected.** Per RFC 7493
+   (I-JSON) and RFC 8259, duplicate names produce unpredictable parsing
+   behaviour. Implementations MUST NOT produce duplicate keys, and
+   MUST reject inputs that contain duplicate keys at any nesting level.
 4. **Numbers** use the shortest decimal representation with no trailing
    zeroes (e.g., `1` not `1.0`, `0` not `0.0`). No leading zeroes. No
    `+` prefix. Negative zero is serialized as `0`.
@@ -288,6 +303,9 @@ Deterministic JSON serialization, compatible with RFC 8785 (JCS):
    escapes (`\"`, `\\`, `\/`, `\b`, `\f`, `\n`, `\r`, `\t`) use the
    short form. Forward slash `/` MUST NOT be escaped.
 6. **`null`**, **`true`**, **`false`** use their literal JSON forms.
+   Values that are absent or not applicable MUST be omitted from the
+   object entirely rather than included as `null`, unless the field
+   is explicitly defined as nullable in this specification.
 7. Sorting is recursive: nested objects also have their keys sorted.
 
 Implementations MUST verify their canonical JSON output matches these
@@ -484,14 +502,18 @@ The wallet declares its granted session scope inside `sealed_join`:
 Maps sub-protocol namespace to integer version. If absent, assume
 version 1 for all declared namespaces.
 
-**Wallet `meta` fields** (all required):
+**Wallet `meta` fields:**
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | yes | Wallet display name. |
-| `description` | yes | Short description. |
-| `url` | yes | Wallet website URL. |
-| `icon` | yes | Wallet icon URL. MUST be `https:`. |
+| `description` | no | Short description. |
+| `url` | no | Wallet website URL. |
+| `icon` | no | Wallet icon URL. If present, MUST be `https:`. |
+
+Only `name` is required. DApp implementations SHOULD display
+whichever fields are present and gracefully handle missing optional
+fields.
 
 ### 7.1 Scope Enforcement
 
@@ -543,7 +565,7 @@ walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-perc
 |-------|----------|-------------|
 | `ch` | yes | Channel ID (hex, 64 chars). |
 | `pubkey` | yes | DApp X25519 public key (base64url, no padding). |
-| `relay` | yes (relay transport) | WebSocket relay URL (percent-encoded). |
+| `relay` | conditional | WebSocket relay URL (percent-encoded). MUST be present when the relay transport is used. MUST be omitted when using a direct transport (e.g., BLE). |
 | `name` | yes | DApp display name. |
 | `url` | yes | DApp website URL (percent-encoded). |
 | `icon` | yes | DApp icon URL (percent-encoded). MUST be `https:`. |

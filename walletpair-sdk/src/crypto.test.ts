@@ -131,6 +131,21 @@ describe('key exchange', () => {
 
     expect(bytesToHex(sk1)).not.toBe(bytesToHex(sk2));
   });
+
+  it('rejects remote public key that is not 32 bytes', () => {
+    const alice = generateX25519KeyPair();
+    expect(() => computeSharedSecret(alice.privateKey, new Uint8Array(31))).toThrow('32 bytes');
+    expect(() => computeSharedSecret(alice.privateKey, new Uint8Array(33))).toThrow('32 bytes');
+    expect(() => computeSharedSecret(alice.privateKey, new Uint8Array(0))).toThrow('32 bytes');
+  });
+
+  it('rejects all-zero public key (low-order point)', () => {
+    const alice = generateX25519KeyPair();
+    const zeroKey = new Uint8Array(32); // all zeros — low-order point
+    // Noble library rejects this at the X25519 level; our wrapper also
+    // has an explicit all-zero check for libraries that don't.
+    expect(() => computeSharedSecret(alice.privateKey, zeroKey)).toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
