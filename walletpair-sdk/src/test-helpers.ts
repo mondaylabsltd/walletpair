@@ -18,6 +18,15 @@ export const DEFAULT_TEST_CAPABILITIES: Capabilities = {
   chains: ['eip155:1'],
 };
 
+/** Extract the JSON payload from a signed or unsigned snapshot string. */
+export function parseSnapshot(signed: string): Record<string, unknown> {
+  // Signed format: "<64-hex-mac>.<json>"
+  if (signed.length > 65 && signed[64] === '.') {
+    return JSON.parse(signed.slice(65));
+  }
+  return JSON.parse(signed);
+}
+
 export const DEFAULT_TEST_WALLET_META: WalletMeta = {
   name: 'Test Wallet',
   description: 'Test wallet',

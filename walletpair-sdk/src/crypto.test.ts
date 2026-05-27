@@ -19,6 +19,8 @@ import {
   hexToBytes,
   constantTimeEqual,
   canonicalJson,
+  signSnapshot,
+  verifySnapshot,
 } from './crypto.js';
 
 // ---------------------------------------------------------------------------
@@ -486,6 +488,64 @@ describe('computeSessionFingerprint edge cases', () => {
     for (let i = 0; i < 10; i++) {
       expect(computeSessionFingerprint(ch, kp.publicKeyB64)).toBe(first);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Snapshot HMAC integrity
+// ---------------------------------------------------------------------------
+
+describe('signSnapshot / verifySnapshot', () => {
+  const key = new Uint8Array(32).fill(42);
+  const json = JSON.stringify({ channelId: 'abc', sendSeq: 5, recvSeq: 3 });
+
+  it('sign produces <64hex>.<json> format', () => {
+    const signed = signSnapshot(key, json);
+    expect(signed[64]).toBe('.');
+    expect(signed.slice(65)).toBe(json);
+    expect(signed.slice(0, 64)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('verify round-trips successfully', () => {
+    const signed = signSnapshot(key, json);
+    const result = verifySnapshot(key, signed);
+    expect(result).toBe(json);
+  });
+
+  it('verify rejects tampered JSON', () => {
+    const signed = signSnapshot(key, json);
+    const tampered = signed.slice(0, 65) + '{"channelId":"EVIL","sendSeq":0,"recvSeq":-1}';
+    expect(verifySnapshot(key, tampered)).toBeNull();
+  });
+
+  it('verify rejects tampered HMAC', () => {
+    const signed = signSnapshot(key, json);
+    const tampered = '00'.repeat(32) + signed.slice(64);
+    expect(verifySnapshot(key, tampered)).toBeNull();
+  });
+
+  it('verify rejects wrong key', () => {
+    const signed = signSnapshot(key, json);
+    const wrongKey = new Uint8Array(32).fill(99);
+    expect(verifySnapshot(wrongKey, signed)).toBeNull();
+  });
+
+  it('verify rejects malformed input (no dot)', () => {
+    expect(verifySnapshot(key, json)).toBeNull();
+    expect(verifySnapshot(key, '')).toBeNull();
+    expect(verifySnapshot(key, 'short')).toBeNull();
+  });
+
+  it('different keys produce different MACs', () => {
+    const s1 = signSnapshot(key, json);
+    const s2 = signSnapshot(new Uint8Array(32).fill(99), json);
+    expect(s1.slice(0, 64)).not.toBe(s2.slice(0, 64));
+  });
+
+  it('deterministic — same key+json always same MAC', () => {
+    const s1 = signSnapshot(key, json);
+    const s2 = signSnapshot(key, json);
+    expect(s1).toBe(s2);
   });
 });
 

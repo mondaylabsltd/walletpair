@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { generateX25519KeyPair, hexToBytes, sealPayload } from '../crypto.js'
 import { DAppSession } from '../dapp-session.js'
-import { MockTransport, makeJoinBody } from '../test-helpers.js'
+import { MockTransport, makeJoinBody, parseSnapshot } from '../test-helpers.js'
 import type { ProtocolMessage, RequestMessage } from '../types.js'
 import { walletPair } from './wagmi.js'
 
@@ -48,7 +48,7 @@ async function makePersistedDappSession(): Promise<{
   } as ProtocolMessage)
 
   const snapshot = session.serialize()
-  const snapshotData = JSON.parse(snapshot) as { recvKey?: string | null }
+  const snapshotData = parseSnapshot(snapshot) as { recvKey?: string | null }
   if (!snapshotData.recvKey) throw new Error('snapshot missing recvKey')
 
   return {

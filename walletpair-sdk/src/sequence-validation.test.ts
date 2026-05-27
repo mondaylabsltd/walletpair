@@ -19,7 +19,7 @@ import {
   unsealPayload,
 } from './crypto.js'
 import { DAppSession } from './dapp-session.js'
-import { MockRelay, MockTransport, makeJoinBody } from './test-helpers.js'
+import { MockRelay, MockTransport, makeJoinBody, parseSnapshot } from './test-helpers.js'
 import type { ProtocolMessage, SessionPersistence } from './types.js'
 import { WalletSession } from './wallet-session.js'
 
@@ -49,7 +49,7 @@ class ControlledPersistence implements SessionPersistence {
   }
 
   latest(): Record<string, unknown> {
-    return JSON.parse(this.load() ?? '{}') as Record<string, unknown>
+    return parseSnapshot(this.load() ?? '{}') as Record<string, unknown>
   }
 }
 

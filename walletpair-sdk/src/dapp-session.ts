@@ -21,8 +21,10 @@ import {
   generateX25519KeyPair,
   hexToBytes,
   sealPayload,
+  signSnapshot,
   unsealJoin,
   unsealPayload,
+  verifySnapshot,
 } from './crypto.js'
 import { Emitter } from './emitter.js'
 import type {
@@ -328,7 +330,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   // -------------------------------------------------------------------------
 
   serialize(): string {
-    return JSON.stringify({
+    const json = JSON.stringify({
       channelId: this.channelId,
       privKey: bytesToHex(this.privKey),
       pubKeyB64: this.pubKeyB64,
@@ -346,6 +348,8 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       approvedWalletPubKeyB64: this.approvedWalletPubKeyB64 ?? null,
       sessionStartTime: this.sessionStartTime,
     })
+    // HMAC-sign the snapshot so tampered storage (e.g. via XSS) is detected on restore
+    return this.sendKey ? signSnapshot(this.sendKey, json) : json
   }
 
   async restoreFromPersistence(): Promise<boolean> {
@@ -354,8 +358,24 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     return json ? this.restore(json) : false
   }
 
-  restore(json: string): boolean {
+  restore(signed: string): boolean {
     try {
+      // Try HMAC-verified format first: "<hex-mac>.<json>"
+      // Fall back to plain JSON for backward compatibility with unsigned snapshots
+      let json: string
+      if (signed.length > 65 && signed[64] === '.') {
+        // Extract sendKey from the JSON to verify HMAC
+        const candidateJson = signed.slice(65)
+        const d0 = JSON.parse(candidateJson)
+        if (!d0.sendKey) return false
+        const sendKey = hexToBytes(d0.sendKey)
+        const verified = verifySnapshot(sendKey, signed)
+        if (!verified) return false // tampered
+        json = verified
+      } else {
+        json = signed
+      }
+
       const d = JSON.parse(json)
       if (!d.channelId || !d.privKey) return false
       this.channelId = d.channelId
@@ -364,7 +384,6 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       this.remotePubKey = d.remotePubKeyB64 ? b64urlDecode(d.remotePubKeyB64) : null
       this.sendKey = d.sendKey ? hexToBytes(d.sendKey) : null
       this.recvKey = d.recvKey ? hexToBytes(d.recvKey) : null
-      // Backward compat: ignore sessionKey from old serialization format
       if (!this.sendKey || !this.recvKey) return false
       this.sendSeq = d.sendSeq ?? 0
       this.recvSeq = d.recvSeq ?? -1
@@ -618,6 +637,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
             pending.reject(new Error('Replay detected'))
             break
           }
+          const prevRecvSeq = this.recvSeq
           this.recvSeq = seq
           const afterPersist = () => {
             // Per protocol §5.3: _ok is inside the decrypted sealed payload
@@ -647,7 +667,10 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           }
           const persisted = this.persistSnapshot()
           if (isPromiseLike(persisted)) {
-            void persisted.then(afterPersist).catch((e) => pending.reject(this.persistenceError(e)))
+            void persisted.then(afterPersist).catch((e) => {
+              this.recvSeq = prevRecvSeq // rollback on persist failure
+              pending.reject(this.persistenceError(e))
+            })
           } else {
             afterPersist()
           }
@@ -666,6 +689,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           const evtHdr = { type: 'evt' as const, from: msg.from, id: evtBody.id }
           const { seq, data } = unsealPayload(this.recvKey, this.channelId, evtBody.sealed, evtHdr)
           if (seq <= this.recvSeq) break // replay — silently drop
+          const prevRecvSeqEvt = this.recvSeq
           this.recvSeq = seq
 
           const afterPersist = () => {
@@ -688,7 +712,10 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           if (isPromiseLike(persisted)) {
             void persisted
               .then(afterPersist)
-              .catch((e) => this.emit('error', this.persistenceError(e)))
+              .catch((e) => {
+                this.recvSeq = prevRecvSeqEvt // rollback on persist failure
+                this.emit('error', this.persistenceError(e))
+              })
           } else {
             afterPersist()
           }

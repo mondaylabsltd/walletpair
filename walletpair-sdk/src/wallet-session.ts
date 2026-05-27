@@ -22,7 +22,9 @@ import {
   sealJoin,
   sealPayload,
   sha256Hex,
+  signSnapshot,
   unsealPayload,
+  verifySnapshot,
 } from './crypto.js'
 import { Emitter } from './emitter.js'
 import type {
@@ -315,7 +317,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   // -------------------------------------------------------------------------
 
   serialize(): string {
-    return JSON.stringify({
+    const json = JSON.stringify({
       channelId: this.channelId,
       privKey: bytesToHex(this.privKey),
       pubKeyB64: this.pubKeyB64,
@@ -330,10 +332,24 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       dappName: this.dappName ?? null,
       sessionStartTime: this.sessionStartTime,
     })
+    return this.sendKey ? signSnapshot(this.sendKey, json) : json
   }
 
-  restore(json: string): boolean {
+  restore(signed: string): boolean {
     try {
+      let json: string
+      if (signed.length > 65 && signed[64] === '.') {
+        const candidateJson = signed.slice(65)
+        const d0 = JSON.parse(candidateJson)
+        if (!d0.sendKey) return false
+        const sendKey = hexToBytes(d0.sendKey)
+        const verified = verifySnapshot(sendKey, signed)
+        if (!verified) return false
+        json = verified
+      } else {
+        json = signed
+      }
+
       const d = JSON.parse(json)
       if (!d.channelId || !d.privKey) return false
       this.channelId = d.channelId
@@ -444,13 +460,17 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
             reqHdr,
           )
           if (seq <= this.recvSeq) break // replay — silently drop
+          const prevRecvSeq = this.recvSeq
           this.recvSeq = seq
           const afterPersist = () => this.processRequest(requestId, data, plaintext)
           const persisted = this.persistSnapshot()
           if (isPromiseLike(persisted)) {
             void persisted
               .then(afterPersist)
-              .catch((e) => this.emit('error', this.persistenceError(e)))
+              .catch((e) => {
+                this.recvSeq = prevRecvSeq // rollback on persist failure
+                this.emit('error', this.persistenceError(e))
+              })
           } else {
             afterPersist()
           }

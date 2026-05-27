@@ -14,7 +14,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DAppSession } from './dapp-session.js';
 import { WalletSession } from './wallet-session.js';
-import { MockTransport, MockRelay } from './test-helpers.js';
+import { MockTransport, MockRelay, parseSnapshot } from './test-helpers.js';
 import { parsePairingUri } from './crypto.js';
 
 function wait(ms = 50): Promise<void> {
@@ -314,8 +314,8 @@ describe('Integration: Bidirectional flow with directional keys', () => {
     const walletJson = walletSession.serialize();
 
     // Parse and verify directional keys are stored
-    const dappState = JSON.parse(dappJson);
-    const walletState = JSON.parse(walletJson);
+    const dappState = parseSnapshot(dappJson);
+    const walletState = parseSnapshot(walletJson);
 
     expect(dappState.sendKey).toBeTruthy();
     expect(dappState.recvKey).toBeTruthy();

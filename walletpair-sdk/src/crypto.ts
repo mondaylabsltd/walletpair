@@ -294,6 +294,44 @@ export function constantTimeEqual(a: string, b: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Snapshot integrity (HMAC for serialized session state)
+// ---------------------------------------------------------------------------
+
+const SNAPSHOT_HMAC_INFO = utf8ToBytes('walletpair-v1-snapshot-hmac');
+
+/**
+ * Derive a dedicated HMAC key from the send key so we don't reuse
+ * traffic keys for a different purpose.
+ */
+function deriveSnapshotHmacKey(sendKey: Uint8Array): Uint8Array {
+  return hmac(sha256, sendKey, SNAPSHOT_HMAC_INFO);
+}
+
+/**
+ * Sign a serialized session snapshot with HMAC-SHA256.
+ * Returns `<hex-mac>.<json-payload>`.
+ */
+export function signSnapshot(sendKey: Uint8Array, json: string): string {
+  const macKey = deriveSnapshotHmacKey(sendKey);
+  const mac = hmac(sha256, macKey, utf8ToBytes(json));
+  return bytesToHex(mac) + '.' + json;
+}
+
+/**
+ * Verify and extract a signed snapshot.
+ * Returns the JSON payload on success, or `null` if the HMAC is invalid.
+ */
+export function verifySnapshot(sendKey: Uint8Array, signed: string): string | null {
+  const dot = signed.indexOf('.');
+  if (dot !== 64) return null; // HMAC-SHA256 hex = 64 chars
+  const macHex = signed.slice(0, 64);
+  const json = signed.slice(65);
+  const macKey = deriveSnapshotHmacKey(sendKey);
+  const expected = bytesToHex(hmac(sha256, macKey, utf8ToBytes(json)));
+  return constantTimeEqual(macHex, expected) ? json : null;
+}
+
+// ---------------------------------------------------------------------------
 // Channel ID generation
 // ---------------------------------------------------------------------------
 

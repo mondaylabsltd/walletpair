@@ -10,6 +10,7 @@
 
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { resolve } from 'path';
+import { rmSync } from 'fs';
 
 const EXT_PATH = resolve(import.meta.dirname!, '..', '.output', 'chrome-mv3');
 const TEST_URL = 'http://localhost:3000/dapp.html';
@@ -39,12 +40,17 @@ function assert(condition: boolean, msg: string) {
 
 // ── Setup ──────────────────────────────────────────────────────────────
 
+const USER_DATA_DIR = '/tmp/walletpair-e2e-profile';
+
 async function setup() {
+  // Clean user data dir before each run to avoid stale state
+  rmSync(USER_DATA_DIR, { recursive: true, force: true });
+
   console.log(`\n🚀 Launching Chrome with extension from ${EXT_PATH}\n`);
 
   browser = await puppeteer.launch({
     headless: false,
-    userDataDir: '/tmp/walletpair-e2e-profile',
+    userDataDir: USER_DATA_DIR,
     args: [
       `--load-extension=${EXT_PATH}`,
       `--disable-extensions-except=${EXT_PATH}`,

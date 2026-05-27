@@ -3,6 +3,15 @@
  *
  * Stores all state needed to survive page refresh / app restart
  * and reconnect to the relay.
+ *
+ * ⚠️  SECURITY WARNING: This example stores X25519 private keys and traffic
+ * keys in plaintext AsyncStorage. For production wallets, use platform-specific
+ * secure storage:
+ *   - iOS: Keychain Services (via expo-secure-store or react-native-keychain)
+ *   - Android: Android Keystore (via expo-secure-store or react-native-keychain)
+ *
+ * AsyncStorage provides NO encryption and data may be readable by other apps
+ * on rooted/jailbroken devices or via device backups.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';

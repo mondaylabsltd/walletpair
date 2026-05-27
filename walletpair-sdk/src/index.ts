@@ -33,8 +33,10 @@ export {
   sealJoin,
   sealPayload,
   sha256Hex,
+  signSnapshot,
   unsealJoin,
   unsealPayload,
+  verifySnapshot,
 } from './crypto.js'
 // Sessions
 export { DAppSession } from './dapp-session.js'
