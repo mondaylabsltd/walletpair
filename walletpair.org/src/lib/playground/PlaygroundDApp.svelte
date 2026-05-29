@@ -12,9 +12,9 @@
 	let qrDataUrl = $state('');
 
 	let metaName = $state('EVM Playground');
-	let metaUrl = $state('');
-	let metaIcon = $state('');
-	let showMeta = $state(false);
+	let metaUrl = $state('https://walletpair.org');
+	let metaIcon = $state('https://walletpair.org/favicon.png');
+	let showMeta = $state(true);
 
 	let method = $state('wallet_getAccounts');
 	let params = $state('{}');
@@ -78,7 +78,7 @@
 				name: metaName || 'EVM Playground',
 				description: 'Interactive playground',
 				url: metaUrl || location.origin,
-				icon: metaIcon || `${location.origin}/favicon.png`
+				icon: metaIcon || 'https://walletpair.org/favicon.png'
 			}
 		} as ConstructorParameters<typeof DAppSession>[0]);
 		session = s;

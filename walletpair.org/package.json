@@ -19,13 +19,14 @@
 		"gen": "wrangler types"
 	},
 	"dependencies": {
-		"walletpair-sdk": "file:../walletpair-sdk",
-		"qrcode": "^1.5.4",
+		"@noble/ciphers": "^2.2.0",
 		"@noble/curves": "^1.8.2",
-		"@noble/hashes": "^1.7.2"
+		"@noble/hashes": "^1.7.2",
+		"canonicalize": "^3.0.0",
+		"qrcode": "^1.5.4",
+		"walletpair-sdk": "file:../walletpair-sdk"
 	},
 	"devDependencies": {
-		"@types/qrcode": "^1.5.5",
 		"@eslint/compat": "^2.0.4",
 		"@eslint/js": "^10.0.1",
 		"@playwright/test": "^1.59.1",
@@ -33,6 +34,7 @@
 		"@sveltejs/kit": "^2.57.0",
 		"@sveltejs/vite-plugin-svelte": "^7.0.0",
 		"@types/node": "^24",
+		"@types/qrcode": "^1.5.5",
 		"@vitest/browser-playwright": "^4.1.3",
 		"eslint": "^10.2.0",
 		"eslint-config-prettier": "^10.1.8",

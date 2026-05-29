@@ -54,6 +54,11 @@
 	}
 
 	// ── State ──
+	let metaName = $state('EVM Wallet');
+	let metaUrl = $state('https://walletpair.org');
+	let metaIcon = $state('https://walletpair.org/favicon.png');
+	let showMeta = $state(true);
+
 	let ethKey = $state('');
 	let ethAddr = $state('--');
 	let pairingUriInput = $state('');
@@ -130,10 +135,10 @@
 				chains: ['eip155:1']
 			},
 			meta: {
-				name: 'Playground Wallet',
+				name: metaName || 'EVM Wallet',
 				description: 'WalletPair playground wallet',
-				url: location.origin,
-				icon: `${location.origin}/favicon.png`
+				url: metaUrl || 'https://walletpair.org',
+				icon: metaIcon || 'https://walletpair.org/favicon.png'
 			}
 		});
 		session = s;
@@ -240,6 +245,18 @@
 			></span>
 			{phase}
 		</span>
+	</div>
+
+	<!-- Metadata (collapsible) -->
+	<div class="field">
+		<button class="meta-toggle" onclick={() => (showMeta = !showMeta)}>
+			{showMeta ? '▾' : '▸'} Metadata
+		</button>
+		{#if showMeta}
+			<input bind:value={metaName} placeholder="Wallet name" />
+			<input bind:value={metaUrl} placeholder="Wallet URL" />
+			<input bind:value={metaIcon} placeholder="Icon URL (must be https)" />
+		{/if}
 	</div>
 
 	<!-- EOA Key -->
@@ -523,5 +540,21 @@
 		font-size: 0.7rem;
 		color: var(--color-text-subtle);
 		word-break: break-all;
+	}
+
+	.meta-toggle {
+		background: none;
+		border: none;
+		color: var(--color-text-muted);
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
+		padding: 0;
+		cursor: pointer;
+		text-align: left;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.meta-toggle:hover {
+		color: var(--color-text);
 	}
 </style>
