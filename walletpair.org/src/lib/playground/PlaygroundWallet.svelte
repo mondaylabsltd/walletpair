@@ -31,25 +31,10 @@
 		const prefix = utf8ToBytes(`\x19Ethereum Signed Message:\n${msgBytes.length}`);
 		const hash = keccak_256(concatBytes(prefix, msgBytes));
 		const privKey = hexToBytes(privKeyHex);
-		const sigBytes = secp256k1.sign(hash, privKey);
-		const sig = secp256k1.Signature.fromBytes(sigBytes);
-		const pubKey = secp256k1.getPublicKey(privKey, false);
-		const pubHex = bytesToHex(pubKey);
-		let recovery = 0;
-		for (let v = 0; v <= 1; v++) {
-			try {
-				const recovered = sig.addRecoveryBit(v).recoverPublicKey(hash);
-				if (bytesToHex(recovered.toBytes(false)) === pubHex) {
-					recovery = v;
-					break;
-				}
-			} catch {
-				/* try next */
-			}
-		}
+		const sig = secp256k1.sign(hash, privKey);
 		const r = sig.r.toString(16).padStart(64, '0');
 		const s = sig.s.toString(16).padStart(64, '0');
-		const vHex = (recovery + 27).toString(16).padStart(2, '0');
+		const vHex = ((sig.recovery ?? 0) + 27).toString(16).padStart(2, '0');
 		return '0x' + r + s + vHex;
 	}
 
