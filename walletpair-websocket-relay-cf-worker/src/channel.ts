@@ -143,12 +143,12 @@ export class ChannelDO extends DurableObject<Env> {
     _wasClean: boolean,
   ): Promise<void> {
     await this.ensureInitialized();
-    this.handleDisconnect(ws);
+    await this.handleDisconnect(ws);
   }
 
   async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
     await this.ensureInitialized();
-    this.handleDisconnect(ws);
+    await this.handleDisconnect(ws);
   }
 
   async alarm(): Promise<void> {
@@ -529,16 +529,49 @@ export class ChannelDO extends DurableObject<Env> {
 
   // --- Disconnect handling ---
 
-  private handleDisconnect(ws: WebSocket): void {
-    // WebSocket disconnected (not a protocol-level close)
-    // Don't remove channel state -- allow reconnection via new create/join
-    // The alarm will clean up if no one reconnects
+  private async handleDisconnect(ws: WebSocket): Promise<void> {
     const attachment = this.getAttachment(ws);
     if (!attachment) return;
 
-    // If the channel is in waiting or pending_accept and the dApp disconnects,
-    // the alarm will handle cleanup. If connected and one peer drops, the
-    // channel stays alive for potential reconnection.
+    const { role } = attachment;
+    const ch = this.channelId;
+    if (!ch) return;
+
+    // In waiting/pending_accept: if the dApp disconnects, the channel
+    // is unusable (wallet can't pair without dApp). Clean up immediately.
+    if (this.channelState === "waiting" || this.channelState === "pending_accept") {
+      if (role === "dapp") {
+        // Notify wallet if present and close it
+        const walletWs = this.findPeerWs("wallet");
+        if (walletWs) {
+          try {
+            walletWs.send(buildTerminate(ch, "channel_not_found"));
+            walletWs.close(1000, "dapp_disconnected");
+          } catch { /* already closed */ }
+        }
+        this.channelState = "closed";
+        await this.persistState();
+        await this.ctx.storage.deleteAlarm();
+      }
+      // Wallet disconnect during pending_accept: dApp can still wait for
+      // another wallet. Revert to waiting state.
+      if (role === "wallet" && this.channelState === "pending_accept") {
+        this.walletPeerId = null;
+        this.isReconnect = false;
+        this.channelState = "waiting";
+        await this.persistState();
+      }
+      return;
+    }
+
+    // In connected: peer dropped without sending close.
+    // Keep channel alive for reconnection. The alarm handles expiry.
+    // Don't notify or close the other peer — they will detect the
+    // disconnection via heartbeat timeout and begin reconnect.
+    // Don't set to closed — allow reconnect via new create/join.
+    if (this.channelState === "connected") {
+      return;
+    }
   }
 
   // --- Helpers ---
@@ -546,7 +579,10 @@ export class ChannelDO extends DurableObject<Env> {
   private findPeerWs(role: Role): WebSocket | null {
     for (const ws of this.ctx.getWebSockets()) {
       const att = this.getAttachment(ws);
-      if (att?.role === role) return ws;
+      if (att?.role === role) {
+        // Check if the WebSocket is still open (readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)
+        if (ws.readyState <= 1) return ws;
+      }
     }
     return null;
   }
