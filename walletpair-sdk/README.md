@@ -402,6 +402,19 @@ To add support for a new chain (e.g., Solana):
 
 The core protocol is chain-agnostic -- `DAppSession.request()` and `WalletSession.approve()` work with any method/params structure.
 
+## Publishing
+
+```bash
+# 1. Create a changeset (select patch/minor/major)
+npx changeset
+
+# 2. Apply changeset and bump version
+npx changeset version
+
+# 3. Build and publish to npm
+npm run changeset:publish
+```
+
 ## Security
 
 - **E2E Encryption**: X25519 ECDH -> HKDF-SHA256 -> ChaCha20-Poly1305 AEAD
