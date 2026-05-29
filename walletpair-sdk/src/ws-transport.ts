@@ -15,7 +15,8 @@ export class WebSocketTransport implements Transport {
   state: TransportState = 'disconnected';
 
   private ws: WebSocket | null = null;
-  private url: string;
+  /** Current relay URL. Readable for channel hint injection. */
+  url: string;
   private protocols: string[];
 
   private messageHandler: ((msg: ProtocolMessage) => void) | null = null;
