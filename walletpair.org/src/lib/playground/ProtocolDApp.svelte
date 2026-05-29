@@ -11,6 +11,11 @@
 	let session: DAppSession | null = $state(null);
 	let qrDataUrl = $state('');
 
+	let metaName = $state('Protocol Playground');
+	let metaUrl = $state('');
+	let metaIcon = $state('');
+	let showMeta = $state(false);
+
 	let method = $state('myapp.getData');
 	let params = $state('{ "key": "hello" }');
 	let log = $state<LogEntry[]>([]);
@@ -70,10 +75,10 @@
 		const s = new DAppSession({
 			transport,
 			meta: {
-				name: 'Protocol Playground',
+				name: metaName || 'Protocol Playground',
 				description: 'Network-agnostic playground',
-				url: location.origin,
-				icon: ''
+				url: metaUrl || location.origin,
+				icon: metaIcon || `${location.origin}/favicon.png`
 			}
 		} as ConstructorParameters<typeof DAppSession>[0]);
 		session = s;
@@ -126,8 +131,11 @@
 		log = [];
 	}
 
+	let copied = $state(false);
 	function copyUri() {
 		navigator.clipboard.writeText(pairingUri);
+		copied = true;
+		setTimeout(() => (copied = false), 2000);
 	}
 </script>
 
@@ -157,6 +165,18 @@
 		</div>
 	</div>
 
+	<!-- Metadata (collapsible) -->
+	<div class="field">
+		<button class="meta-toggle" onclick={() => (showMeta = !showMeta)}>
+			{showMeta ? '▾' : '▸'} Metadata
+		</button>
+		{#if showMeta}
+			<input bind:value={metaName} placeholder="dApp name" />
+			<input bind:value={metaUrl} placeholder="dApp URL (default: current origin)" />
+			<input bind:value={metaIcon} placeholder="Icon URL (default: /favicon.png)" />
+		{/if}
+	</div>
+
 	{#if phase !== 'idle'}
 		<div class="field">
 			<label>Pairing QR</label>
@@ -166,7 +186,7 @@
 				</div>
 			{/if}
 			<div class="uri-box">{pairingUri || '--'}</div>
-			<button class="btn-sm" onclick={copyUri} disabled={!pairingUri}>Copy URI</button>
+			<button class="btn-sm" onclick={copyUri} disabled={!pairingUri}>{copied ? 'Copied!' : 'Copy URI'}</button>
 		</div>
 
 		{#if sessionFingerprint !== '------'}
@@ -276,4 +296,7 @@
 	.qr-wrap img { display: inline-block; border-radius: var(--radius-md); width: 160px; height: 160px; }
 	.uri-box { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-subtle); word-break: break-all; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: var(--space-2); max-height: 60px; overflow-y: auto; }
 	.fingerprint { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; text-align: center; color: var(--color-accent); letter-spacing: 0.15em; }
+
+	.meta-toggle { background: none; border: none; color: var(--color-text-muted); font-family: var(--font-mono); font-size: 0.75rem; padding: 0; cursor: pointer; text-align: left; text-transform: uppercase; letter-spacing: 0.05em; }
+	.meta-toggle:hover { color: var(--color-text); }
 </style>

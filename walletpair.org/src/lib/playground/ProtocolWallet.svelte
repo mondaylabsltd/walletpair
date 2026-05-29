@@ -46,7 +46,7 @@
 				name: 'Protocol Playground Wallet',
 				description: 'Network-agnostic playground wallet',
 				url: location.origin,
-				icon: ''
+				icon: `${location.origin}/favicon.png`
 			}
 		});
 		session = s;

@@ -133,7 +133,7 @@
 				name: 'Playground Wallet',
 				description: 'WalletPair playground wallet',
 				url: location.origin,
-				icon: ''
+				icon: `${location.origin}/favicon.png`
 			}
 		});
 		session = s;

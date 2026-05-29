@@ -11,6 +11,11 @@
 	let session: DAppSession | null = $state(null);
 	let qrDataUrl = $state('');
 
+	let metaName = $state('EVM Playground');
+	let metaUrl = $state('');
+	let metaIcon = $state('');
+	let showMeta = $state(false);
+
 	let method = $state('wallet_getAccounts');
 	let params = $state('{}');
 	let log = $state<LogEntry[]>([]);
@@ -70,10 +75,10 @@
 		const s = new DAppSession({
 			transport,
 			meta: {
-				name: 'WalletPair Playground',
+				name: metaName || 'EVM Playground',
 				description: 'Interactive playground',
-				url: location.origin,
-				icon: ''
+				url: metaUrl || location.origin,
+				icon: metaIcon || `${location.origin}/favicon.png`
 			}
 		} as ConstructorParameters<typeof DAppSession>[0]);
 		session = s;
@@ -129,8 +134,11 @@
 		log = [];
 	}
 
+	let copied = $state(false);
 	function copyUri() {
 		navigator.clipboard.writeText(pairingUri);
+		copied = true;
+		setTimeout(() => (copied = false), 2000);
 	}
 
 	function onMethodChange() {
@@ -169,6 +177,18 @@
 		</div>
 	</div>
 
+	<!-- Metadata (collapsible) -->
+	<div class="field">
+		<button class="meta-toggle" onclick={() => (showMeta = !showMeta)}>
+			{showMeta ? '▾' : '▸'} Metadata
+		</button>
+		{#if showMeta}
+			<input bind:value={metaName} placeholder="dApp name" />
+			<input bind:value={metaUrl} placeholder="dApp URL (default: current origin)" />
+			<input bind:value={metaIcon} placeholder="Icon URL (default: /favicon.png)" />
+		{/if}
+	</div>
+
 	<!-- QR Code & URI -->
 	{#if phase !== 'idle'}
 		<div class="field">
@@ -179,7 +199,7 @@
 				</div>
 			{/if}
 			<div class="uri-box">{pairingUri || '--'}</div>
-			<button class="btn-sm" onclick={copyUri} disabled={!pairingUri}>Copy URI</button>
+			<button class="btn-sm" onclick={copyUri} disabled={!pairingUri}>{copied ? 'Copied!' : 'Copy URI'}</button>
 		</div>
 
 		{#if sessionFingerprint !== '------'}
@@ -394,5 +414,21 @@
 		text-align: center;
 		color: var(--color-accent);
 		letter-spacing: 0.15em;
+	}
+
+	.meta-toggle {
+		background: none;
+		border: none;
+		color: var(--color-text-muted);
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
+		padding: 0;
+		cursor: pointer;
+		text-align: left;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	.meta-toggle:hover {
+		color: var(--color-text);
 	}
 </style>
