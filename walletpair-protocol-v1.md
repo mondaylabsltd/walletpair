@@ -59,7 +59,7 @@ See Section 5 for which message types each role may send.
 
 ### Channel ID (`ch`)
 
-The channel ID identifies one pending or connected channel. It must be a
+The channel ID identifies one pending or connected channel. It MUST be a
 random 32-byte value encoded as hex (64 characters).
 
 ### Sender Identity (`from`)
@@ -103,7 +103,7 @@ Present in `req`, `res`, and `evt`.
 | `body` | yes | Type-specific payload. |
 
 `ts` is not a security input. Receivers MUST NOT reject messages solely
-based on `ts`. Replay detection uses sequence counters (Section 6.4).
+based on `ts`. Replay detection uses sequence counters (Section 6.6).
 The relay MAY reject `ts` deviating more than 5 minutes from server time
 as an availability heuristic.
 
@@ -128,7 +128,7 @@ All listed fields are required. Use `null` when not applicable.
 | Field | In `body` of | Description |
 |-------|-------------|-------------|
 | `meta` | `create` | Display metadata: `name`, `description`, `url`, `icon`. All required. |
-| `sealed_join` | `join` | Encrypted capabilities and metadata (base64url). See Section 6.5. `null` on reconnect. |
+| `sealed_join` | `join` | Encrypted capabilities and metadata (base64url). See Section 6.7. `null` on reconnect. |
 | `target` | `accept` | Wallet public key (base64url). |
 | `state` | `ready` | `"waiting"` or `"connected"`. |
 | `role` | `ready` | `"dapp"` or `"wallet"`. |
@@ -136,8 +136,8 @@ All listed fields are required. Use `null` when not applicable.
 | `remote` | `ready` | Remote peer public key (base64url). `null` when `state` is `"waiting"`. |
 | `reconnect` | `ready` | Boolean. `true` on reconnect, `false` on initial pairing. |
 | `id` | `req`, `res`, `evt` | Request or event ID. |
-| `sealed` | `req`, `res`, `evt` | Encrypted payload (base64url). See Section 6.4. |
-| `reason` | `close`, `terminate` | Close or termination reason (Section 12). |
+| `sealed` | `req`, `res`, `evt` | Encrypted payload (base64url). See Section 6.6. |
+| `reason` | `close`, `terminate` | Close or termination reason (Section 12.3). |
 
 ### 4.3 Sealed Payload Content
 
@@ -206,7 +206,7 @@ Adapter-sent:
 | `ready` | adapter -> peer | Channel state notification |
 | `terminate` | adapter -> peer | Forced termination |
 
-There is no separate `error` message. Request errors use `_ok = false`
+There is no separate `error` message. Request errors use `_ok: false`
 inside encrypted `res`. Channel errors use `close`. Adapter shutdown
 uses `terminate`.
 
@@ -293,7 +293,7 @@ join_encryption_key = HKDF-SHA256(
 )[0:32]
 ```
 
-#### Canonical JSON
+### 6.3 Canonical JSON
 
 **Normative reference: RFC 8785 (JSON Canonicalization Scheme, JCS).**
 
@@ -384,7 +384,7 @@ Vector 6 — escaped control character (lowercase hex digits):
 Input:  "\u0001"    ->  Output: "\u0001"     SHA-256: b81cfb0a6715e53b373345b49e8ad94eb55fd777519dc539373d0634973c186e
 ```
 
-#### Key Erasure
+### 6.4 Key Erasure
 
 1. `shared_secret`: erase after `root_key` is derived.
 2. X25519 private key: erase after `join_encryption_key` and traffic
@@ -404,7 +404,7 @@ material from being swapped to disk.
 
 On platforms where memory locking is not available (e.g., browser
 JavaScript environments), implementations MUST minimize the lifetime of
-key material by erasing intermediate values (steps 1–4, 5) as soon as
+key material by erasing intermediate values (steps 1–5) as soon as
 derivation is complete, and SHOULD use `crypto.subtle` or WebAssembly
 for key operations to reduce exposure in the JavaScript heap.
 
@@ -414,7 +414,7 @@ It MUST close the channel and initiate a fresh pairing, because reusing
 sequence numbers or operating with incorrect keys would break AEAD
 security.
 
-### 6.3 Session Fingerprint
+### 6.5 Session Fingerprint
 
 ```text
 fp_bytes    = SHA256(
@@ -435,7 +435,7 @@ Display flow:
 2. Wallet computes same fingerprint, displays in confirmation dialog.
 3. User verifies match, confirms. Wallet sends `join`.
 
-### 6.4 Message Encryption
+### 6.6 Message Encryption
 
 After `ready.connected`, all `req`, `res`, and `evt` payloads are
 encrypted with ChaCha20-Poly1305:
@@ -477,7 +477,7 @@ aad_header = 01                       (type byte)
 aad = channel_id_bytes || aad_header
 ```
 
-#### Sequence Numbers
+#### 6.6.1 Sequence Numbers
 
 `seq_bytes` is a 4-byte big-endian counter. Each peer maintains its own
 send counter starting at 0, incrementing by 1 per `sealed` message.
@@ -493,7 +493,7 @@ with reason `normal` and require fresh pairing. The limit is `2^31`
 rather than `2^32 - 1` to avoid signed integer overflow in languages
 where 32-bit integers are signed by default.
 
-### 6.5 Encrypted Join (sealed_join)
+### 6.7 Encrypted Join (sealed_join)
 
 The wallet encrypts capabilities and metadata in `body.sealed_join`:
 
@@ -653,7 +653,7 @@ deep-link sessions to read-only methods (e.g., `wallet_getAccounts`)
 by default.
 
 DApps MUST display a QR code as the primary pairing interface. DApps
-MUST display the session fingerprint (Section 6.3) alongside the QR
+MUST display the session fingerprint (Section 6.5) alongside the QR
 code so the wallet user can verify the connection. DApps MAY
 additionally offer deep links but MUST label them as "Less secure —
 same device only."
@@ -705,7 +705,7 @@ Adapter forwards `join` to dApp and replies to wallet with
 
 **Step 3: DApp accepts.**
 
-DApp decrypts `sealed_join` (see Section 6.5 for processing details).
+DApp decrypts `sealed_join` (see Section 6.7 for processing details).
 The dApp MAY auto-accept, but applications that need user identity MUST
 verify accounts or signatures through encrypted methods after the
 session connects.
@@ -753,7 +753,8 @@ The wallet MUST cache processed requests to handle retries:
   produce different key ordering or whitespace.
 - **Cache hit, same params:** Return cached response, re-encrypted
   with fresh sequence number. MUST NOT replay old `sealed` bytes.
-- **Cache hit, different params:** Reject with `invalid_params`.
+- **Cache hit, different params:** Reply with error `res` (code
+  `invalid_params`). Do NOT close the channel.
 - **Cache miss (evicted):** Process as new request.
 
 **Broadcast idempotency** (`wallet_sendTransaction` only): Persist
@@ -764,7 +765,7 @@ LRU). Never re-broadcast for a cached `req.id`.
 data. Wallet implementations MUST store the cache in non-swappable
 memory, or encrypt it at rest using a key derived from the session's
 traffic key. The cache MUST be securely erased (zeroed) when the
-channel is closed. See Section 6.2 (Key Erasure) for platform-specific
+channel is closed. See Section 6.4 (Key Erasure) for platform-specific
 guidance on memory locking.
 
 The params hash comparison MUST use constant-time comparison.
@@ -814,7 +815,7 @@ Only the adapter sends `terminate`. Peers MUST NOT send it.
 | `user_rejected` | P | User rejected the wallet or closed channel. |
 | `unsupported_capability` | P | Missing required chain or method. |
 | `unsupported_version` | P | Unsupported `v` value. |
-| `decryption_failed` | P | Could not decrypt `sealed`. |
+| `decryption_failed` | P | Could not decrypt `sealed` or `sealed_join`. |
 | `channel_not_found` | A | Channel does not exist. |
 | `channel_exists` | A | Channel ID already in use. |
 | `already_connected` | A | Channel already has both peers. |
@@ -975,15 +976,15 @@ closed
 
 1. A channel is created by the dApp.
 2. A channel is joined by the wallet.
-3. The dApp must accept the wallet before the channel is connected.
+3. The dApp MUST accept the wallet before the channel is connected.
 4. A channel can have at most one dApp and one wallet.
 5. Only the dApp sends `req`.
 6. Only the wallet sends `res` and `evt`.
 7. `req`, `res`, and `evt` are valid only after `ready.connected`.
-8. After `ready.connected`, payload content must be encrypted in the
+8. After `ready.connected`, payload content MUST be encrypted in the
    `sealed` field using the direction-specific traffic key.
-9. A closed channel cannot carry more requests, responses, or events.
-10. A single message must not exceed 64 KB on the wire.
+9. A closed channel MUST NOT carry more requests, responses, or events.
+10. A single message MUST NOT exceed 64 KB on the wire.
 11. A peer MUST NOT have more than 32 pending (unanswered) requests per
     channel. If a dApp sends a `req` that would exceed this limit, the
     wallet MUST reply with an error `res` (code `rate_limited`, message
@@ -994,7 +995,7 @@ closed
     reply with `close` reason `unsupported_version`. If the adapter
     detects an unsupported version, it sends `terminate` with the same
     reason.
-13. Encryption sequence counters must never be reset. They persist across
+13. Encryption sequence counters MUST NEVER be reset. They persist across
     reconnects for the lifetime of the channel.
 14. Each peer MUST locally verify that encrypted messages come from the
     expected remote peer public key.
@@ -1155,7 +1156,7 @@ The relay or transport may be compromised. It MUST NOT be able to:
 | Threat | Protection |
 |--------|-----------|
 | Eavesdropping | E2E encryption (X25519 + ChaCha20-Poly1305). |
-| Man-in-the-middle | Out-of-band key delivery (QR); session fingerprint (Section 6.3); `sealed_join` binds wallet to QR-scanned key. |
+| Man-in-the-middle | Out-of-band key delivery (QR); session fingerprint (Section 6.5); `sealed_join` binds wallet to QR-scanned key. |
 | Peer impersonation | Peer ID = X25519 public key; end-to-end AEAD verification after pairing and on reconnect. Initial wallet joins can be squatted by a relay-created key pair, which is treated as denial-of-service or connection to an attacker-controlled wallet identity, not compromise of the user's wallet keys. |
 | Replay | Sequence-number nonce; reject non-increasing seq. |
 | Channel hijack | Channel ID = 256-bit random. |
@@ -1170,7 +1171,7 @@ The relay or transport may be compromised. It MUST NOT be able to:
    User identity and account ownership must be established through
    encrypted wallet methods and user-approved signatures where needed.
 
-See also: sequence number rules (Section 6.4), relay storage
+See also: sequence number rules (Section 6.6), relay storage
 restrictions (Section 17.2), and protocol rules (Section 15).
 
 ### 19.4 Privacy
