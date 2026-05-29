@@ -63,8 +63,12 @@ case-insensitive. The zero address MUST NOT be used as a signer.
 }
 ```
 
-A wallet MUST support `wallet_getAccounts`. All other methods are
-optional. The dApp MUST check `capabilities.methods` before calling.
+A wallet MUST support `wallet_getAccounts`, `wallet_signTransaction`,
+`wallet_signMessage`, `wallet_signTypedData`, and `wallet_switchChain`.
+Only `wallet_sendTransaction` is optional (cold wallets and hardware
+signers cannot broadcast). The dApp MUST check `capabilities.methods`
+before calling `wallet_sendTransaction` and fall back to
+`wallet_signTransaction` if it is not granted.
 
 ## 5. Data Encoding
 
@@ -125,28 +129,41 @@ Signs a transaction without broadcasting.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `to` | string | no | Recipient. Omit for contract creation. |
-| `value` | string | no | Wei, hex. Default `"0x0"`. |
-| `data` | string | no | Call data, hex. Default `"0x"`. |
-| `gas` | string | no | Gas limit, hex. Wallet MAY estimate. |
-| `nonce` | string | no | Nonce, hex. Wallet MAY determine. |
-| `type` | string | no | `"0x0"`–`"0x4"` (legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702). |
-| `chainId` | string | no | Hex chain ID. MUST match `chain`. |
-| `gasPrice` | string | no | For type 0/1. |
-| `maxFeePerGas` | string | no | For type 2/3/4. |
-| `maxPriorityFeePerGas` | string | no | For type 2/3/4. MUST NOT exceed `maxFeePerGas`. |
+| `value` | string | yes | Wei, hex. Use `"0x0"` for zero value. |
+| `data` | string | yes | Call data, hex. Use `"0x"` for empty. |
+| `gas` | string | † | Gas limit, hex. |
+| `nonce` | string | † | Nonce, hex. |
+| `type` | string | yes | `"0x0"`–`"0x4"` (legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702). |
+| `chainId` | string | yes | Hex chain ID. MUST match `chain`. |
+| `gasPrice` | string | † | For type 0/1. |
+| `maxFeePerGas` | string | † | For type 2/3/4. |
+| `maxPriorityFeePerGas` | string | † | For type 2/3/4. MUST NOT exceed `maxFeePerGas`. |
 | `accessList` | array | no | EIP-2930. Each: `{ address, storageKeys[] }`. |
-| `maxFeePerBlobGas` | string | no | For type 3. |
+| `maxFeePerBlobGas` | string | † | For type 3. |
 | `blobVersionedHashes` | string[] | no | For type 3. 32-byte hex, `0x01` version prefix. |
 | `authorizationList` | array | no | For type 4. Max 16 entries. Each: `{ chainId, address, nonce, yParity, r, s }`. |
+
+**† RPC-dependent fields.** `gas`, `nonce`, and fee fields (`gasPrice`,
+`maxFeePerGas`, `maxPriorityFeePerGas`, `maxFeePerBlobGas`) require
+chain RPC access to determine when absent. The rules differ by method:
+
+- **`wallet_sendTransaction`:** The wallet broadcasts, so it has RPC.
+  The dApp MAY omit these fields and the wallet MUST fill them.
+- **`wallet_signTransaction`:** The wallet may be a cold wallet or
+  hardware signer with no RPC access. The dApp SHOULD provide all
+  RPC-dependent fields. If a field is missing and the wallet cannot
+  determine it (no RPC), the wallet MUST reject with `invalid_params`
+  and message indicating which field is missing.
+
+DApps that use `wallet_signTransaction` MUST assume the wallet has no
+RPC and provide complete transaction parameters.
 
 **Validation:**
 
 1. `address` MUST be authorized for this session and chain.
 2. `chain` MUST be in `capabilities.chains`.
-3. If `tx.chainId` present, MUST match `chain`. If absent, wallet
-   sets it.
-4. Fee fields MUST be consistent with `tx.type`. Type 3/4 MUST be
-   explicit (not inferred).
+3. `tx.chainId` MUST match `chain`.
+4. Fee fields MUST be consistent with `tx.type`.
 5. Wallet MUST display: chain, recipient (or "Contract Creation"),
    value, gas estimate.
 
@@ -159,9 +176,13 @@ Signs a transaction without broadcasting.
 **Errors:** `user_rejected`, `unauthorized`, `invalid_params`,
 `unsupported_chain`, `internal_error`
 
-### 6.3 wallet_sendTransaction
+### 6.3 wallet_sendTransaction (optional)
 
-Signs and broadcasts. Same params and validation as Section 6.2.
+The only optional method. Cold wallets and hardware signers that
+cannot broadcast MUST omit this from `capabilities.methods`. The dApp
+falls back to `wallet_signTransaction` + own RPC broadcast.
+
+Same params and validation as Section 6.2.
 
 **Result:**
 

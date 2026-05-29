@@ -8,7 +8,7 @@ export function formatMethod(m: string): string {
     case 'eth_sendTransaction': return 'Send Transaction';
     case 'eth_signTransaction': return 'Sign Transaction';
     case 'personal_sign': return 'Sign Message';
-    case 'eth_signTypedData_v4': return 'Sign Typed Data';
+    case 'eth_signTypedData_v4':
     case 'eth_signTypedData_v3': return 'Sign Typed Data';
     default: return m;
   }

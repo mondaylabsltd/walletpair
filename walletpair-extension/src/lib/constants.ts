@@ -20,4 +20,5 @@ export const STORAGE_KEYS = {
   CONNECTED_WALLET: 'connectedWallet',
   SETTINGS: 'settings',
   PERMISSIONS: 'permissions',
+  CONNECTED_AT: 'connectedAt',
 } as const;

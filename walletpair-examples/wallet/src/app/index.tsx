@@ -34,8 +34,8 @@ interface LogEntry { dir: 'in' | 'out' | 'err'; type: string; detail: string }
 
 // Wallet capabilities (§7)
 const WALLET_CAPABILITIES = {
-  methods: ['wallet_getAccounts', 'wallet_signMessage'],
-  events: ['accountsChanged', 'chainChanged'],
+  methods: ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain'],
+  events: ['accountsChanged', 'chainChanged', 'disconnect'],
   chains: ['eip155:1'],
 };
 const WALLET_META = {

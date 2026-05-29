@@ -17,6 +17,8 @@ import {
   grantPermission,
   revokePermission,
   getPermissions,
+  saveConnectedAt,
+  getConnectedAt,
 } from '@/lib/storage';
 import { READ_ONLY_METHODS, proxyRpcCall } from '@/lib/rpc-proxy';
 import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request, PendingConfirmationInfo } from '@/lib/types';
@@ -25,6 +27,9 @@ import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request
 
 /** Deferred request timeout (5 minutes) */
 const DEFERRED_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Maximum session age (24 hours) */
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 // ── State ────────────────────────────────────────────────────────────────
 
@@ -126,6 +131,7 @@ function attachSessionListeners(autoAccepted: boolean) {
         updateState({ phase: 'connected' });
         pairingInProgress = false;
         saveSessionState(session!.serialize()).catch(() => {});
+        saveConnectedAt(Date.now()).catch(() => {});
         // Start keepalive alarm (survives SW termination)
         chrome.alarms.create('walletpair-keepalive', { periodInMinutes: 0.33 });
         flushDeferredRequests();
@@ -200,6 +206,7 @@ function handleSessionClosed() {
   connectedWallet = null;
   saveSessionState(null).catch(() => {});
   saveConnectedWallet(null).catch(() => {});
+  saveConnectedAt(null).catch(() => {});
   broadcastEvent('disconnect', undefined);
 }
 
@@ -227,6 +234,15 @@ async function createSession(): Promise<void> {
 async function tryReconnect(): Promise<boolean> {
   const saved = await getSessionState();
   if (!saved) return false;
+
+  // Check if session has expired (24-hour limit)
+  const connectedAt = await getConnectedAt();
+  if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
+    saveSessionState(null).catch(() => {});
+    saveConnectedWallet(null).catch(() => {});
+    saveConnectedAt(null).catch(() => {});
+    return false;
+  }
 
   try {
     const settings = await getSettings();
@@ -310,8 +326,13 @@ async function handleRpcRequest(
   payload: EIP1193Request,
   origin?: string,
 ): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
-  const { method, params } = payload;
+  let { method, params } = payload;
   const permitted = origin ? await isPermitted(origin) : true;
+
+  // Normalize v3 → v4 (v4 is a superset of v3)
+  if (method === 'eth_signTypedData_v3') {
+    method = 'eth_signTypedData_v4';
+  }
 
   // ── Local methods (always answerable) ──────────────────────────────────
   if (method === 'eth_chainId') {
@@ -582,9 +603,18 @@ export default defineBackground(() => {
   });
 
   // Handle keepalive alarm (fires even after SW restart)
-  chrome.alarms.onAlarm.addListener((alarm) => {
+  chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === 'walletpair-keepalive') {
       if (session?.phase === 'connected') {
+        // Check 24-hour session expiry
+        const connectedAt = await getConnectedAt();
+        if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
+          session.close();
+          session = null;
+          evmProvider = null;
+          handleSessionClosed();
+          return;
+        }
         session.ping();
       }
     }

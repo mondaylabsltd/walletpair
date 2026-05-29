@@ -23,6 +23,7 @@ export const UNSUPPORTED_METHODS = new Set([
   'eth_getEncryptionPublicKey',
   'eth_decrypt',
   'eth_sign',
+  'wallet_addEthereumChain',
 ]);
 
 export interface PostMessageFn {

@@ -547,6 +547,24 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           break
         }
 
+        // Warn if wallet omits any of the 5 MUST-support methods (backwards-compatible)
+        if (joinCapabilities) {
+          const requiredMethods = [
+            'wallet_getAccounts',
+            'wallet_signTransaction',
+            'wallet_signMessage',
+            'wallet_signTypedData',
+            'wallet_switchChain',
+          ]
+          const declared = new Set(joinCapabilities.methods)
+          const absent = requiredMethods.filter((m) => !declared.has(m))
+          if (absent.length > 0) {
+            console.warn(
+              `[WalletPair] Wallet missing MUST-support methods: ${absent.join(', ')}`,
+            )
+          }
+        }
+
         const knownWallet = this.isSameApprovedWallet(joinPubKey, joinCapabilities, joinMeta)
         this.walletCapabilities = joinCapabilities
         this.walletMeta = joinMeta

@@ -51,6 +51,18 @@ function hexChainToCaip2(hex: string): string {
   return `eip155:${Number.parseInt(hex, 16)}`;
 }
 
+/** Validate that a transaction object contains all required fields. */
+function validateTxFields(tx: Record<string, unknown> | undefined): void {
+  const required = ['value', 'data', 'type', 'chainId'];
+  const missing = required.filter(f => tx?.[f] === undefined || tx?.[f] === null);
+  if (missing.length > 0) {
+    throw Object.assign(
+      new Error(`Missing required transaction fields: ${missing.join(', ')}`),
+      { code: -32602 },
+    );
+  }
+}
+
 const defaultMapper: MethodMapper = {
   mapRequest(method, params) {
     switch (method) {
@@ -90,12 +102,14 @@ const defaultMapper: MethodMapper = {
         // params: [txObject] — maps to wallet_sendTransaction (sign + broadcast)
         const p = params as [Record<string, unknown>] | undefined;
         const tx = p?.[0];
+        validateTxFields(tx);
         return { method: 'wallet_sendTransaction', params: { address: tx?.from, tx } };
       }
       case 'eth_signTransaction': {
         // params: [txObject] — maps to wallet_signTransaction (sign only)
         const p = params as [Record<string, unknown>] | undefined;
         const tx = p?.[0];
+        validateTxFields(tx);
         return { method: 'wallet_signTransaction', params: { address: tx?.from, tx } };
       }
       case 'wallet_switchEthereumChain': {
@@ -175,7 +189,9 @@ export class WalletPairProvider implements EIP1193Provider {
       if (event === 'disconnect') {
         this.connected = false;
         this.disconnected = true;
-        this.emitter.emit('disconnect', { code: 4900, message: 'Disconnected by wallet' });
+        const reason = (data as any)?.reason ?? 'unknown';
+        const msg = (data as any)?.message ?? `Disconnected by wallet (${reason})`;
+        this.emitter.emit('disconnect', { code: 4900, message: msg });
         this.session.close('normal');
         return;
       }

@@ -122,8 +122,8 @@
 		const s = new WalletSession({
 			transport,
 			capabilities: {
-				methods: ['wallet_getAccounts', 'wallet_signMessage'],
-				events: ['accountsChanged', 'chainChanged'],
+				methods: ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain'],
+				events: ['accountsChanged', 'chainChanged', 'disconnect'],
 				chains: ['eip155:1']
 			},
 			meta: { name: 'WalletPair EOA Wallet', description: 'WalletPair example wallet', url: location.origin, icon: '' }

@@ -377,8 +377,8 @@ describe('Protocol Section 9.1: Pairing URI', () => {
 describe('Protocol Section 8: Capabilities', () => {
   it('join must include methods, events, chains arrays', () => {
     const capabilities = {
-      methods: ['wallet_getAccounts', 'wallet_signMessage'],
-      events: ['accountsChanged', 'chainChanged'],
+      methods: ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain'],
+      events: ['accountsChanged', 'chainChanged', 'disconnect'],
       chains: ['eip155:1', 'eip155:137'],
     };
     expect(Array.isArray(capabilities.methods)).toBe(true);

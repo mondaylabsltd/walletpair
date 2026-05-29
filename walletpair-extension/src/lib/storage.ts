@@ -87,3 +87,20 @@ export async function isPermitted(origin: string): Promise<boolean> {
   const perms = await getPermissions();
   return perms[origin]?.granted === true;
 }
+
+// ── Session timestamp ─────────────────────────────────────────────────
+
+/** Save the timestamp when the session entered connected state */
+export async function saveConnectedAt(ts: number | null): Promise<void> {
+  if (ts) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.CONNECTED_AT]: ts });
+  } else {
+    await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_AT);
+  }
+}
+
+/** Get the timestamp when the session entered connected state */
+export async function getConnectedAt(): Promise<number | null> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.CONNECTED_AT);
+  return result[STORAGE_KEYS.CONNECTED_AT] ?? null;
+}
