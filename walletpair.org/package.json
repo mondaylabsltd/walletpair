@@ -19,10 +19,10 @@
 		"gen": "wrangler types"
 	},
 	"dependencies": {
-		"@noble/ciphers": "^2.2.0",
-		"@noble/curves": "^1.8.2",
-		"@noble/hashes": "^1.7.2",
-		"canonicalize": "^3.0.0",
+		"@noble/ciphers": "^1.2.1",
+		"@noble/curves": "^1.8.1",
+		"@noble/hashes": "^1.7.1",
+		"canonicalize": "^2.0.0",
 		"qrcode": "^1.5.4",
 		"walletpair-sdk": "file:../walletpair-sdk"
 	},
