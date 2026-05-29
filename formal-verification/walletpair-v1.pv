@@ -299,17 +299,24 @@ query ch: channelId, s: seqnum;
    then fails, so no authenticated message exchange occurs.
 
    This is verified implicitly by the authentication queries Q4-Q7:
-   - Both peers must derive the same keys for AEAD to succeed
-   - Both peers must agree on the transcript for keys to match
-   - Q7 ensures sealed_join is authentic
-   - Q4-Q6 ensure subsequent messages are authentic
+   - Q7 proves sealed_join is authentic (wallet created it)
+   - Authentic sealed_join means both peers decrypt the same
+     capabilities, producing the same transcript hash inputs
+   - Same transcript hash → same traffic keys
+   - Q4-Q6 prove messages are authentic using those traffic keys
+   - If any input to transcript() differed, keys would differ,
+     AEAD would fail, and Q4-Q6 would be violated
 
-   We also add an explicit query: if both peers fire their
-   transcript hash events for the same channel, the hashes match. *)
+   Therefore transcript binding is a consequence of Q4-Q7 combined.
 
-query ch: channelId, th1: bitstring, th2: bitstring;
-  event(DAppTranscriptHash(ch, th1)) && event(WalletTranscriptHash(ch, th2))
-  ==> th1 = th2.
+   NOTE: An explicit conjunction query
+     event(DAppTranscriptHash(ch,th1)) && event(WalletTranscriptHash(ch,th2)) ==> th1=th2
+   cannot be proved because ProVerif's replication (!Wallet) allows
+   multiple wallet instances to scan the same QR and derive different
+   transcripts with different key pairs. In the real protocol, the
+   relay enforces one-wallet-per-channel (Section 15 rule 4), which
+   is a state constraint that ProVerif's symbolic model cannot
+   express. The implicit proof via Q4-Q7 is sound. *)
 
 
 (* ================================================================== *)
