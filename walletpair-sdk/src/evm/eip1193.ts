@@ -121,7 +121,7 @@ const defaultMapper: MethodMapper = {
       case 'wallet_addEthereumChain':
         return null; // unsupported — mapRequest returning null triggers unsupported_method error
       default:
-        return { method, params };
+        return null; // unknown method — routed to rpcProvider or rejected before reaching here
     }
   },
   mapResponse(method, result) {
@@ -150,6 +150,32 @@ const defaultMapper: MethodMapper = {
 };
 
 // ---------------------------------------------------------------------------
+// RPC routing: wallet methods vs read-only RPC
+// ---------------------------------------------------------------------------
+
+/** Methods that MUST go through WalletPair (require wallet signing/authorization). */
+const WALLET_METHODS = new Set([
+  'eth_requestAccounts', 'eth_accounts',
+  'personal_sign',
+  'eth_signTypedData_v4', 'eth_signTypedData_v3',
+  'eth_sendTransaction', 'eth_signTransaction',
+  'wallet_switchEthereumChain', 'wallet_addEthereumChain',
+]);
+
+/** Methods handled locally by the provider (no RPC or WalletPair needed). */
+const LOCAL_METHODS = new Set([
+  'eth_chainId', 'net_version',
+]);
+
+/**
+ * An RPC provider that handles read-only Ethereum JSON-RPC calls.
+ * Pass any EIP-1193-compatible provider, or a simple fetch-based JSON-RPC client.
+ */
+export interface RpcProvider {
+  request(args: EIP1193RequestArgs): Promise<unknown>;
+}
+
+// ---------------------------------------------------------------------------
 // WalletPairProvider
 // ---------------------------------------------------------------------------
 
@@ -159,11 +185,19 @@ export interface WalletPairProviderOptions {
   chainId?: number | undefined;
   /** Custom method mapper. */
   mapper?: MethodMapper | undefined;
+  /**
+   * Optional RPC provider for read-only methods (eth_call, eth_getBalance,
+   * eth_blockNumber, etc.). If provided, any method not handled by WalletPair
+   * is routed here instead of being sent to the wallet. If omitted, unknown
+   * methods throw unsupported_method (4200).
+   */
+  rpcProvider?: RpcProvider | undefined;
 }
 
 export class WalletPairProvider implements EIP1193Provider {
   private session: DAppSession;
   private mapper: MethodMapper;
+  private rpcProvider: RpcProvider | undefined;
   private emitter = new Emitter<EIP1193ProviderEvents>();
   private chainId: number;
   private accounts: string[] = [];
@@ -173,6 +207,7 @@ export class WalletPairProvider implements EIP1193Provider {
   constructor(options: WalletPairProviderOptions) {
     this.session = options.session;
     this.mapper = options.mapper ?? defaultMapper;
+    this.rpcProvider = options.rpcProvider;
     this.chainId = options.chainId ?? 1;
 
     this.session.on('phase', (phase) => {
@@ -247,6 +282,14 @@ export class WalletPairProvider implements EIP1193Provider {
     }
     if (method === 'net_version') {
       return String(this.chainId);
+    }
+
+    // Route non-wallet methods to RPC provider if available
+    if (!WALLET_METHODS.has(method) && !LOCAL_METHODS.has(method)) {
+      if (this.rpcProvider) {
+        return this.rpcProvider.request(args);
+      }
+      throw Object.assign(new Error(`Unsupported method: ${method}. Pass rpcProvider to handle read-only RPC calls.`), { code: 4200 });
     }
 
     const mapped = this.mapper.mapRequest(method, params);

@@ -327,7 +327,34 @@ On receipt, the dApp MUST NOT send further requests.
 
 Wallets MAY define namespaced extensions (e.g., `metamask:snap_error`).
 
-## 9. Security Requirements
+## 9. RPC Method Routing
+
+WalletPair only transports **wallet operations** (signing, accounts,
+chain switching). Read-only RPC methods (`eth_call`, `eth_getBalance`,
+`eth_blockNumber`, `eth_getTransactionReceipt`, `eth_estimateGas`,
+etc.) MUST NOT be sent through the WalletPair channel — they do not
+require wallet authorization and would add unnecessary latency over
+a cross-device encrypted relay.
+
+SDK implementations that provide an EIP-1193 adapter MUST route
+methods as follows:
+
+| Category | Methods | Route |
+|----------|---------|-------|
+| **Wallet** | `eth_accounts`, `personal_sign`, `eth_signTypedData_v4`, `eth_sendTransaction`, `eth_signTransaction`, `wallet_switchEthereumChain` | WalletPair channel |
+| **Local** | `eth_chainId`, `net_version` | Provider-local state |
+| **Read-only RPC** | Everything else | dApp's own RPC provider |
+
+The adapter SHOULD accept an optional `rpcProvider` parameter. If
+provided, unknown methods are forwarded to it. If not provided,
+unknown methods MUST be rejected with code `4200`
+(`unsupported_method`), not silently sent to the wallet.
+
+DApps that integrate WalletPair directly (without the EIP-1193
+adapter) MUST use their own RPC connection for read-only queries and
+only send `wallet_*` methods through WalletPair.
+
+## 10. Security Requirements
 
 1. All signing and transaction methods MUST display a confirmation UI.
 2. Wallet MUST NOT blind-sign transactions or EIP-712 data.
