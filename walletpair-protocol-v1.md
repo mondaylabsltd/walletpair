@@ -60,13 +60,13 @@ See Section 5 for which message types each role may send.
 ### Channel ID (`ch`)
 
 The channel ID identifies one pending or connected channel. It MUST be a
-random 32-byte value encoded as hex (64 characters).
+cryptographically random 32-byte value encoded as hex (64 characters).
 
 ### Sender Identity (`from`)
 
 Present in every message:
 
-- **Peer messages:** sender's X25519 public key, base64url no padding.
+- **Peer messages:** sender's X25519 public key, base64url, no padding.
 - **Adapter messages:** the string `"_adapter"`.
 
 ### Message ID (`id`)
@@ -177,7 +177,7 @@ Error codes appear in the `code` field of error responses
 | `protocol_error` | Malformed message structure (e.g., `sealed` absent after `ready.connected`). |
 | `rate_limited` | Too many pending requests (see Section 15 rule 11). Not to be confused with the close/terminate reason of the same name in Section 12.3. |
 | `internal_error` | Wallet encountered an unexpected internal error. |
-| `user_rejected` | User explicitly rejected the request in the wallet UI. |
+| `user_rejected` | User explicitly rejected the request in the wallet UI. Not to be confused with the close reason of the same name in Section 12.3. |
 
 Implementations MAY define additional error codes for sub-protocol
 methods. Unknown error codes MUST be treated as generic errors (do
@@ -324,7 +324,7 @@ at the end of this section before deployment.
 | 5 | **UTF-8 without BOM** as output encoding | |
 | 6 | **Omit absent fields** rather than including them as `null` | |
 
-**Edge cases (rarely encountered but must be handled):**
+**Edge cases (rarely encountered but MUST be handled):**
 
 | Case | Rule |
 |------|------|
@@ -441,10 +441,10 @@ After `ready.connected`, all `req`, `res`, and `evt` payloads are
 encrypted with ChaCha20-Poly1305:
 
 ```text
-nonce   = HMAC-SHA256(traffic_key, seq_bytes)[0:12]
-aad     = channel_id_bytes || aad_header
-sealed  = AEAD_encrypt(traffic_key, nonce, plaintext_json_utf8, aad)
-envelope = base64url_no_pad(seq_bytes || ciphertext || tag)
+nonce          = HMAC-SHA256(traffic_key, seq_bytes)[0:12]
+aad            = channel_id_bytes || aad_header
+ciphertext_tag = AEAD_encrypt(traffic_key, nonce, plaintext_json_utf8, aad)
+sealed         = base64url_no_pad(seq_bytes || ciphertext_tag)
 ```
 
 AAD header (length-prefixed to prevent delimiter ambiguity):
@@ -506,7 +506,7 @@ sealed_join    = AEAD_encrypt(join_encryption_key, join_nonce,
 envelope       = base64url_no_pad(join_nonce || ciphertext || tag)
 ```
 
-- Nonce: fresh random 96-bit per encryption. MUST NOT reuse.
+- Nonce: fresh random 96 bits per encryption. MUST NOT reuse.
 - AAD type byte `0x04` is reserved for `sealed_join`.
 - Minimum decoded envelope length: 12 + 16 bytes.
 - On retry: MUST use fresh nonce, MUST NOT change capabilities or
@@ -833,7 +833,7 @@ P = peer, A = adapter.
 Reconnect reuses the same `create`/`join`/`accept` flow as initial
 pairing, but both peers already hold the traffic keys and sequence
 counters from the original session. The relay does not need to remember
-anything -- it treats a reconnect exactly like a new channel.
+anything — it treats a reconnect exactly like a new channel.
 
 Both peers persist `{ ch, relay_url, peer_public_key, traffic_keys,
 sequence_counters }` across transport disconnections.
@@ -1168,7 +1168,7 @@ The relay or transport may be compromised. It MUST NOT be able to:
 2. `from` MUST match sender's X25519 public key.
 3. Ephemeral key pairs MUST be generated per channel.
 4. Applications MUST NOT treat initial `join` as proof of user identity.
-   User identity and account ownership must be established through
+   User identity and account ownership MUST be established through
    encrypted wallet methods and user-approved signatures where needed.
 
 See also: sequence number rules (Section 6.6), relay storage
