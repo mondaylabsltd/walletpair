@@ -1334,3 +1334,46 @@ ciphertext+tag = 2aed1e76963c25234d9a2e023fdf40d35b9e1c7a9a3fd121
 
 sealed = AAAAACrtHnaWPCUjTZouAj_fQNNbnhx6mj_RIcBFwU315WJ3JiE_6-JFn_TCTSxwnUwZ0AtvQ_jqJBjmjo4IQL93ca2oUaU
 ```
+
+## Appendix B: Sub-Protocol Specification Guide
+
+WalletPair delegates all business logic to **sub-protocols**, one per
+blockchain ecosystem. A sub-protocol MUST define the following seven
+items for each network it targets:
+
+| # | Module | What to define |
+|---|--------|----------------|
+| 1 | **Namespace & version** | Identifier (e.g., `evm`), version integer, CAIP-2 prefix (e.g., `eip155`). |
+| 2 | **Chain identification** | CAIP-2 format, chain ID encoding in params, format conversion rules. |
+| 3 | **Account identification** | Address format, length, checksum, forbidden values. |
+| 4 | **Methods** | For each method: params schema, result schema, error codes, validation rules, user confirmation requirements. MUST include at least one account query method and one signing method. |
+| 5 | **Events** | For each event: data schema, trigger conditions, dApp handling. SHOULD include `accountsChanged`, `chainChanged` (if multi-chain), and `disconnect` (wallet-initiated session end, encrypted and distinct from transport `close`). |
+| 6 | **Data encoding** | How binary data, integers, addresses, transactions, and signatures are encoded within `sealed` JSON. |
+| 7 | **Security constraints** | User confirmation matrix, blind signing policy, cross-chain replay rules, high-risk pattern detection, session isolation. |
+
+### B.1 Document Structure
+
+```text
+# WalletPair <Network> Sub-Protocol v<N>
+
+## 1. Namespace and Version
+## 2. Chain Identification
+## 3. Account Identification
+## 4. Capabilities
+## 5. Data Encoding
+## 6. Methods
+## 7. Events
+## 8. Error Codes
+## 9. Security Requirements
+```
+
+### B.2 Cross-Network Differences
+
+| Aspect | EVM | Solana | Sui | Tron | Bitcoin |
+|--------|-----|--------|-----|------|---------|
+| CAIP-2 prefix | `eip155` | `solana` | `sui` | `tron` | `bip122` |
+| Address format | `0x` hex, 20B | base58, 32B | `0x` hex, 32B | base58check, 21B | bech32/base58check |
+| Tx format | RLP / JSON | bincode / base64 | BCS / base64 | protobuf / hex | PSBT / raw hex |
+| Signature | secp256k1, 65B (r+s+v) | Ed25519, 64B | Ed25519 / secp256k1 | secp256k1, 65B | ECDSA DER / Schnorr 64B |
+| Fee model | gas × gasPrice | priority fee + CU | gas budget (SUI) | bandwidth + energy | sat/vB × weight |
+| Nonce model | per-account seq | recent blockhash | per-object seq | ref block | UTXO (no nonce) |
