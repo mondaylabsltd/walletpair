@@ -1,6 +1,6 @@
 # walletpair-sdk
 
-TypeScript SDK for the [WalletPair Protocol](../walletpair-protocol-v1.md) -- connect dApps and wallets with end-to-end encrypted, relay-based or BLE communication.
+TypeScript SDK for the [WalletPair Protocol](https://github.com/atshelchin/walletpair/blob/main/walletpair-protocol-v1.md) -- connect dApps and wallets with end-to-end encrypted, relay-based or BLE communication.
 
 ## Features
 

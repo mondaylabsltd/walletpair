@@ -43,6 +43,13 @@
   "peerDependencies": {
     "@wagmi/core": ">=2.0.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/atshelchin/walletpair.git",
+    "directory": "walletpair-sdk"
+  },
+  "homepage": "https://walletpair.org",
+  "bugs": "https://github.com/atshelchin/walletpair/issues",
   "peerDependenciesMeta": {
     "@wagmi/core": {
       "optional": true
