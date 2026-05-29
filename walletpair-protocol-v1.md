@@ -284,68 +284,48 @@ join_encryption_key = HKDF-SHA256(
 
 **Normative reference: RFC 8785 (JSON Canonicalization Scheme, JCS).**
 
-This protocol uses RFC 8785 as the sole canonical JSON standard.
-Implementations MUST comply with RFC 8785 in full. The rules below
-summarise the RFC for convenience; where this summary conflicts with
-RFC 8785, the RFC takes precedence. Inputs MUST also conform to
-I-JSON (RFC 7493).
+Canonical JSON ensures that the same data always serializes to the
+exact same bytes, so that both sides of the channel compute identical
+hashes and signatures. This protocol adopts RFC 8785 as its canonical
+JSON standard. In practice, **use an existing JCS library** rather
+than implementing serialization from scratch:
 
-**1. Object key sorting.** Property name strings are compared as
-arrays of UTF-16 code units, treated as unsigned integers. Shorter
-strings that are otherwise identical precede longer strings (RFC 8785
-§3.2.3). Sorting is recursive: nested objects at any depth MUST also
-have their keys sorted.
+| Language | Package |
+|---|---|
+| JavaScript / TypeScript | `canonicalize` (npm) |
+| Python | `json-canonicalization` (PyPI) |
+| Rust | `serde_jcs` (crates.io) |
+| Go | `go-jcs` (github.com/AnomalyFi/go-jcs) |
 
-> **Note for non-JavaScript implementations:** For keys consisting
-> entirely of BMP characters (U+0000–U+FFFF) — which includes all
-> keys defined in this protocol — UTF-16 code unit order, Unicode
-> code point order, and UTF-8 byte order are identical. Supplementary
-> plane characters (U+10000+) MUST NOT appear in property names in
-> this protocol.
+Whichever library you choose, verify it passes all the test vectors
+at the end of this section before deployment.
 
-**2. No insignificant whitespace.** No spaces after `:` or `,`, no
-newlines, no indentation (RFC 8785 §3.2.2).
+**Core rules (what the library does for you):**
 
-**3. Duplicate member names.** JSON objects MUST NOT contain duplicate
-property names (RFC 8785 §3, RFC 7493 §2.2, RFC 8259 §4).
-Implementations MUST NOT produce duplicate keys and MUST reject inputs
-containing duplicate keys at any nesting level.
+| # | Rule | Example |
+|---|------|---------|
+| 1 | **Sort object keys** alphabetically, including nested objects | `{"b":1,"a":2}` → `{"a":2,"b":1}` |
+| 2 | **No whitespace** — no spaces after `:` or `,`, no newlines | `{"a": 1}` → `{"a":1}` |
+| 3 | **No duplicate keys** — reject any input with duplicate property names | |
+| 4 | **Preserve array order** — arrays are NOT sorted | `[3,1,2]` stays `[3,1,2]` |
+| 5 | **UTF-8 without BOM** as output encoding | |
+| 6 | **Omit absent fields** rather than including them as `null` | |
 
-**4. Numbers.** MUST be serialized per the ECMAScript `Number.toString()`
-algorithm (ECMA-262 §7.1.12.1, including Note 2) as required by
-RFC 8785 §3.2.2.3. This implies:
-- No leading zeroes, no trailing fractional zeroes, no `+` prefix.
-- Negative zero serializes as `0`.
-- `NaN` and `Infinity` are not valid JSON; inputs containing them
-  MUST be rejected or converted to `null` before canonicalization.
-- Non-JavaScript implementations SHOULD use the Ryu algorithm or
-  equivalent to produce identical output. See RFC 8785 Appendix B
-  for IEEE 754 test vectors.
+**Edge cases (rarely encountered but must be handled):**
 
-**5. Strings.** ASCII control characters (U+0000–U+001F) MUST be
-escaped. The following use short-form escapes: `\b` (U+0008),
-`\t` (U+0009), `\n` (U+000A), `\f` (U+000C), `\r` (U+000D).
-All other control characters use `\uXXXX` with **lowercase** hex
-digits (RFC 8785 §3.2.2.2). Backslash and double quote use `\\`
-and `\"`. Forward slash `/` MUST NOT be escaped. All other
-characters — including non-ASCII Unicode — are output as literal
-UTF-8 bytes, not escaped.
-
-**6. Literals.** `null`, `true`, `false` use their literal forms.
-Values that are absent or not applicable MUST be omitted from the
-object rather than included as `null`, unless the field is explicitly
-defined as nullable in this specification.
-
-**7. Arrays.** Element order is preserved; arrays MUST NOT be sorted.
-
-**8. Output encoding.** The canonical form MUST be encoded as UTF-8
-without BOM when used as input to cryptographic operations (hashing,
-HKDF, AEAD plaintext).
+| Case | Rule |
+|------|------|
+| `-0` (negative zero) | Serialize as `0` |
+| `NaN`, `Infinity` | Not valid JSON; reject or convert to `null` before canonicalization |
+| Numbers | No leading zeroes, no trailing `.0`, no `+` prefix |
+| Control characters (U+0000–U+001F) | Escape with `\uXXXX` using **lowercase** hex; use short forms for `\b \t \n \f \r` |
+| Forward slash `/` | Do NOT escape |
+| Non-ASCII Unicode | Output as literal UTF-8 bytes, not `\uXXXX` |
 
 ---
 
-Implementations MUST verify their canonical JSON output matches **all**
-of the following test vectors byte-for-byte before deployment:
+**Test vectors — your implementation MUST match all of these
+byte-for-byte:**
 
 ```text
 Vector 1 — capabilities (key sorting, nested objects):
