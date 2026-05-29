@@ -17,7 +17,14 @@
 		"test:e2e": "playwright install && playwright test",
 		"gen": "wrangler types"
 	},
+	"dependencies": {
+		"walletpair-sdk": "file:../walletpair-sdk",
+		"qrcode": "^1.5.4",
+		"@noble/curves": "^1.8.2",
+		"@noble/hashes": "^1.7.2"
+	},
 	"devDependencies": {
+		"@types/qrcode": "^1.5.5",
 		"@eslint/compat": "^2.0.4",
 		"@eslint/js": "^10.0.1",
 		"@playwright/test": "^1.59.1",
