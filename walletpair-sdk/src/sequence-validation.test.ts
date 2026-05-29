@@ -6,17 +6,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AadHeader } from './crypto.js'
 import {
   b64urlDecode,
-  b64urlEncode,
   buildPairingUri,
   computeSharedSecret,
   deriveSessionKey,
   generateChannelId,
   generateX25519KeyPair,
   sealPayload,
-  unsealPayload,
 } from './crypto.js'
 import { DAppSession } from './dapp-session.js'
 import { MockRelay, MockTransport, makeJoinBody, parseSnapshot } from './test-helpers.js'
@@ -71,7 +68,7 @@ interface ConnectedPair {
   channelId: string
 }
 
-async function setupConnectedPair(): Promise<ConnectedPair> {
+async function _setupConnectedPair(): Promise<ConnectedPair> {
   const dappTransport = new MockTransport()
   const walletTransport = new MockTransport()
   const _relay = new MockRelay(dappTransport, walletTransport)
@@ -110,7 +107,7 @@ async function setupConnectedPair(): Promise<ConnectedPair> {
   // Instead, we extract from what the relay forwarded.
   // The walletTransport.sent has the join message with from = wallet pubkey.
   const walletJoinMsg = walletTransport.sent.find((m) => m.t === 'join')!
-  const walletPubB64 = walletJoinMsg.from!
+  const _walletPubB64 = walletJoinMsg.from!
   // The dappTransport.sent has the create message with from = dApp pubkey.
   const dappCreateMsg = dappTransport.sent.find((m) => m.t === 'create')!
   const dappPubB64 = dappCreateMsg.from!
@@ -159,12 +156,12 @@ async function connectDAppManually(ctx: ReturnType<typeof setupDAppWithManualWal
     ch: session.channelId,
     ts: Date.now(),
     from: walletKp.publicKeyB64,
-    body: makeJoinBody(session.channelId, transport.sent[0]!.from!, walletKp),
+    body: makeJoinBody(session.channelId, transport.sent[0]?.from!, walletKp),
   } as ProtocolMessage)
 
   // Derive root key from wallet side. Responses/events use wallet->dApp key,
   // which is DAppSession.recvKey after the join transcript is processed.
-  const dappPubB64 = transport.sent[0]!.from!
+  const dappPubB64 = transport.sent[0]?.from!
   const dappPub = b64urlDecode(dappPubB64)
   const shared = computeSharedSecret(walletKp.privateKey, dappPub)
   deriveSessionKey(shared, session.channelId)
@@ -225,7 +222,7 @@ async function connectWalletManually(ctx: ReturnType<typeof setupWalletWithManua
 
   // Derive root key from dApp side. Requests use dApp->wallet key,
   // which is WalletSession.recvKey after prepareJoin().
-  const walletPubB64 = transport.sent.find((m) => m.t === 'join')!.from!
+  const walletPubB64 = transport.sent.find((m) => m.t === 'join')?.from!
   const walletPub = b64urlDecode(walletPubB64)
   const shared = computeSharedSecret(dappKp.privateKey, walletPub)
   deriveSessionKey(shared, channelId)
@@ -1085,7 +1082,7 @@ describe('Sequence validation', () => {
         ch: session.channelId,
         ts: Date.now(),
         from: walletKp.publicKeyB64,
-        body: makeJoinBody(session.channelId, transport.sent[0]!.from!, walletKp),
+        body: makeJoinBody(session.channelId, transport.sent[0]?.from!, walletKp),
       } as ProtocolMessage)
 
       // Session enters pending_accept briefly, then auto-accept sends accept

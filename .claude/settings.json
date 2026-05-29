@@ -3,7 +3,8 @@
     "allow": [
       "WebFetch(domain:wagmi.sh)",
       "Bash(./gradlew :ble-peripheral:compileDebugKotlin)",
-      "Bash(cargo clippy:*)"
+      "Bash(cargo clippy:*)",
+      "Bash(ps -p 44147 -o comm=)"
     ]
   }
 }

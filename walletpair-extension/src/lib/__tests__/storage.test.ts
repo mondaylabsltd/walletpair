@@ -71,7 +71,7 @@ describe('storage', () => {
     it('calls chrome.storage.local.set', async () => {
       await saveSettings({ relayUrl: 'wss://new' });
       expect(chromeStorageLocal.set).toHaveBeenCalled();
-      const arg = chromeStorageLocal.set.mock.calls[0][0];
+      const arg = chromeStorageLocal.set.mock.calls[0][0] as Record<string, Record<string, unknown>>;
       expect(arg['settings'].relayUrl).toBe('wss://new');
     });
   });

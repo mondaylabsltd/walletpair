@@ -9,32 +9,32 @@
  *   const provider = new WalletPairProvider({ session })
  */
 
-import type { DAppSession } from '../dapp-session.js';
-import { evmNumericChainId } from '../types.js';
-import { Emitter } from '../emitter.js';
+import type { DAppSession } from '../dapp-session.js'
+import { Emitter } from '../emitter.js'
+import { evmNumericChainId } from '../types.js'
 
 // ---------------------------------------------------------------------------
 // EIP-1193 types
 // ---------------------------------------------------------------------------
 
 export interface EIP1193RequestArgs {
-  method: string;
-  params?: unknown[] | Record<string, unknown>;
+  method: string
+  params?: unknown[] | Record<string, unknown>
 }
 
 export interface EIP1193ProviderEvents {
-  [key: string]: unknown;
-  connect: { chainId: string };
-  disconnect: { code: number; message: string };
-  chainChanged: string;
-  accountsChanged: string[];
-  message: { type: string; data?: unknown | undefined };
+  [key: string]: unknown
+  connect: { chainId: string }
+  disconnect: { code: number; message: string }
+  chainChanged: string
+  accountsChanged: string[]
+  message: { type: string; data?: unknown | undefined }
 }
 
 export interface EIP1193Provider {
-  request(args: EIP1193RequestArgs): Promise<unknown>;
-  on(event: string, handler: (...args: any[]) => void): void;
-  removeListener(event: string, handler: (...args: any[]) => void): void;
+  request(args: EIP1193RequestArgs): Promise<unknown>
+  on(event: string, handler: (...args: any[]) => void): void
+  removeListener(event: string, handler: (...args: any[]) => void): void
 }
 
 // ---------------------------------------------------------------------------
@@ -42,24 +42,26 @@ export interface EIP1193Provider {
 // ---------------------------------------------------------------------------
 
 export interface MethodMapper {
-  mapRequest(method: string, params?: unknown): { method: string; params?: unknown | undefined } | null;
-  mapResponse(method: string, result: unknown): unknown;
+  mapRequest(
+    method: string,
+    params?: unknown,
+  ): { method: string; params?: unknown | undefined } | null
+  mapResponse(method: string, result: unknown): unknown
 }
 
 /** Convert hex chainId "0x89" to CAIP-2 "eip155:137". */
 function hexChainToCaip2(hex: string): string {
-  return `eip155:${Number.parseInt(hex, 16)}`;
+  return `eip155:${Number.parseInt(hex, 16)}`
 }
 
 /** Validate that a transaction object contains all required fields. */
 function validateTxFields(tx: Record<string, unknown> | undefined): void {
-  const required = ['value', 'data', 'type', 'chainId'];
-  const missing = required.filter(f => tx?.[f] === undefined || tx?.[f] === null);
+  const required = ['value', 'data', 'type', 'chainId']
+  const missing = required.filter((f) => tx?.[f] === undefined || tx?.[f] === null)
   if (missing.length > 0) {
-    throw Object.assign(
-      new Error(`Missing required transaction fields: ${missing.join(', ')}`),
-      { code: -32602 },
-    );
+    throw Object.assign(new Error(`Missing required transaction fields: ${missing.join(', ')}`), {
+      code: -32602,
+    })
   }
 }
 
@@ -68,86 +70,92 @@ const defaultMapper: MethodMapper = {
     switch (method) {
       case 'eth_requestAccounts':
       case 'eth_accounts':
-        return { method: 'wallet_getAccounts' };
+        return { method: 'wallet_getAccounts' }
       case 'personal_sign': {
         // personal_sign params: [message, address] where message is hex-encoded bytes
-        const p = params as [string, string] | undefined;
-        const msg = p?.[0];
+        const p = params as [string, string] | undefined
+        const msg = p?.[0]
         // EIP-1193 personal_sign: message is always hex-encoded bytes.
         // Decode hex to UTF-8 text and route to wallet_signMessage.
-        let text = msg ?? '';
-        if (msg && msg.startsWith('0x')) {
+        let text = msg ?? ''
+        if (msg?.startsWith('0x')) {
           try {
-            const hex = msg.slice(2);
-            const bytes = new Uint8Array(hex.length / 2);
+            const hex = msg.slice(2)
+            const bytes = new Uint8Array(hex.length / 2)
             for (let i = 0; i < bytes.length; i++) {
-              bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+              bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
             }
-            text = new TextDecoder().decode(bytes);
+            text = new TextDecoder().decode(bytes)
           } catch {
-            text = msg;
+            text = msg
           }
         }
-        return { method: 'wallet_signMessage', params: { message: text, address: p?.[1] } };
+        return { method: 'wallet_signMessage', params: { message: text, address: p?.[1] } }
       }
       case 'eth_signTypedData_v4': {
         // params: [address, typedDataJSON]
-        const p = params as [string, string] | undefined;
-        let typedData: unknown;
-        try { typedData = typeof p?.[1] === 'string' ? JSON.parse(p[1]) : p?.[1]; }
-        catch { typedData = p?.[1]; }
-        return { method: 'wallet_signTypedData', params: { address: p?.[0], typedData } };
+        const p = params as [string, string] | undefined
+        let typedData: unknown
+        try {
+          typedData = typeof p?.[1] === 'string' ? JSON.parse(p[1]) : p?.[1]
+        } catch {
+          typedData = p?.[1]
+        }
+        return { method: 'wallet_signTypedData', params: { address: p?.[0], typedData } }
       }
       case 'eth_sendTransaction': {
         // params: [txObject] — maps to wallet_sendTransaction (sign + broadcast)
-        const p = params as [Record<string, unknown>] | undefined;
-        const tx = p?.[0];
-        validateTxFields(tx);
-        return { method: 'wallet_sendTransaction', params: { address: tx?.from, tx } };
+        const p = params as [Record<string, unknown>] | undefined
+        const tx = p?.[0]
+        validateTxFields(tx)
+        return { method: 'wallet_sendTransaction', params: { address: tx?.from, tx } }
       }
       case 'eth_signTransaction': {
         // params: [txObject] — maps to wallet_signTransaction (sign only)
-        const p = params as [Record<string, unknown>] | undefined;
-        const tx = p?.[0];
-        validateTxFields(tx);
-        return { method: 'wallet_signTransaction', params: { address: tx?.from, tx } };
+        const p = params as [Record<string, unknown>] | undefined
+        const tx = p?.[0]
+        validateTxFields(tx)
+        return { method: 'wallet_signTransaction', params: { address: tx?.from, tx } }
       }
       case 'wallet_switchEthereumChain': {
         // params: [{ chainId: "0x89" }] — convert hex to CAIP-2
-        const p = params as [{ chainId: string }] | undefined;
-        const hexId = p?.[0]?.chainId;
-        return { method: 'wallet_switchChain', params: { chain: hexId ? hexChainToCaip2(hexId) : undefined } };
+        const p = params as [{ chainId: string }] | undefined
+        const hexId = p?.[0]?.chainId
+        return {
+          method: 'wallet_switchChain',
+          params: { chain: hexId ? hexChainToCaip2(hexId) : undefined },
+        }
       }
       case 'wallet_addEthereumChain':
-        return null; // unsupported — mapRequest returning null triggers unsupported_method error
+        return null // unsupported — mapRequest returning null triggers unsupported_method error
       default:
-        return null; // unknown method — routed to rpcProvider or rejected before reaching here
+        return null // unknown method — routed to rpcProvider or rejected before reaching here
     }
   },
   mapResponse(method, result) {
     // Unwrap wallet_getAccounts result to EIP-1193 format (string[])
     if (method === 'eth_requestAccounts' || method === 'eth_accounts') {
-      const r = result as { accounts?: { address: string }[] } | undefined;
-      if (r?.accounts) return r.accounts.map((a) => a.address);
+      const r = result as { accounts?: { address: string }[] } | undefined
+      if (r?.accounts) return r.accounts.map((a) => a.address)
     }
     // Unwrap wallet_sendTransaction result
     if (method === 'eth_sendTransaction') {
-      const r = result as { txHash?: string } | undefined;
-      if (r?.txHash) return r.txHash;
+      const r = result as { txHash?: string } | undefined
+      if (r?.txHash) return r.txHash
     }
     // Unwrap wallet_signTransaction result
     if (method === 'eth_signTransaction') {
-      const r = result as { signedTx?: string } | undefined;
-      if (r?.signedTx) return r.signedTx;
+      const r = result as { signedTx?: string } | undefined
+      if (r?.signedTx) return r.signedTx
     }
     // Unwrap signature results
     if (method === 'personal_sign' || method === 'eth_signTypedData_v4') {
-      const r = result as { signature?: string } | undefined;
-      if (r?.signature) return r.signature;
+      const r = result as { signature?: string } | undefined
+      if (r?.signature) return r.signature
     }
-    return result;
+    return result
   },
-};
+}
 
 // ---------------------------------------------------------------------------
 // RPC routing: wallet methods vs read-only RPC
@@ -155,24 +163,26 @@ const defaultMapper: MethodMapper = {
 
 /** Methods that MUST go through WalletPair (require wallet signing/authorization). */
 const WALLET_METHODS = new Set([
-  'eth_requestAccounts', 'eth_accounts',
+  'eth_requestAccounts',
+  'eth_accounts',
   'personal_sign',
-  'eth_signTypedData_v4', 'eth_signTypedData_v3',
-  'eth_sendTransaction', 'eth_signTransaction',
-  'wallet_switchEthereumChain', 'wallet_addEthereumChain',
-]);
+  'eth_signTypedData_v4',
+  'eth_signTypedData_v3',
+  'eth_sendTransaction',
+  'eth_signTransaction',
+  'wallet_switchEthereumChain',
+  'wallet_addEthereumChain',
+])
 
 /** Methods handled locally by the provider (no RPC or WalletPair needed). */
-const LOCAL_METHODS = new Set([
-  'eth_chainId', 'net_version',
-]);
+const LOCAL_METHODS = new Set(['eth_chainId', 'net_version'])
 
 /**
  * An RPC provider that handles read-only Ethereum JSON-RPC calls.
  * Pass any EIP-1193-compatible provider, or a simple fetch-based JSON-RPC client.
  */
 export interface RpcProvider {
-  request(args: EIP1193RequestArgs): Promise<unknown>;
+  request(args: EIP1193RequestArgs): Promise<unknown>
 }
 
 // ---------------------------------------------------------------------------
@@ -180,167 +190,177 @@ export interface RpcProvider {
 // ---------------------------------------------------------------------------
 
 export interface WalletPairProviderOptions {
-  session: DAppSession;
+  session: DAppSession
   /** Initial EVM chain ID (numeric). Default 1 (mainnet). */
-  chainId?: number | undefined;
+  chainId?: number | undefined
   /** Custom method mapper. */
-  mapper?: MethodMapper | undefined;
+  mapper?: MethodMapper | undefined
   /**
    * Optional RPC provider for read-only methods (eth_call, eth_getBalance,
    * eth_blockNumber, etc.). If provided, any method not handled by WalletPair
    * is routed here instead of being sent to the wallet. If omitted, unknown
    * methods throw unsupported_method (4200).
    */
-  rpcProvider?: RpcProvider | undefined;
+  rpcProvider?: RpcProvider | undefined
 }
 
 export class WalletPairProvider implements EIP1193Provider {
-  private session: DAppSession;
-  private mapper: MethodMapper;
-  private rpcProvider: RpcProvider | undefined;
-  private emitter = new Emitter<EIP1193ProviderEvents>();
-  private chainId: number;
-  private accounts: string[] = [];
-  private connected = false;
-  private disconnected = false;
+  private session: DAppSession
+  private mapper: MethodMapper
+  private rpcProvider: RpcProvider | undefined
+  private emitter = new Emitter<EIP1193ProviderEvents>()
+  private chainId: number
+  private accounts: string[] = []
+  private connected = false
+  private disconnected = false
 
   constructor(options: WalletPairProviderOptions) {
-    this.session = options.session;
-    this.mapper = options.mapper ?? defaultMapper;
-    this.rpcProvider = options.rpcProvider;
-    this.chainId = options.chainId ?? 1;
+    this.session = options.session
+    this.mapper = options.mapper ?? defaultMapper
+    this.rpcProvider = options.rpcProvider
+    this.chainId = options.chainId ?? 1
 
     this.session.on('phase', (phase) => {
       if (phase === 'connected' && !this.connected) {
-        this.connected = true;
-        this.emitter.emit('connect', { chainId: `0x${this.chainId.toString(16)}` });
+        this.connected = true
+        this.emitter.emit('connect', { chainId: `0x${this.chainId.toString(16)}` })
       } else if ((phase === 'closed' || phase === 'disconnected') && this.connected) {
-        this.connected = false;
-        this.emitter.emit('disconnect', { code: 4900, message: 'Disconnected' });
+        this.connected = false
+        this.emitter.emit('disconnect', { code: 4900, message: 'Disconnected' })
       }
-    });
+    })
 
     this.session.on('event', ({ event, data }) => {
       if (event === 'disconnect') {
-        this.connected = false;
-        this.disconnected = true;
-        const reason = (data as any)?.reason ?? 'unknown';
-        const msg = (data as any)?.message ?? `Disconnected by wallet (${reason})`;
-        this.emitter.emit('disconnect', { code: 4900, message: msg });
-        this.session.close('normal');
-        return;
+        this.connected = false
+        this.disconnected = true
+        const reason = (data as any)?.reason ?? 'unknown'
+        const msg = (data as any)?.message ?? `Disconnected by wallet (${reason})`
+        this.emitter.emit('disconnect', { code: 4900, message: msg })
+        this.session.close('normal')
+        return
       }
       if (event === 'accountsChanged') {
         // Handle both formats:
         // - Simple: { accounts: ['0x...'] } or just ['0x...']
         // - Sub-protocol: { accounts: [{ address: '0x...', chains?: [...] }] }
-        const payload = data as { accounts?: (string | { address: string })[] } | string[];
-        const rawAccounts = Array.isArray(payload) ? payload : (payload as any)?.accounts;
+        const payload = data as { accounts?: (string | { address: string })[] } | string[]
+        const rawAccounts = Array.isArray(payload) ? payload : (payload as any)?.accounts
         if (Array.isArray(rawAccounts)) {
           this.accounts = rawAccounts.map((a: string | { address: string }) =>
             typeof a === 'string' ? a : a.address,
-          );
-          this.emitter.emit('accountsChanged', this.accounts);
+          )
+          this.emitter.emit('accountsChanged', this.accounts)
         }
       } else if (event === 'chainChanged') {
         // Handle multiple formats:
         // - { chainId: 'eip155:137' } or { chainId: '0x89' } or { chainId: 137 }
         // - { chain: 'eip155:137' }
         // - raw string 'eip155:137' or '0x89'
-        const raw = typeof data === 'object' && data !== null
-          ? (data as any).chainId ?? (data as any).chain
-          : data;
-        let newChainId: number | null = null;
+        const raw =
+          typeof data === 'object' && data !== null
+            ? ((data as any).chainId ?? (data as any).chain)
+            : data
+        let newChainId: number | null = null
         if (typeof raw === 'string') {
           if (raw.startsWith('eip155:')) {
-            newChainId = evmNumericChainId(raw);
+            newChainId = evmNumericChainId(raw)
           } else if (raw.startsWith('0x')) {
-            newChainId = Number.parseInt(raw, 16);
+            newChainId = Number.parseInt(raw, 16)
           } else {
-            newChainId = Number.parseInt(raw, 10) || null;
+            newChainId = Number.parseInt(raw, 10) || null
           }
         } else if (typeof raw === 'number') {
-          newChainId = raw;
+          newChainId = raw
         }
         if (newChainId != null && newChainId !== this.chainId) {
-          this.chainId = newChainId;
-          this.emitter.emit('chainChanged', `0x${newChainId.toString(16)}`);
+          this.chainId = newChainId
+          this.emitter.emit('chainChanged', `0x${newChainId.toString(16)}`)
         }
       }
-    });
+    })
   }
 
   async request(args: EIP1193RequestArgs): Promise<unknown> {
     if (this.disconnected) {
-      throw Object.assign(new Error('Provider is disconnected'), { code: 4900 });
+      throw Object.assign(new Error('Provider is disconnected'), { code: 4900 })
     }
 
-    const { method, params } = args;
+    const { method, params } = args
 
     if (method === 'eth_chainId') {
-      return `0x${this.chainId.toString(16)}`;
+      return `0x${this.chainId.toString(16)}`
     }
     if (method === 'net_version') {
-      return String(this.chainId);
+      return String(this.chainId)
     }
 
     // Route non-wallet methods to RPC provider if available
     if (!WALLET_METHODS.has(method) && !LOCAL_METHODS.has(method)) {
       if (this.rpcProvider) {
-        return this.rpcProvider.request(args);
+        return this.rpcProvider.request(args)
       }
-      throw Object.assign(new Error(`Unsupported method: ${method}. Pass rpcProvider to handle read-only RPC calls.`), { code: 4200 });
+      throw Object.assign(
+        new Error(`Unsupported method: ${method}. Pass rpcProvider to handle read-only RPC calls.`),
+        { code: 4200 },
+      )
     }
 
-    const mapped = this.mapper.mapRequest(method, params);
+    const mapped = this.mapper.mapRequest(method, params)
     if (!mapped) {
-      throw Object.assign(new Error(`Unsupported method: ${method}`), { code: 4200 });
+      throw Object.assign(new Error(`Unsupported method: ${method}`), { code: 4200 })
     }
 
     // Inject chain for methods that require it per EVM sub-protocol
     const chainRequiredMethods = [
-      'wallet_signMessage', 'wallet_signTypedData',
-      'wallet_signTransaction', 'wallet_sendTransaction',
+      'wallet_signMessage',
+      'wallet_signTypedData',
+      'wallet_signTransaction',
+      'wallet_sendTransaction',
       'wallet_getAccounts',
-    ];
-    if (mapped.params && typeof mapped.params === 'object' && chainRequiredMethods.includes(mapped.method)) {
-      const p = mapped.params as Record<string, unknown>;
+    ]
+    if (
+      mapped.params &&
+      typeof mapped.params === 'object' &&
+      chainRequiredMethods.includes(mapped.method)
+    ) {
+      const p = mapped.params as Record<string, unknown>
       if (!p.chain) {
-        p.chain = `eip155:${this.chainId}`;
+        p.chain = `eip155:${this.chainId}`
       }
     }
 
-    const result = await this.session.request(mapped.method, mapped.params);
-    const mappedResult = this.mapper.mapResponse(method, result);
+    const result = await this.session.request(mapped.method, mapped.params)
+    const mappedResult = this.mapper.mapResponse(method, result)
 
     if (method === 'eth_requestAccounts' || method === 'eth_accounts') {
-      if (Array.isArray(mappedResult)) this.accounts = mappedResult;
+      if (Array.isArray(mappedResult)) this.accounts = mappedResult
     }
 
-    return mappedResult;
+    return mappedResult
   }
 
   on(event: string, handler: (...args: any[]) => void): void {
-    this.emitter.on(event as keyof EIP1193ProviderEvents, handler as any);
+    this.emitter.on(event as keyof EIP1193ProviderEvents, handler as any)
   }
 
   removeListener(event: string, handler: (...args: any[]) => void): void {
-    this.emitter.off(event as keyof EIP1193ProviderEvents, handler as any);
+    this.emitter.off(event as keyof EIP1193ProviderEvents, handler as any)
   }
 
   getChainId(): string {
-    return `0x${this.chainId.toString(16)}`;
+    return `0x${this.chainId.toString(16)}`
   }
 
   getAccounts(): string[] {
-    return this.accounts;
+    return this.accounts
   }
 
   isConnected(): boolean {
-    return this.connected;
+    return this.connected
   }
 
   getSession(): DAppSession {
-    return this.session;
+    return this.session
   }
 }

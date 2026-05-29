@@ -1,27 +1,24 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DAppSession } from './dapp-session.js';
-import { WalletSession } from './wallet-session.js';
-import { makeJoinBody, MockTransport, MockRelay } from './test-helpers.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AadHeader } from './crypto.js'
 import {
-  generateX25519KeyPair,
+  b64urlDecode,
+  computeSessionFingerprint,
   computeSharedSecret,
   deriveSessionKey,
-  deriveDirectionalSessionKeys,
-  computeSessionFingerprint,
-  sealPayload,
-  b64urlEncode,
-  b64urlDecode,
+  generateX25519KeyPair,
   parsePairingUri,
-} from './crypto.js';
-import type { AadHeader, SessionCryptoContext } from './crypto.js';
-import type { ProtocolMessage } from './types.js';
+  sealPayload,
+} from './crypto.js'
+import { DAppSession } from './dapp-session.js'
+import { MockTransport, makeJoinBody } from './test-helpers.js'
+import type { ProtocolMessage } from './types.js'
 
 function flushMicrotasks(): Promise<void> {
-  return new Promise((r) => setTimeout(r, 10));
+  return new Promise((r) => setTimeout(r, 10))
 }
 
 function dappPubKeyFromCreate(transport: MockTransport): string {
-  return transport.sent.find(m => m.t === 'create')!.from!;
+  return transport.sent.find((m) => m.t === 'create')?.from!
 }
 
 function receiveFreshJoin(
@@ -30,10 +27,13 @@ function receiveFreshJoin(
   walletKp: ReturnType<typeof generateX25519KeyPair>,
 ): void {
   transport.receive({
-    v: 1, t: 'join', ch: session.channelId,
-    ts: Date.now(), from: walletKp.publicKeyB64,
+    v: 1,
+    t: 'join',
+    ch: session.channelId,
+    ts: Date.now(),
+    from: walletKp.publicKeyB64,
     body: makeJoinBody(session.channelId, dappPubKeyFromCreate(transport), walletKp),
-  } as ProtocolMessage);
+  } as ProtocolMessage)
 }
 
 function receiveConnected(
@@ -42,606 +42,743 @@ function receiveConnected(
   walletPubKeyB64: string,
 ): void {
   transport.receive({
-    v: 1, t: 'ready', ch: session.channelId,
-    ts: Date.now(), from: '_adapter',
+    v: 1,
+    t: 'ready',
+    ch: session.channelId,
+    ts: Date.now(),
+    from: '_adapter',
     body: { state: 'connected', reconnect: false, remote: walletPubKeyB64 },
-  } as ProtocolMessage);
+  } as ProtocolMessage)
 }
 
 describe('DAppSession', () => {
-  let transport: MockTransport;
-  let session: DAppSession;
+  let transport: MockTransport
+  let session: DAppSession
 
   beforeEach(() => {
-    transport = new MockTransport();
-    session = new DAppSession({ transport, meta: { name: 'Test dApp', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' } });
-  });
+    transport = new MockTransport()
+    session = new DAppSession({
+      transport,
+      meta: {
+        name: 'Test dApp',
+        description: 'Test',
+        url: 'https://test.com',
+        icon: 'https://test.com/icon.png',
+      },
+    })
+  })
 
   describe('createPairing', () => {
     it('starts in idle phase', () => {
-      expect(session.phase).toBe('idle');
-    });
+      expect(session.phase).toBe('idle')
+    })
 
     it('creates pairing and transitions to waiting', async () => {
-      const phases: string[] = [];
-      session.on('phase', (p) => phases.push(p));
+      const phases: string[] = []
+      session.on('phase', (p) => phases.push(p))
 
-      const uri = await session.createPairing();
-      expect(uri).toContain('walletpair:?ch=');
-      expect(uri).toContain('&pubkey=');
-      expect(session.phase).toBe('waiting');
-      expect(session.channelId).toHaveLength(64);
-      expect(session.pairingUri).toBe(uri);
-      expect(phases).toContain('waiting');
-    });
+      const uri = await session.createPairing()
+      expect(uri).toContain('walletpair:?ch=')
+      expect(uri).toContain('&pubkey=')
+      expect(session.phase).toBe('waiting')
+      expect(session.channelId).toHaveLength(64)
+      expect(session.pairingUri).toBe(uri)
+      expect(phases).toContain('waiting')
+    })
 
     it('emits pairingUri event', async () => {
-      const handler = vi.fn();
-      session.on('pairingUri', handler);
-      await session.createPairing();
-      expect(handler).toHaveBeenCalledWith(session.pairingUri);
-    });
+      const handler = vi.fn()
+      session.on('pairingUri', handler)
+      await session.createPairing()
+      expect(handler).toHaveBeenCalledWith(session.pairingUri)
+    })
 
     it('sends create message to transport', async () => {
-      await session.createPairing();
-      expect(transport.sent).toHaveLength(1);
-      expect(transport.sent[0]!.t).toBe('create');
-      expect(transport.sent[0]!.from).toBeTruthy();
-    });
+      await session.createPairing()
+      expect(transport.sent).toHaveLength(1)
+      expect(transport.sent[0]?.t).toBe('create')
+      expect(transport.sent[0]?.from).toBeTruthy()
+    })
 
     it('pairing URI is parseable', async () => {
-      await session.createPairing();
-      const parsed = parsePairingUri(session.pairingUri);
-      expect(parsed.ch).toBe(session.channelId);
-    });
-  });
+      await session.createPairing()
+      const parsed = parsePairingUri(session.pairingUri)
+      expect(parsed.ch).toBe(session.channelId)
+    })
+  })
 
   describe('wallet join handling', () => {
-    let walletKp: ReturnType<typeof generateX25519KeyPair>;
+    let walletKp: ReturnType<typeof generateX25519KeyPair>
 
     beforeEach(async () => {
-      await session.createPairing();
-      walletKp = generateX25519KeyPair();
-    });
+      await session.createPairing()
+      walletKp = generateX25519KeyPair()
+    })
 
     it('auto-accepts and transitions to accepting on join', async () => {
-      const phases: string[] = [];
-      session.on('phase', (p) => phases.push(p));
+      const phases: string[] = []
+      session.on('phase', (p) => phases.push(p))
 
-      receiveFreshJoin(transport, session, walletKp);
+      receiveFreshJoin(transport, session, walletKp)
 
       // With auto-accept, the session should not stay in pending_accept
       // It should proceed to accepting (waiting for ready.connected)
-      expect(session.phase).not.toBe('idle');
-    });
+      expect(session.phase).not.toBe('idle')
+    })
 
     it('computes and emits session fingerprint on createPairing', async () => {
-      expect(session.sessionFingerprint).toMatch(/^\d{4}$/);
-    });
+      expect(session.sessionFingerprint).toMatch(/^\d{4}$/)
+    })
 
     it('emits walletJoined with capabilities and meta from sealed_join', async () => {
-      const handler = vi.fn();
-      session.on('walletJoined', handler);
+      const handler = vi.fn()
+      session.on('walletJoined', handler)
 
-      receiveFreshJoin(transport, session, walletKp);
+      receiveFreshJoin(transport, session, walletKp)
 
       expect(handler).toHaveBeenCalledWith({
         capabilities: expect.objectContaining({ methods: expect.any(Array) }),
         meta: expect.objectContaining({ name: 'Test Wallet' }),
-      });
-    });
-  });
+      })
+    })
+  })
 
   describe('auto-accept on join', () => {
     it('auto-accepts and transitions to connected on ready', async () => {
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
 
-      receiveFreshJoin(transport, session, walletKp);
+      receiveFreshJoin(transport, session, walletKp)
 
       // Should have auto-sent accept (no manual acceptWallet needed)
-      const acceptMsg = transport.sent.find(m => m.t === 'accept');
-      expect(acceptMsg).toBeTruthy();
-      expect((acceptMsg as any).body.target).toBe(walletKp.publicKeyB64);
+      const acceptMsg = transport.sent.find((m) => m.t === 'accept')
+      expect(acceptMsg).toBeTruthy()
+      expect((acceptMsg as any).body.target).toBe(walletKp.publicKeyB64)
 
       // Simulate relay responding with ready.connected
-      receiveConnected(transport, session, walletKp.publicKeyB64);
+      receiveConnected(transport, session, walletKp.publicKeyB64)
 
-      expect(session.phase).toBe('connected');
-    });
+      expect(session.phase).toBe('connected')
+    })
 
     it('rejects ready.connected with missing remote', async () => {
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
-      const errorHandler = vi.fn();
-      session.on('error', errorHandler);
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
+      const errorHandler = vi.fn()
+      session.on('error', errorHandler)
 
-      receiveFreshJoin(transport, session, walletKp);
+      receiveFreshJoin(transport, session, walletKp)
 
       transport.receive({
-        v: 1, t: 'ready', ch: session.channelId,
-        ts: Date.now(), from: '_adapter',
+        v: 1,
+        t: 'ready',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: '_adapter',
         body: { state: 'connected', reconnect: false, remote: null },
-      } as ProtocolMessage);
+      } as ProtocolMessage)
 
-      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
-        message: expect.stringContaining('remote does not match'),
-      }));
-      expect(session.phase).toBe('closed');
-    });
-  });
+      expect(errorHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('remote does not match'),
+        }),
+      )
+      expect(session.phase).toBe('closed')
+    })
+  })
 
   describe('rejectWallet', () => {
     it('sends close with user_rejected and closes session (autoAccept disabled)', async () => {
       const manualSession = new DAppSession({
-        transport, autoAccept: false,
-        meta: { name: 'Test dApp', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' },
-      });
-      await manualSession.createPairing();
-      const walletKp = generateX25519KeyPair();
+        transport,
+        autoAccept: false,
+        meta: {
+          name: 'Test dApp',
+          description: 'Test',
+          url: 'https://test.com',
+          icon: 'https://test.com/icon.png',
+        },
+      })
+      await manualSession.createPairing()
+      const walletKp = generateX25519KeyPair()
 
-      receiveFreshJoin(transport, manualSession, walletKp);
+      receiveFreshJoin(transport, manualSession, walletKp)
 
-      manualSession.rejectWallet();
+      manualSession.rejectWallet()
 
-      const closeMsg = transport.sent.find(m => m.t === 'close');
-      expect(closeMsg).toBeTruthy();
-      expect((closeMsg as any).body.reason).toBe('user_rejected');
-      expect(manualSession.phase).toBe('closed');
-    });
-  });
+      const closeMsg = transport.sent.find((m) => m.t === 'close')
+      expect(closeMsg).toBeTruthy()
+      expect((closeMsg as any).body.reason).toBe('user_rejected')
+      expect(manualSession.phase).toBe('closed')
+    })
+  })
 
   describe('request/response', () => {
-    let walletKp: ReturnType<typeof generateX25519KeyPair>;
-    let sessionKey: Uint8Array;
-    let walletToDappKey: Uint8Array;
+    let walletKp: ReturnType<typeof generateX25519KeyPair>
+    let sessionKey: Uint8Array
+    let walletToDappKey: Uint8Array
 
     beforeEach(async () => {
-      await session.createPairing();
-      walletKp = generateX25519KeyPair();
+      await session.createPairing()
+      walletKp = generateX25519KeyPair()
 
       // Simulate join
-      receiveFreshJoin(transport, session, walletKp);
+      receiveFreshJoin(transport, session, walletKp)
 
       // Derive session key from wallet side
-      const dappPubB64 = transport.sent[0]!.from!;
-      const dappPub = b64urlDecode(dappPubB64);
-      const shared = computeSharedSecret(walletKp.privateKey, dappPub);
-      sessionKey = deriveSessionKey(shared, session.channelId);
+      const dappPubB64 = transport.sent[0]?.from!
+      const dappPub = b64urlDecode(dappPubB64)
+      const shared = computeSharedSecret(walletKp.privateKey, dappPub)
+      sessionKey = deriveSessionKey(shared, session.channelId)
 
       // Auto-accepted; simulate relay ready.connected
-      receiveConnected(transport, session, walletKp.publicKeyB64);
-      walletToDappKey = (session as any).recvKey;
-    });
+      receiveConnected(transport, session, walletKp.publicKeyB64)
+      walletToDappKey = (session as any).recvKey
+    })
 
     it('sends encrypted request', async () => {
-      const promise = session.request('wallet_getAccounts');
+      const promise = session.request('wallet_getAccounts')
 
-      await flushMicrotasks();
+      await flushMicrotasks()
 
-      const reqMsg = transport.sent.find(m => m.t === 'req');
-      expect(reqMsg).toBeTruthy();
-      const reqBody = (reqMsg as any).body;
-      expect(reqBody.id).toMatch(/^req-/);
-      expect(reqBody.sealed).toBeTruthy();
+      const reqMsg = transport.sent.find((m) => m.t === 'req')
+      expect(reqMsg).toBeTruthy()
+      const reqBody = (reqMsg as any).body
+      expect(reqBody.id).toMatch(/^req-/)
+      expect(reqBody.sealed).toBeTruthy()
 
       // Simulate wallet response
-      const resData = { _ok: true, _result: ['0xabc123'] };
-      const resHdr: AadHeader = { type: 'res', from: walletKp.publicKeyB64, id: reqBody.id };
+      const resData = { _ok: true, _result: ['0xabc123'] }
+      const resHdr: AadHeader = { type: 'res', from: walletKp.publicKeyB64, id: reqBody.id }
       transport.receive({
-        v: 1, t: 'res', ch: session.channelId,
-        ts: Date.now(), from: walletKp.publicKeyB64,
-        body: { id: reqBody.id, sealed: sealPayload(walletToDappKey, session.channelId, 0, resData, resHdr) },
-      } as ProtocolMessage);
+        v: 1,
+        t: 'res',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
+        body: {
+          id: reqBody.id,
+          sealed: sealPayload(walletToDappKey, session.channelId, 0, resData, resHdr),
+        },
+      } as ProtocolMessage)
 
-      const result = await promise;
-      expect(result).toEqual(['0xabc123']);
-    });
+      const result = await promise
+      expect(result).toEqual(['0xabc123'])
+    })
 
     it('sends request with encrypted params', async () => {
-      const promise = session.request('wallet_signMessage', { message: 'Hello' });
-      await flushMicrotasks();
+      const promise = session.request('wallet_signMessage', { message: 'Hello' })
+      await flushMicrotasks()
 
-      const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      expect(reqMsg.body.sealed).toBeTruthy(); // params were sealed
+      const reqMsg = transport.sent.find((m) => m.t === 'req') as any
+      expect(reqMsg.body.sealed).toBeTruthy() // params were sealed
 
       // Respond
-      const reqId = reqMsg.body.id;
+      const reqId = reqMsg.body.id
       transport.receive({
-        v: 1, t: 'res', ch: session.channelId,
-        ts: Date.now(), from: walletKp.publicKeyB64,
-        body: { id: reqId, sealed: sealPayload(walletToDappKey, session.channelId, 0, { _ok: true, _result: { signature: '0x...' } }, { type: 'res', from: walletKp.publicKeyB64, id: reqId }) },
-      } as ProtocolMessage);
+        v: 1,
+        t: 'res',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
+        body: {
+          id: reqId,
+          sealed: sealPayload(
+            walletToDappKey,
+            session.channelId,
+            0,
+            { _ok: true, _result: { signature: '0x...' } },
+            { type: 'res', from: walletKp.publicKeyB64, id: reqId },
+          ),
+        },
+      } as ProtocolMessage)
 
-      const result = await promise;
-      expect(result).toEqual({ signature: '0x...' });
-    });
+      const result = await promise
+      expect(result).toEqual({ signature: '0x...' })
+    })
 
     it('rejects on error response', async () => {
-      const promise = session.request('wallet_signMessage', { message: 'Hi' });
-      await flushMicrotasks();
+      const promise = session.request('wallet_signMessage', { message: 'Hi' })
+      await flushMicrotasks()
 
-      const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      const reqId = reqMsg.body.id;
+      const reqMsg = transport.sent.find((m) => m.t === 'req') as any
+      const reqId = reqMsg.body.id
 
       transport.receive({
-        v: 1, t: 'res', ch: session.channelId,
-        ts: Date.now(), from: walletKp.publicKeyB64,
-        body: { id: reqId, sealed: sealPayload(walletToDappKey, session.channelId, 0, { _ok: false, code: 'user_rejected', message: 'User rejected' }, { type: 'res', from: walletKp.publicKeyB64, id: reqId }) },
-      } as ProtocolMessage);
+        v: 1,
+        t: 'res',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
+        body: {
+          id: reqId,
+          sealed: sealPayload(
+            walletToDappKey,
+            session.channelId,
+            0,
+            { _ok: false, code: 'user_rejected', message: 'User rejected' },
+            { type: 'res', from: walletKp.publicKeyB64, id: reqId },
+          ),
+        },
+      } as ProtocolMessage)
 
-      await expect(promise).rejects.toThrow('User rejected');
-    });
+      await expect(promise).rejects.toThrow('User rejected')
+    })
 
     it('rejects on timeout', async () => {
-      vi.useFakeTimers();
+      vi.useFakeTimers()
 
       const shortTimeoutSession = new DAppSession({
-        transport, meta: { name: 'Test', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' }, requestTimeout: 100,
-      });
+        transport,
+        meta: {
+          name: 'Test',
+          description: 'Test',
+          url: 'https://test.com',
+          icon: 'https://test.com/icon.png',
+        },
+        requestTimeout: 100,
+      })
       // Manually set session state to connected
-      (shortTimeoutSession as any).phase = 'connected';
-      (shortTimeoutSession as any).sessionKey = sessionKey;
-      (shortTimeoutSession as any).sendKey = new Uint8Array(32).fill(1);
-      (shortTimeoutSession as any).channelId = session.channelId;
-      (shortTimeoutSession as any).pubKeyB64 = 'test';
+      ;(shortTimeoutSession as any).phase = 'connected'
+      ;(shortTimeoutSession as any).sessionKey = sessionKey
+      ;(shortTimeoutSession as any).sendKey = new Uint8Array(32).fill(1)
+      ;(shortTimeoutSession as any).channelId = session.channelId
+      ;(shortTimeoutSession as any).pubKeyB64 = 'test'
 
-      const promise = shortTimeoutSession.request('wallet_getAccounts');
-      vi.advanceTimersByTime(200);
+      const promise = shortTimeoutSession.request('wallet_getAccounts')
+      vi.advanceTimersByTime(200)
 
-      await expect(promise).rejects.toThrow('timed out');
-      vi.useRealTimers();
-    });
+      await expect(promise).rejects.toThrow('timed out')
+      vi.useRealTimers()
+    })
 
     it('emits response event', async () => {
-      const handler = vi.fn();
-      session.on('response', handler);
+      const handler = vi.fn()
+      session.on('response', handler)
 
-      const promise = session.request('wallet_getAccounts');
-      await flushMicrotasks();
+      const promise = session.request('wallet_getAccounts')
+      await flushMicrotasks()
 
-      const reqMsg = transport.sent.find(m => m.t === 'req') as any;
-      const reqId = reqMsg.body.id;
+      const reqMsg = transport.sent.find((m) => m.t === 'req') as any
+      const reqId = reqMsg.body.id
       transport.receive({
-        v: 1, t: 'res', ch: session.channelId,
-        ts: Date.now(), from: walletKp.publicKeyB64,
-        body: { id: reqId, sealed: sealPayload(walletToDappKey, session.channelId, 0, { _ok: true, _result: ['0x123'] }, { type: 'res', from: walletKp.publicKeyB64, id: reqId }) },
-      } as ProtocolMessage);
+        v: 1,
+        t: 'res',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
+        body: {
+          id: reqId,
+          sealed: sealPayload(
+            walletToDappKey,
+            session.channelId,
+            0,
+            { _ok: true, _result: ['0x123'] },
+            { type: 'res', from: walletKp.publicKeyB64, id: reqId },
+          ),
+        },
+      } as ProtocolMessage)
 
-      await promise;
-      expect(handler).toHaveBeenCalledWith({ id: reqId, ok: true, result: ['0x123'] });
-    });
+      await promise
+      expect(handler).toHaveBeenCalledWith({ id: reqId, ok: true, result: ['0x123'] })
+    })
 
     it('rejects request when not connected', async () => {
-      const idleSession = new DAppSession({ transport: new MockTransport(), meta: { name: 'Test', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' } });
-      await expect(idleSession.request('test')).rejects.toThrow('Not connected');
-    });
-  });
+      const idleSession = new DAppSession({
+        transport: new MockTransport(),
+        meta: {
+          name: 'Test',
+          description: 'Test',
+          url: 'https://test.com',
+          icon: 'https://test.com/icon.png',
+        },
+      })
+      await expect(idleSession.request('test')).rejects.toThrow('Not connected')
+    })
+  })
 
   describe('event handling', () => {
     it('emits event when wallet pushes evt', async () => {
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
 
-      receiveFreshJoin(transport, session, walletKp);
+      receiveFreshJoin(transport, session, walletKp)
 
-      const dappPub = b64urlDecode(transport.sent[0]!.from!);
-      const shared = computeSharedSecret(walletKp.privateKey, dappPub);
-      deriveSessionKey(shared, session.channelId);
+      const dappPub = b64urlDecode(transport.sent[0]?.from!)
+      const shared = computeSharedSecret(walletKp.privateKey, dappPub)
+      deriveSessionKey(shared, session.channelId)
 
-      receiveConnected(transport, session, walletKp.publicKeyB64);
+      receiveConnected(transport, session, walletKp.publicKeyB64)
 
-      const handler = vi.fn();
-      session.on('event', handler);
+      const handler = vi.fn()
+      session.on('event', handler)
 
-      const evtId = 'evt-1';
+      const evtId = 'evt-1'
       transport.receive({
-        v: 1, t: 'evt', ch: session.channelId,
-        ts: Date.now(), from: walletKp.publicKeyB64,
-        body: { id: evtId, sealed: sealPayload((session as any).recvKey, session.channelId, 0, { _event: 'accountsChanged', accounts: ['0xabc'] }, { type: 'evt', from: walletKp.publicKeyB64, id: evtId }) },
-      } as ProtocolMessage);
+        v: 1,
+        t: 'evt',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
+        body: {
+          id: evtId,
+          sealed: sealPayload(
+            (session as any).recvKey,
+            session.channelId,
+            0,
+            { _event: 'accountsChanged', accounts: ['0xabc'] },
+            { type: 'evt', from: walletKp.publicKeyB64, id: evtId },
+          ),
+        },
+      } as ProtocolMessage)
 
       expect(handler).toHaveBeenCalledWith({
         event: 'accountsChanged',
         data: { accounts: ['0xabc'] },
-      });
-    });
-  });
+      })
+    })
+  })
 
   describe('ping/pong', () => {
     it('responds to ping with pong', async () => {
-      await session.createPairing();
-      const walletPubB64 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-      (session as any).remotePubKey = b64urlDecode(walletPubB64);
-      receiveConnected(transport, session, walletPubB64);
+      await session.createPairing()
+      const walletPubB64 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+      ;(session as any).remotePubKey = b64urlDecode(walletPubB64)
+      receiveConnected(transport, session, walletPubB64)
 
       transport.receive({
-        v: 1, t: 'ping', ch: session.channelId,
-        ts: 1000, from: walletPubB64, body: {},
-      } as ProtocolMessage);
+        v: 1,
+        t: 'ping',
+        ch: session.channelId,
+        ts: 1000,
+        from: walletPubB64,
+        body: {},
+      } as ProtocolMessage)
 
-      const pong = transport.sent.find(m => m.t === 'pong');
-      expect(pong).toBeTruthy();
-      expect(pong!.ts).toBeTypeOf('number');
-    });
+      const pong = transport.sent.find((m) => m.t === 'pong')
+      expect(pong).toBeTruthy()
+      expect(pong?.ts).toBeTypeOf('number')
+    })
 
     it('sends ping', async () => {
-      const walletPubB64 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-      await session.createPairing();
-      (session as any).remotePubKey = b64urlDecode(walletPubB64);
-      receiveConnected(transport, session, walletPubB64);
+      const walletPubB64 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+      await session.createPairing()
+      ;(session as any).remotePubKey = b64urlDecode(walletPubB64)
+      receiveConnected(transport, session, walletPubB64)
 
-      session.ping();
-      const ping = transport.sent.find(m => m.t === 'ping');
-      expect(ping).toBeTruthy();
-    });
-  });
+      session.ping()
+      const ping = transport.sent.find((m) => m.t === 'ping')
+      expect(ping).toBeTruthy()
+    })
+  })
 
   describe('close', () => {
     it('sends close message and transitions to closed', async () => {
-      await session.createPairing();
-      session.close();
+      await session.createPairing()
+      session.close()
 
-      const closeMsg = transport.sent.find(m => m.t === 'close');
-      expect(closeMsg).toBeTruthy();
-      expect((closeMsg as any).body.reason).toBe('normal');
-      expect(session.phase).toBe('closed');
-    });
+      const closeMsg = transport.sent.find((m) => m.t === 'close')
+      expect(closeMsg).toBeTruthy()
+      expect((closeMsg as any).body.reason).toBe('normal')
+      expect(session.phase).toBe('closed')
+    })
 
     it('rejects all pending requests on close', async () => {
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
 
-      receiveFreshJoin(transport, session, walletKp);
-      receiveConnected(transport, session, walletKp.publicKeyB64);
+      receiveFreshJoin(transport, session, walletKp)
+      receiveConnected(transport, session, walletKp.publicKeyB64)
 
-      const promise = session.request('test');
-      session.close();
+      const promise = session.request('test')
+      session.close()
 
-      await expect(promise).rejects.toThrow('Session closed');
-    });
-  });
+      await expect(promise).rejects.toThrow('Session closed')
+    })
+  })
 
   describe('serialize/restore', () => {
     it('round-trips session state', async () => {
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
 
-      receiveFreshJoin(transport, session, walletKp);
+      receiveFreshJoin(transport, session, walletKp)
 
-      const json = session.serialize();
-      expect(json).toBeTruthy();
+      const json = session.serialize()
+      expect(json).toBeTruthy()
 
-      const newTransport = new MockTransport();
-      const restored = new DAppSession({ transport: newTransport, meta: { name: 'Test dApp', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' } });
-      expect(restored.restore(json)).toBe(true);
-      expect(restored.channelId).toBe(session.channelId);
-    });
+      const newTransport = new MockTransport()
+      const restored = new DAppSession({
+        transport: newTransport,
+        meta: {
+          name: 'Test dApp',
+          description: 'Test',
+          url: 'https://test.com',
+          icon: 'https://test.com/icon.png',
+        },
+      })
+      expect(restored.restore(json)).toBe(true)
+      expect(restored.channelId).toBe(session.channelId)
+    })
 
     it('returns false for invalid JSON', () => {
-      const s = new DAppSession({ transport: new MockTransport(), meta: { name: 'Test dApp', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' } });
-      expect(s.restore('not json')).toBe(false);
-      expect(s.restore('{}')).toBe(false);
-      expect(s.restore('{"channelId":"abc"}')).toBe(false); // missing privKey
-    });
-  });
+      const s = new DAppSession({
+        transport: new MockTransport(),
+        meta: {
+          name: 'Test dApp',
+          description: 'Test',
+          url: 'https://test.com',
+          icon: 'https://test.com/icon.png',
+        },
+      })
+      expect(s.restore('not json')).toBe(false)
+      expect(s.restore('{}')).toBe(false)
+      expect(s.restore('{"channelId":"abc"}')).toBe(false) // missing privKey
+    })
+  })
 
   describe('auto-accept on rejoin', () => {
     it('auto-accepts known wallet on rejoin (no sealed_join on reconnect)', async () => {
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
 
       // First join carries sealed capabilities/meta (auto-accepted).
-      receiveFreshJoin(transport, session, walletKp);
-      receiveConnected(transport, session, walletKp.publicKeyB64);
+      receiveFreshJoin(transport, session, walletKp)
+      receiveConnected(transport, session, walletKp.publicKeyB64)
 
       // Second join (rejoin) without sealed_join — should auto-accept (same wallet, same approved scope)
       transport.receive({
-        v: 1, t: 'join', ch: session.channelId,
-        ts: Date.now(), from: walletKp.publicKeyB64,
+        v: 1,
+        t: 'join',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
         body: { sealed_join: null },
-      } as ProtocolMessage);
+      } as ProtocolMessage)
 
       // First join auto-accepted + rejoin auto-accepted = 2 accept messages
-      const acceptMessages = transport.sent.filter(m => m.t === 'accept');
-      expect(acceptMessages).toHaveLength(2);
-    });
+      const acceptMessages = transport.sent.filter((m) => m.t === 'accept')
+      expect(acceptMessages).toHaveLength(2)
+    })
 
     it('auto-accepts new wallet on rejoin (different pubkey)', async () => {
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
-      const walletKp2 = generateX25519KeyPair();
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
+      const walletKp2 = generateX25519KeyPair()
 
       // First join (auto-accepted)
-      receiveFreshJoin(transport, session, walletKp);
-      receiveConnected(transport, session, walletKp.publicKeyB64);
+      receiveFreshJoin(transport, session, walletKp)
+      receiveConnected(transport, session, walletKp.publicKeyB64)
 
       // Second join with different wallet — also auto-accepted (sealed_join decryption proves possession)
-      receiveFreshJoin(transport, session, walletKp2);
+      receiveFreshJoin(transport, session, walletKp2)
 
-      const acceptMessages = transport.sent.filter(m => m.t === 'accept');
-      expect(acceptMessages).toHaveLength(2);
-    });
-  });
+      const acceptMessages = transport.sent.filter((m) => m.t === 'accept')
+      expect(acceptMessages).toHaveLength(2)
+    })
+  })
 
   describe('close message handling', () => {
     it('transitions to closed on receiving close', async () => {
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
       transport.receive({
-        v: 1, t: 'close', ch: session.channelId,
-        ts: Date.now(), from: walletKp.publicKeyB64,
+        v: 1,
+        t: 'close',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
         body: { reason: 'timeout' },
-      } as ProtocolMessage);
+      } as ProtocolMessage)
 
-      expect(session.phase).toBe('closed');
-    });
-  });
+      expect(session.phase).toBe('closed')
+    })
+  })
 
   describe('destroy', () => {
     it('closes and removes all listeners', async () => {
-      await session.createPairing();
-      const handler = vi.fn();
-      session.on('phase', handler);
-      session.destroy();
+      await session.createPairing()
+      const handler = vi.fn()
+      session.on('phase', handler)
+      session.destroy()
 
-      expect(session.phase).toBe('closed');
+      expect(session.phase).toBe('closed')
       // After destroy, emitting should not call handler
       // (removeAll was called)
-    });
-  });
+    })
+  })
 
   describe('protocol compliance', () => {
     it('rejects messages with from="_adapter" for peer types (§2)', async () => {
-      await session.createPairing();
-      const errorHandler = vi.fn();
-      session.on('error', errorHandler);
+      await session.createPairing()
+      const errorHandler = vi.fn()
+      session.on('error', errorHandler)
 
       // Send a close message with from: '_adapter' — should be rejected
       transport.receive({
-        v: 1, t: 'close', ch: session.channelId,
-        ts: Date.now(), from: '_adapter',
+        v: 1,
+        t: 'close',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: '_adapter',
         body: { reason: 'normal' },
-      } as ProtocolMessage);
+      } as ProtocolMessage)
 
-      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
-        message: expect.stringContaining('_adapter'),
-      }));
+      expect(errorHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('_adapter'),
+        }),
+      )
       // Should NOT have processed it as a real close
-      expect(session.phase).not.toBe('closed');
-    });
+      expect(session.phase).not.toBe('closed')
+    })
 
     it('rejects messages with unsupported version (§15 rule 12)', async () => {
-      await session.createPairing();
+      await session.createPairing()
 
       // Send message with v: 2 — should close with unsupported_version
       transport.receive({
-        v: 2, t: 'close', ch: session.channelId,
-        ts: Date.now(), from: 'somepubkey',
+        v: 2,
+        t: 'close',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: 'somepubkey',
         body: { reason: 'normal' },
-      } as unknown as ProtocolMessage);
+      } as unknown as ProtocolMessage)
 
-      expect(session.phase).toBe('closed');
-      const closeMsg = transport.sent.find(m => m.t === 'close') as any;
-      expect(closeMsg).toBeTruthy();
-      expect(closeMsg.body.reason).toBe('unsupported_version');
-    });
+      expect(session.phase).toBe('closed')
+      const closeMsg = transport.sent.find((m) => m.t === 'close') as any
+      expect(closeMsg).toBeTruthy()
+      expect(closeMsg.body.reason).toBe('unsupported_version')
+    })
 
     it('uses null for missing walletMeta in session context', async () => {
-      await session.createPairing();
+      await session.createPairing()
 
       // Before any wallet joins, walletMeta should be undefined
-      expect(session.walletMeta).toBeUndefined();
+      expect(session.walletMeta).toBeUndefined()
 
       // Access the private sessionContext to verify it uses null (not {})
       const context = (session as any).sessionContext(
         'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         undefined,
         undefined,
-      );
-      expect(context.walletMeta).toBeNull();
-    });
-  });
+      )
+      expect(context.walletMeta).toBeNull()
+    })
+  })
 
   describe('auto-accept flow (first join)', () => {
     it('auto-accepts first wallet join with valid sealed_join, skipping pending_accept', async () => {
-      const phases: string[] = [];
-      session.on('phase', (p) => phases.push(p));
+      const phases: string[] = []
+      session.on('phase', (p) => phases.push(p))
 
-      await session.createPairing();
-      const walletKp = generateX25519KeyPair();
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
 
-      receiveFreshJoin(transport, session, walletKp);
+      receiveFreshJoin(transport, session, walletKp)
 
       // Auto-accept should have sent an accept message without manual acceptWallet()
-      const acceptMsg = transport.sent.find(m => m.t === 'accept');
-      expect(acceptMsg).toBeTruthy();
+      const acceptMsg = transport.sent.find((m) => m.t === 'accept')
+      expect(acceptMsg).toBeTruthy()
 
       // Simulate relay responding with ready.connected
-      receiveConnected(transport, session, walletKp.publicKeyB64);
+      receiveConnected(transport, session, walletKp.publicKeyB64)
 
-      expect(session.phase).toBe('connected');
+      expect(session.phase).toBe('connected')
       // Phase goes waiting → pending_accept → (auto-accept) → accepting → connected
       // pending_accept is emitted briefly before auto-accept kicks in
-      expect(phases).toContain('pending_accept');
-    });
-  });
+      expect(phases).toContain('pending_accept')
+    })
+  })
 
   describe('session fingerprint after createPairing', () => {
     it('sessionFingerprint is a 4-digit string and event was emitted', async () => {
-      const fpHandler = vi.fn();
-      session.on('sessionFingerprint', fpHandler);
+      const fpHandler = vi.fn()
+      session.on('sessionFingerprint', fpHandler)
 
-      await session.createPairing();
+      await session.createPairing()
 
-      expect(session.sessionFingerprint).toMatch(/^\d{4}$/);
-      expect(fpHandler).toHaveBeenCalledTimes(1);
-      expect(fpHandler).toHaveBeenCalledWith(session.sessionFingerprint);
-    });
-  });
+      expect(session.sessionFingerprint).toMatch(/^\d{4}$/)
+      expect(fpHandler).toHaveBeenCalledTimes(1)
+      expect(fpHandler).toHaveBeenCalledWith(session.sessionFingerprint)
+    })
+  })
 
   describe('session fingerprint matches wallet side', () => {
     it('dApp and wallet compute the same fingerprint', async () => {
-      await session.createPairing();
-      const dappFingerprint = session.sessionFingerprint;
+      await session.createPairing()
+      const dappFingerprint = session.sessionFingerprint
 
       // The dApp computes fingerprint from its own pubkey + channelId
       // The wallet computes it from (channelId, dappPubKeyB64) — same inputs
-      const dappPubB64 = dappPubKeyFromCreate(transport);
-      const walletSideFingerprint = computeSessionFingerprint(session.channelId, dappPubB64);
+      const dappPubB64 = dappPubKeyFromCreate(transport)
+      const walletSideFingerprint = computeSessionFingerprint(session.channelId, dappPubB64)
 
-      expect(dappFingerprint).toBe(walletSideFingerprint);
-      expect(dappFingerprint).toMatch(/^\d{4}$/);
-    });
-  });
+      expect(dappFingerprint).toBe(walletSideFingerprint)
+      expect(dappFingerprint).toMatch(/^\d{4}$/)
+    })
+  })
 
   describe('session TTL enforcement', () => {
     it('closes with reason timeout after TTL expires', async () => {
-      vi.useFakeTimers();
+      vi.useFakeTimers()
 
-      const shortTtlTransport = new MockTransport();
+      const shortTtlTransport = new MockTransport()
       const shortTtlSession = new DAppSession({
         transport: shortTtlTransport,
         meta: { name: 'T', description: 'T', url: 'https://t.com', icon: 'https://t.com/i.png' },
         sessionTtl: 100,
-      });
+      })
 
-      await shortTtlSession.createPairing();
-      const walletKp = generateX25519KeyPair();
+      await shortTtlSession.createPairing()
+      const walletKp = generateX25519KeyPair()
 
       // Simulate wallet join
       shortTtlTransport.receive({
-        v: 1, t: 'join', ch: shortTtlSession.channelId,
-        ts: Date.now(), from: walletKp.publicKeyB64,
-        body: makeJoinBody(shortTtlSession.channelId, shortTtlTransport.sent.find(m => m.t === 'create')!.from!, walletKp),
-      } as ProtocolMessage);
+        v: 1,
+        t: 'join',
+        ch: shortTtlSession.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
+        body: makeJoinBody(
+          shortTtlSession.channelId,
+          shortTtlTransport.sent.find((m) => m.t === 'create')?.from!,
+          walletKp,
+        ),
+      } as ProtocolMessage)
 
       // Simulate ready.connected (this starts the TTL timer)
       shortTtlTransport.receive({
-        v: 1, t: 'ready', ch: shortTtlSession.channelId,
-        ts: Date.now(), from: '_adapter',
+        v: 1,
+        t: 'ready',
+        ch: shortTtlSession.channelId,
+        ts: Date.now(),
+        from: '_adapter',
         body: { state: 'connected', reconnect: false, remote: walletKp.publicKeyB64 },
-      } as ProtocolMessage);
+      } as ProtocolMessage)
 
-      expect(shortTtlSession.phase).toBe('connected');
+      expect(shortTtlSession.phase).toBe('connected')
 
-      const errorHandler = vi.fn();
-      shortTtlSession.on('error', errorHandler);
+      const errorHandler = vi.fn()
+      shortTtlSession.on('error', errorHandler)
 
       // Advance time past the TTL
-      vi.advanceTimersByTime(150);
+      vi.advanceTimersByTime(150)
 
-      expect(shortTtlSession.phase).toBe('closed');
-      expect(errorHandler).toHaveBeenCalledWith(expect.objectContaining({
-        message: expect.stringContaining('expired'),
-      }));
+      expect(shortTtlSession.phase).toBe('closed')
+      expect(errorHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('expired'),
+        }),
+      )
 
       // Verify close message was sent with reason 'timeout'
-      const closeMsg = shortTtlTransport.sent.find(m => m.t === 'close');
-      expect(closeMsg).toBeTruthy();
-      expect((closeMsg as any).body.reason).toBe('timeout');
+      const closeMsg = shortTtlTransport.sent.find((m) => m.t === 'close')
+      expect(closeMsg).toBeTruthy()
+      expect((closeMsg as any).body.reason).toBe('timeout')
 
-      vi.useRealTimers();
-    });
-  });
-});
+      vi.useRealTimers()
+    })
+  })
+})

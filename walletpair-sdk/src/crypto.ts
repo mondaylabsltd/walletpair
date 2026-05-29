@@ -201,7 +201,11 @@ export function unsealJoin(
   const ciphertext = envelope.slice(12)
   const aad = concatBytes(hexToBytes(channelIdHex), new Uint8Array([0x04]))
   const plaintext = chacha20poly1305(joinEncryptionKey, nonce, aad).decrypt(ciphertext)
-  return JSON.parse(new TextDecoder().decode(plaintext))
+  try {
+    return JSON.parse(new TextDecoder().decode(plaintext))
+  } catch {
+    throw new Error('Decrypted sealed_join payload is not valid JSON')
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +248,9 @@ function buildAad(channelIdHex: string, header?: AadHeader): Uint8Array {
   }
 }
 
+/** Maximum sequence number (2^32 - 1). Session MUST close before reaching this. */
+const MAX_SEQ = 0xFFFFFFFF
+
 export function sealPayload(
   encryptionKey: Uint8Array,
   channelIdHex: string,
@@ -251,6 +258,9 @@ export function sealPayload(
   data: unknown,
   header?: AadHeader,
 ): string {
+  if (!Number.isInteger(seq) || seq < 0 || seq > MAX_SEQ) {
+    throw new Error(`Sequence number out of range: ${seq} (must be 0..${MAX_SEQ})`)
+  }
   const seqBytes = new Uint8Array(4)
   new DataView(seqBytes.buffer).setUint32(0, seq)
   const nonce = hmac(sha256, encryptionKey, seqBytes).slice(0, 12)
@@ -274,7 +284,13 @@ export function unsealPayload(
   const plaintext = chacha20poly1305(encryptionKey, nonce, aad).decrypt(ciphertext)
   const seq = new DataView(seqBytes.buffer, seqBytes.byteOffset, 4).getUint32(0)
   const plaintextJson = new TextDecoder().decode(plaintext)
-  return { seq, data: JSON.parse(plaintextJson), plaintext, plaintextJson }
+  let data: unknown
+  try {
+    data = JSON.parse(plaintextJson)
+  } catch {
+    throw new Error('Decrypted payload is not valid JSON')
+  }
+  return { seq, data, plaintext, plaintextJson }
 }
 
 export function sha256Hex(bytes: Uint8Array): string {

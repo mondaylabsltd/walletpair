@@ -5,6 +5,7 @@ class PlaygroundState {
 	pairingUri = $state('');
 	activeTab: 'dapp' | 'wallet' = $state('dapp');
 	mode: 'protocol' | 'evm' = $state('protocol');
+	transport: 'ws' | 'ble' = $state('ws');
 }
 
 export const playground = new PlaygroundState();

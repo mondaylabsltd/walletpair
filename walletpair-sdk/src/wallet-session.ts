@@ -442,15 +442,14 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       }
 
       case 'req': {
+        if (this.phase !== 'connected') break
         const reqBody = msg.body as { id?: string; sealed?: string }
         if (this.remotePubKey && msg.from !== b64urlEncode(this.remotePubKey)) break
         // All requests MUST be sealed — reject unsealed requests to prevent
         // method injection by a malicious relay.
         if (!reqBody.sealed || !reqBody.id || !this.recvKey) {
           if (reqBody.id) {
-            this.observeSend(
-              this.reject(reqBody.id, 'protocol_error', 'Request must be encrypted'),
-            )
+            this.observeSend(this.reject(reqBody.id, 'protocol_error', 'Request must be encrypted'))
           }
           break
         }
@@ -470,12 +469,10 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
           const afterPersist = () => this.processRequest(requestId, data, plaintext)
           const persisted = this.persistSnapshot()
           if (isPromiseLike(persisted)) {
-            void persisted
-              .then(afterPersist)
-              .catch((e) => {
-                this.recvSeq = prevRecvSeq // rollback on persist failure
-                this.emit('error', this.persistenceError(e))
-              })
+            void persisted.then(afterPersist).catch((e) => {
+              this.recvSeq = prevRecvSeq // rollback on persist failure
+              this.emit('error', this.persistenceError(e))
+            })
           } else {
             afterPersist()
           }

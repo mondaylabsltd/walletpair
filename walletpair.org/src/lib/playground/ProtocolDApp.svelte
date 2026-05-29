@@ -5,6 +5,13 @@
 	import MessageLog from './MessageLog.svelte';
 	import { playground, type LogEntry } from './state.svelte';
 
+	let bleSupported = $state(false);
+	let bleStatus = $state('');
+
+	$effect(() => {
+		import('walletpair-sdk/ble').then(m => { bleSupported = m.isWebBleSupported(); }).catch(() => {});
+	});
+
 	const STORAGE_KEY = 'walletpair.playground.dapp';
 
 	let phase: DAppPhase = $state('idle');
@@ -140,17 +147,27 @@
 		});
 	}
 
+	function createDAppMeta() {
+		return {
+			name: metaName || 'Protocol Playground',
+			description: 'Network-agnostic playground',
+			url: metaUrl || 'https://walletpair.org',
+			icon: metaIcon || 'https://walletpair.org/favicon.png'
+		};
+	}
+
 	async function connect() {
 		showReconnectPrompt = false;
+
+		if (playground.transport === 'ble') {
+			await connectBle();
+			return;
+		}
+
 		const transport = new WebSocketTransport(playground.relayUrl);
 		const s = new DAppSession({
 			transport,
-			meta: {
-				name: metaName || 'Protocol Playground',
-				description: 'Network-agnostic playground',
-				url: metaUrl || 'https://walletpair.org',
-				icon: metaIcon || 'https://walletpair.org/favicon.png'
-			},
+			meta: createDAppMeta(),
 			persistence
 		} as ConstructorParameters<typeof DAppSession>[0]);
 		session = s;
@@ -162,6 +179,45 @@
 			addLog('out', 'create', `ch=${s.channelId.slice(0, 12)}...`);
 		} catch (e: any) {
 			addLog('err', 'connect', e.message);
+		}
+	}
+
+	async function connectBle() {
+		bleStatus = 'Creating channel...';
+		try {
+			const { WebBleCentralTransport } = await import('walletpair-sdk/ble');
+			const transport = new WebBleCentralTransport();
+			const s = new DAppSession({
+				transport,
+				meta: createDAppMeta(),
+				persistence
+			} as ConstructorParameters<typeof DAppSession>[0]);
+			session = s;
+			setupSessionEvents(s);
+
+			// Phase 1: create channel + keys, show QR, but don't connect BLE yet
+			await s.createPairing({ deferTransport: true });
+			sessionFingerprint = (s as any).sessionFingerprint ?? '------';
+			bleStatus = 'Channel created. Show QR to wallet, then click "Scan for Wallet".';
+			addLog('out', 'create', `ch=${s.channelId.slice(0, 12)}... (BLE, deferred)`);
+		} catch (e: any) {
+			addLog('err', 'ble', e.message);
+			bleStatus = `Error: ${e.message}`;
+		}
+	}
+
+	async function bleScan() {
+		if (!session) return;
+		bleStatus = 'Scanning for wallet...';
+		addLog('out', 'ble', 'Opening BLE device picker...');
+
+		try {
+			await session.connectTransport();
+			bleStatus = 'BLE connected — waiting for wallet join';
+			addLog('in', 'ble', 'Connected to wallet peripheral');
+		} catch (e: any) {
+			bleStatus = `BLE error: ${e.message}`;
+			addLog('err', 'ble', e.message);
 		}
 	}
 

@@ -2,29 +2,35 @@
  * Shared test helpers — mock transport for unit testing sessions.
  */
 
-import type { Capabilities, Transport, TransportState, ProtocolMessage, WalletMeta } from './types.js';
+import type { X25519KeyPair } from './crypto.js'
 import {
   b64urlDecode,
   computeSharedSecret,
   deriveJoinEncryptionKey,
   deriveSessionKey,
   sealJoin,
-} from './crypto.js';
-import type { X25519KeyPair } from './crypto.js';
+} from './crypto.js'
+import type {
+  Capabilities,
+  ProtocolMessage,
+  Transport,
+  TransportState,
+  WalletMeta,
+} from './types.js'
 
 export const DEFAULT_TEST_CAPABILITIES: Capabilities = {
   methods: ['wallet_getAccounts', 'wallet_signMessage'],
   events: ['accountsChanged', 'chainChanged'],
   chains: ['eip155:1'],
-};
+}
 
 /** Extract the JSON payload from a signed or unsigned snapshot string. */
 export function parseSnapshot(signed: string): Record<string, unknown> {
   // Signed format: "<64-hex-mac>.<json>"
   if (signed.length > 65 && signed[64] === '.') {
-    return JSON.parse(signed.slice(65));
+    return JSON.parse(signed.slice(65))
   }
-  return JSON.parse(signed);
+  return JSON.parse(signed)
 }
 
 export const DEFAULT_TEST_WALLET_META: WalletMeta = {
@@ -32,7 +38,7 @@ export const DEFAULT_TEST_WALLET_META: WalletMeta = {
   description: 'Test wallet',
   url: 'https://wallet.test',
   icon: 'https://wallet.test/icon.png',
-};
+}
 
 export function makeSealedJoin(
   channelId: string,
@@ -41,15 +47,15 @@ export function makeSealedJoin(
   capabilities: Capabilities = DEFAULT_TEST_CAPABILITIES,
   meta: WalletMeta = DEFAULT_TEST_WALLET_META,
 ): string {
-  const dappPub = b64urlDecode(dappPubKeyB64);
-  const shared = computeSharedSecret(walletKp.privateKey, dappPub);
-  const rootKey = deriveSessionKey(shared, channelId);
-  const joinKey = deriveJoinEncryptionKey(rootKey, channelId);
-  const sealed = sealJoin(joinKey, channelId, capabilities, meta);
-  shared.fill(0);
-  rootKey.fill(0);
-  joinKey.fill(0);
-  return sealed;
+  const dappPub = b64urlDecode(dappPubKeyB64)
+  const shared = computeSharedSecret(walletKp.privateKey, dappPub)
+  const rootKey = deriveSessionKey(shared, channelId)
+  const joinKey = deriveJoinEncryptionKey(rootKey, channelId)
+  const sealed = sealJoin(joinKey, channelId, capabilities, meta)
+  shared.fill(0)
+  rootKey.fill(0)
+  joinKey.fill(0)
+  return sealed
 }
 
 export function makeJoinBody(
@@ -61,7 +67,7 @@ export function makeJoinBody(
 ): { sealed_join: string } {
   return {
     sealed_join: makeSealedJoin(channelId, dappPubKeyB64, walletKp, capabilities, meta),
-  };
+  }
 }
 
 /**
@@ -69,47 +75,53 @@ export function makeJoinBody(
  * to simulate a relay (messages sent on one arrive on the other).
  */
 export class MockTransport implements Transport {
-  state: TransportState = 'disconnected';
-  sent: ProtocolMessage[] = [];
+  state: TransportState = 'disconnected'
+  sent: ProtocolMessage[] = []
 
-  private messageHandler: ((msg: ProtocolMessage) => void) | null = null;
-  private closeHandler: (() => void) | null = null;
-  private openHandler: (() => void) | null = null;
+  private messageHandler: ((msg: ProtocolMessage) => void) | null = null
+  private closeHandler: (() => void) | null = null
+  private openHandler: (() => void) | null = null
 
   /** Link to the peer's transport. */
-  peer: MockTransport | null = null;
+  peer: MockTransport | null = null
 
-  onMessage(handler: (msg: ProtocolMessage) => void): void { this.messageHandler = handler; }
-  onClose(handler: () => void): void { this.closeHandler = handler; }
-  onOpen(handler: () => void): void { this.openHandler = handler; }
+  onMessage(handler: (msg: ProtocolMessage) => void): void {
+    this.messageHandler = handler
+  }
+  onClose(handler: () => void): void {
+    this.closeHandler = handler
+  }
+  onOpen(handler: () => void): void {
+    this.openHandler = handler
+  }
 
   async connect(): Promise<void> {
-    this.state = 'connected';
-    this.openHandler?.();
+    this.state = 'connected'
+    this.openHandler?.()
   }
 
   send(msg: ProtocolMessage): void {
-    this.sent.push(msg);
+    this.sent.push(msg)
     // Deliver to peer asynchronously (simulates relay)
     if (this.peer) {
-      const peer = this.peer;
-      queueMicrotask(() => peer.receive(msg));
+      const peer = this.peer
+      queueMicrotask(() => peer.receive(msg))
     }
   }
 
   disconnect(): void {
-    this.state = 'disconnected';
+    this.state = 'disconnected'
   }
 
   /** Simulate receiving a message from the relay. */
   receive(msg: ProtocolMessage): void {
-    this.messageHandler?.(msg);
+    this.messageHandler?.(msg)
   }
 
   /** Simulate transport close (disconnect from relay). */
   simulateClose(): void {
-    this.state = 'disconnected';
-    this.closeHandler?.();
+    this.state = 'disconnected'
+    this.closeHandler?.()
   }
 }
 
@@ -118,11 +130,11 @@ export class MockTransport implements Transport {
  * Messages sent on dapp arrive on wallet and vice versa.
  */
 export function createLinkedTransports(): { dapp: MockTransport; wallet: MockTransport } {
-  const dapp = new MockTransport();
-  const wallet = new MockTransport();
-  dapp.peer = wallet;
-  wallet.peer = dapp;
-  return { dapp, wallet };
+  const dapp = new MockTransport()
+  const wallet = new MockTransport()
+  dapp.peer = wallet
+  wallet.peer = dapp
+  return { dapp, wallet }
 }
 
 /**
@@ -131,62 +143,71 @@ export function createLinkedTransports(): { dapp: MockTransport; wallet: MockTra
  * When dApp sends "accept", respond with "ready.connected" to both.
  */
 export class MockRelay {
-  private dappTransport: MockTransport;
-  private walletTransport: MockTransport;
+  private dappTransport: MockTransport
+  private walletTransport: MockTransport
 
   constructor(dapp: MockTransport, wallet: MockTransport) {
-    this.dappTransport = dapp;
-    this.walletTransport = wallet;
+    this.dappTransport = dapp
+    this.walletTransport = wallet
 
     // Intercept sends and inject relay behavior
-    const origDappSend = dapp.send.bind(dapp);
+    const origDappSend = dapp.send.bind(dapp)
     dapp.send = (msg: ProtocolMessage) => {
-      origDappSend(msg);
-      this.handleDappMessage(msg);
-    };
+      origDappSend(msg)
+      this.handleDappMessage(msg)
+    }
 
-    const origWalletSend = wallet.send.bind(wallet);
+    const origWalletSend = wallet.send.bind(wallet)
     wallet.send = (msg: ProtocolMessage) => {
-      origWalletSend(msg);
-      this.handleWalletMessage(msg);
-    };
+      origWalletSend(msg)
+      this.handleWalletMessage(msg)
+    }
 
     // Don't forward to peer directly — relay controls message flow
-    dapp.peer = null;
-    wallet.peer = null;
+    dapp.peer = null
+    wallet.peer = null
   }
 
   private handleDappMessage(msg: ProtocolMessage): void {
     if (msg.t === 'create') {
       queueMicrotask(() => {
         this.dappTransport.receive({
-          v: 1, t: 'ready', ch: msg.ch,
-          ts: Date.now(), from: '_adapter',
+          v: 1,
+          t: 'ready',
+          ch: msg.ch,
+          ts: Date.now(),
+          from: '_adapter',
           body: { state: 'waiting', reconnect: false, remote: null },
-        } as ProtocolMessage);
-      });
+        } as ProtocolMessage)
+      })
     } else if (msg.t === 'accept') {
       queueMicrotask(() => {
-        const target = (msg.body as any).target;
+        const target = (msg.body as any).target
         this.dappTransport.receive({
-          v: 1, t: 'ready', ch: msg.ch,
-          ts: Date.now(), from: '_adapter',
+          v: 1,
+          t: 'ready',
+          ch: msg.ch,
+          ts: Date.now(),
+          from: '_adapter',
           body: { state: 'connected', reconnect: false, remote: target },
-        } as ProtocolMessage);
+        } as ProtocolMessage)
         this.walletTransport.receive({
-          v: 1, t: 'ready', ch: msg.ch,
-          ts: Date.now(), from: '_adapter',
+          v: 1,
+          t: 'ready',
+          ch: msg.ch,
+          ts: Date.now(),
+          from: '_adapter',
           body: { state: 'connected', reconnect: false, remote: msg.from },
-        } as ProtocolMessage);
-      });
+        } as ProtocolMessage)
+      })
     } else if (msg.t === 'req') {
       // Forward to wallet
-      queueMicrotask(() => this.walletTransport.receive(msg));
+      queueMicrotask(() => this.walletTransport.receive(msg))
     } else if (msg.t === 'ping') {
       // Forward to wallet
-      queueMicrotask(() => this.walletTransport.receive(msg));
+      queueMicrotask(() => this.walletTransport.receive(msg))
     } else if (msg.t === 'close') {
-      queueMicrotask(() => this.walletTransport.receive(msg));
+      queueMicrotask(() => this.walletTransport.receive(msg))
     }
   }
 
@@ -195,22 +216,25 @@ export class MockRelay {
       queueMicrotask(() => {
         // Relay sends ready.waiting to wallet
         this.walletTransport.receive({
-          v: 1, t: 'ready', ch: msg.ch,
-          ts: Date.now(), from: '_adapter',
+          v: 1,
+          t: 'ready',
+          ch: msg.ch,
+          ts: Date.now(),
+          from: '_adapter',
           body: { state: 'waiting', reconnect: false, remote: null },
-        } as ProtocolMessage);
+        } as ProtocolMessage)
         // Relay forwards join to dApp
-        this.dappTransport.receive(msg);
-      });
+        this.dappTransport.receive(msg)
+      })
     } else if (msg.t === 'res') {
       // Forward to dApp
-      queueMicrotask(() => this.dappTransport.receive(msg));
+      queueMicrotask(() => this.dappTransport.receive(msg))
     } else if (msg.t === 'evt') {
-      queueMicrotask(() => this.dappTransport.receive(msg));
+      queueMicrotask(() => this.dappTransport.receive(msg))
     } else if (msg.t === 'pong') {
-      queueMicrotask(() => this.dappTransport.receive(msg));
+      queueMicrotask(() => this.dappTransport.receive(msg))
     } else if (msg.t === 'close') {
-      queueMicrotask(() => this.dappTransport.receive(msg));
+      queueMicrotask(() => this.dappTransport.receive(msg))
     }
   }
 }

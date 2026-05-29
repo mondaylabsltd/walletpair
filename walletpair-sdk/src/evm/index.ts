@@ -5,15 +5,15 @@
  */
 
 export {
-  WalletPairProvider,
-  type WalletPairProviderOptions,
   type EIP1193Provider,
   type EIP1193ProviderEvents,
   type EIP1193RequestArgs,
   type MethodMapper,
-} from './eip1193.js';
+  WalletPairProvider,
+  type WalletPairProviderOptions,
+} from './eip1193.js'
 
 export {
-  walletPair,
   type WalletPairConnectorOptions,
-} from './wagmi.js';
+  walletPair,
+} from './wagmi.js'

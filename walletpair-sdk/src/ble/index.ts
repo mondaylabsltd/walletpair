@@ -6,13 +6,13 @@
  */
 
 export {
-  frameMessage,
-  Defragmenter,
-  DEFAULT_FRAME_PAYLOAD,
-  MIN_FRAME_PAYLOAD,
+  BLE_NOTIFY_CHAR_UUID,
   BLE_SERVICE_UUID,
   BLE_WRITE_CHAR_UUID,
-  BLE_NOTIFY_CHAR_UUID,
-} from './framing.js';
+  DEFAULT_FRAME_PAYLOAD,
+  Defragmenter,
+  frameMessage,
+  MIN_FRAME_PAYLOAD,
+} from './framing.js'
 
-export { WebBleCentralTransport, isWebBleSupported } from './web-ble-transport.js';
+export { isWebBleSupported, WebBleCentralTransport } from './web-ble-transport.js'

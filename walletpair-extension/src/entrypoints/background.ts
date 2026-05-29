@@ -282,7 +282,9 @@ function requestUserConfirmation(
   params: unknown,
   origin: string,
 ): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
-  const confirmId = `confirm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  const confirmId = `confirm-${Array.from(buf, b => b.toString(16).padStart(2, '0')).join('')}`;
 
   return new Promise((resolve) => {
     pendingConfirmations.set(confirmId, { id: confirmId, method, params, origin, resolve });
@@ -309,7 +311,7 @@ function requestUserConfirmation(
 
 async function forwardToWallet(
   method: string,
-  params: unknown,
+  params: unknown[] | Record<string, unknown> | undefined,
 ): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
   try {
     const result = await evmProvider!.request({ method, params });
@@ -408,10 +410,16 @@ async function handleRpcRequest(
 
   // ── Methods requiring user confirmation popup ─────────────────────────
   if (CONFIRMATION_METHODS.has(method) && origin) {
+    if (!permitted) {
+      return { error: { code: 4100, message: 'Not permitted. Call eth_requestAccounts first.' } };
+    }
     return requestUserConfirmation(method, params, origin);
   }
 
   // ── Forward all other wallet methods via SDK provider ──────────────────
+  if (!permitted && method !== 'eth_requestAccounts') {
+    return { error: { code: 4100, message: 'Not permitted. Call eth_requestAccounts first.' } };
+  }
   try {
     const result = await evmProvider!.request({ method, params });
 
@@ -565,7 +573,7 @@ export default defineBackground(() => {
           const pending = pendingConfirmations.get(msg.id);
           if (pending) {
             pendingConfirmations.delete(msg.id);
-            const response = await forwardToWallet(pending.method, pending.params);
+            const response = await forwardToWallet(pending.method, pending.params as unknown[] | Record<string, unknown> | undefined);
             pending.resolve(response);
           }
           sendResponse({ ok: true });

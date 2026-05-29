@@ -560,9 +560,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           const declared = new Set(joinCapabilities.methods)
           const absent = requiredMethods.filter((m) => !declared.has(m))
           if (absent.length > 0) {
-            console.warn(
-              `[WalletPair] Wallet missing MUST-support methods: ${absent.join(', ')}`,
-            )
+            console.warn(`[WalletPair] Wallet missing MUST-support methods: ${absent.join(', ')}`)
           }
         }
 
@@ -634,6 +632,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       }
 
       case 'res': {
+        if (this.phase !== 'connected') break
         const resBody = msg.body as { id?: string; sealed?: string }
         if (this.remotePubKey && msg.from !== b64urlEncode(this.remotePubKey)) break
         if (!resBody.id) break
@@ -700,6 +699,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
       }
 
       case 'evt': {
+        if (this.phase !== 'connected') break
         const evtBody = msg.body as { id?: string; sealed?: string }
         if (this.remotePubKey && msg.from !== b64urlEncode(this.remotePubKey)) break
         // Events MUST be sealed — drop unsealed events to prevent forgery.
@@ -729,12 +729,10 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
           }
           const persisted = this.persistSnapshot()
           if (isPromiseLike(persisted)) {
-            void persisted
-              .then(afterPersist)
-              .catch((e) => {
-                this.recvSeq = prevRecvSeqEvt // rollback on persist failure
-                this.emit('error', this.persistenceError(e))
-              })
+            void persisted.then(afterPersist).catch((e) => {
+              this.recvSeq = prevRecvSeqEvt // rollback on persist failure
+              this.emit('error', this.persistenceError(e))
+            })
           } else {
             afterPersist()
           }

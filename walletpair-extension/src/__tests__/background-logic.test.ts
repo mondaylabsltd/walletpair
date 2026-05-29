@@ -641,7 +641,8 @@ describe('Method Mapping', () => {
     });
 
     it('eth_chainId defaults to chain 1 when no wallet', () => {
-      const chainId = null ?? 1;
+      const walletChainId: number | null = null;
+      const chainId = walletChainId ?? 1;
       const result = `0x${chainId.toString(16)}`;
       expect(result).toBe('0x1');
     });
@@ -668,7 +669,7 @@ describe('Method Mapping', () => {
 
     it('eth_accounts returns empty when permitted but no wallet', () => {
       const permitted = true;
-      const connectedWallet = null;
+      const connectedWallet: { address: string } | null = null;
       const result = !permitted ? [] : connectedWallet ? [connectedWallet.address] : [];
       expect(result).toEqual([]);
     });
@@ -678,7 +679,7 @@ describe('Method Mapping', () => {
     it('returns error 4100 when session not connected for non-requestAccounts', () => {
       // Simulating the logic from handleRpcRequest
       const sessionConnected = false;
-      const effectiveMethod = 'eth_sendTransaction';
+      const effectiveMethod: string = 'eth_sendTransaction';
 
       let response: { result?: unknown; error?: { code: number; message: string } };
       if (!sessionConnected && effectiveMethod !== 'eth_requestAccounts') {
@@ -797,7 +798,7 @@ describe('Confirmation Popup Logic', () => {
 
 describe('Content Port Management', () => {
   it('broadcastEvent sends to all connected ports', () => {
-    const contentPorts = new Map<number, { postMessage: ReturnType<typeof vi.fn> }>();
+    const contentPorts = new Map<number, { postMessage: (...args: unknown[]) => void }>();
 
     const port1 = { postMessage: vi.fn() };
     const port2 = { postMessage: vi.fn() };
@@ -815,7 +816,7 @@ describe('Content Port Management', () => {
   });
 
   it('broadcastEvent handles port errors gracefully', () => {
-    const contentPorts = new Map<number, { postMessage: ReturnType<typeof vi.fn> }>();
+    const contentPorts = new Map<number, { postMessage: (...args: unknown[]) => void }>();
 
     const port1 = { postMessage: vi.fn(() => { throw new Error('Port disconnected'); }) };
     const port2 = { postMessage: vi.fn() };

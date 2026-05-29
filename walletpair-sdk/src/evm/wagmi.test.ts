@@ -391,6 +391,6 @@ describe('walletPair connector factory', () => {
 
     // switchChain will fail because session isn't connected, but the chain validation
     // happens after the request. We test the error path.
-    await expect(connector.switchChain!({ chainId: 999 })).rejects.toThrow()
+    await expect(connector.switchChain?.({ chainId: 999 })).rejects.toThrow()
   })
 })
