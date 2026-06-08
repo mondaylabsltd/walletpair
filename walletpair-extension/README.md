@@ -42,7 +42,7 @@ A Chrome/Firefox browser extension that bridges any dApp to your mobile wallet v
 | EIP-1193 | Full | `request()`, events, error codes |
 | EIP-6963 | Full | Multi-wallet discovery (`eip6963:announceProvider`) |
 | EIP-1102 | Full | `eth_requestAccounts` authorization flow |
-| EIP-3085 | Full | `wallet_addEthereumChain` |
+| EIP-3085 | Not Supported | `wallet_addEthereumChain` — WalletPair proxies to the mobile wallet; chain management is the wallet's responsibility |
 | EIP-3326 | Full | `wallet_switchEthereumChain` |
 | personal_sign | Full | Hex and text messages |
 | eth_signTypedData_v4 | Full | EIP-712 structured data |

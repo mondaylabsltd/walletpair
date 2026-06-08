@@ -40,6 +40,37 @@ let state: ExtensionState = { phase: 'idle' };
 let connectedWallet: ConnectedWallet | null = null;
 let pairingInProgress = false;
 
+// Exponential backoff state for reconnection
+let reconnectAttempt = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
+
+function scheduleReconnect() {
+  if (reconnectTimer) return; // already scheduled
+  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt), RECONNECT_MAX_MS);
+  reconnectAttempt++;
+  console.warn(`[WalletPair] Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempt})`);
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    const ok = await tryReconnect();
+    if (ok) {
+      reconnectAttempt = 0;
+      console.log('[WalletPair] Reconnected successfully');
+    } else {
+      scheduleReconnect();
+    }
+  }, delay);
+}
+
+function resetReconnectBackoff() {
+  reconnectAttempt = 0;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
 // Pending RPC requests waiting for pairing to complete
 const deferredRequests: Array<{
   id: string;
@@ -77,7 +108,7 @@ const contentPorts = new Map<number, chrome.runtime.Port>();
 function updateState(patch: Partial<ExtensionState>) {
   state = { ...state, ...patch };
   // Broadcast to popup/options via runtime message
-  chrome.runtime.sendMessage({ action: 'state-update', state }).catch(() => {});
+  chrome.runtime.sendMessage({ action: 'state-update', state }).catch((e) => console.warn('[WalletPair]', e));
 }
 
 function broadcastEvent(event: string, data: unknown) {
@@ -130,14 +161,16 @@ function attachSessionListeners(autoAccepted: boolean) {
       case 'connected':
         updateState({ phase: 'connected' });
         pairingInProgress = false;
-        saveSessionState(session!.serialize()).catch(() => {});
-        saveConnectedAt(Date.now()).catch(() => {});
+        resetReconnectBackoff();
+        saveSessionState(session!.serialize()).catch((e) => console.warn('[WalletPair]', e));
+        saveConnectedAt(Date.now()).catch((e) => console.warn('[WalletPair]', e));
         // Start keepalive alarm (survives SW termination)
         chrome.alarms.create('walletpair-keepalive', { periodInMinutes: 0.33 });
         flushDeferredRequests();
         break;
       case 'disconnected':
         updateState({ phase: 'disconnected' });
+        scheduleReconnect();
         break;
       case 'closed':
         handleSessionClosed();
@@ -162,7 +195,7 @@ function attachSessionListeners(autoAccepted: boolean) {
           chainId: connectedWallet?.chainId ?? 1,
           name: session?.walletMeta?.name,
         };
-        saveConnectedWallet(connectedWallet).catch(() => {});
+        saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
         updateState({ wallet: { ...connectedWallet } });
       }
       broadcastEvent('accountsChanged', accounts);
@@ -172,7 +205,7 @@ function attachSessionListeners(autoAccepted: boolean) {
       const numericChainId = parseInt(hexChainId, 16);
       if (connectedWallet) {
         connectedWallet.chainId = numericChainId;
-        saveConnectedWallet(connectedWallet).catch(() => {});
+        saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
         updateState({ wallet: { ...connectedWallet } });
       }
       broadcastEvent('chainChanged', hexChainId);
@@ -204,9 +237,9 @@ function handleSessionClosed() {
     walletMeta: undefined,
   });
   connectedWallet = null;
-  saveSessionState(null).catch(() => {});
-  saveConnectedWallet(null).catch(() => {});
-  saveConnectedAt(null).catch(() => {});
+  saveSessionState(null).catch((e) => console.warn('[WalletPair]', e));
+  saveConnectedWallet(null).catch((e) => console.warn('[WalletPair]', e));
+  saveConnectedAt(null).catch((e) => console.warn('[WalletPair]', e));
   broadcastEvent('disconnect', undefined);
 }
 
@@ -221,7 +254,7 @@ async function createSession(): Promise<void> {
   session = new DAppSession({
     transport,
     meta: { name: 'WalletPair Extension', description: 'Browser extension for WalletPair', url: 'https://walletpair.org', icon: 'https://walletpair.org/icon.png' },
-    requestTimeout: 300_000,
+    requestTimeout: 60_000,
   });
 
   // Use SDK's EVM provider for method mapping
@@ -238,9 +271,9 @@ async function tryReconnect(): Promise<boolean> {
   // Check if session has expired (24-hour limit)
   const connectedAt = await getConnectedAt();
   if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
-    saveSessionState(null).catch(() => {});
-    saveConnectedWallet(null).catch(() => {});
-    saveConnectedAt(null).catch(() => {});
+    saveSessionState(null).catch((e) => console.warn('[WalletPair]', e));
+    saveConnectedWallet(null).catch((e) => console.warn('[WalletPair]', e));
+    saveConnectedAt(null).catch((e) => console.warn('[WalletPair]', e));
     return false;
   }
 
@@ -250,7 +283,7 @@ async function tryReconnect(): Promise<boolean> {
     session = new DAppSession({
       transport,
       meta: { name: 'WalletPair Extension', description: 'Browser extension for WalletPair', url: 'https://walletpair.org', icon: 'https://walletpair.org/icon.png' },
-      requestTimeout: 300_000,
+      requestTimeout: 60_000,
     });
 
     evmProvider = new WalletPairProvider({ session, chainId: 1 });
@@ -388,7 +421,7 @@ async function handleRpcRequest(
         addDeferredRequest(id, payload, (response) => {
           // On successful connection, grant the origin permission
           if (origin && response.result && !response.error) {
-            grantPermission(origin).catch(() => {});
+            grantPermission(origin).catch((e) => console.warn('[WalletPair]', e));
           }
           resolve(response);
         }, origin);
@@ -432,10 +465,10 @@ async function handleRpcRequest(
           chainId: connectedWallet?.chainId ?? 1,
           name: session.walletMeta?.name,
         };
-        saveConnectedWallet(connectedWallet).catch(() => {});
+        saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
         updateState({ wallet: { ...connectedWallet } });
         // Grant permission on successful eth_requestAccounts
-        if (origin) grantPermission(origin).catch(() => {});
+        if (origin) grantPermission(origin).catch((e) => console.warn('[WalletPair]', e));
       }
     }
 
@@ -465,7 +498,7 @@ function openPopup() {
       width: 380,
       height: 600,
       focused: true,
-    }).catch(() => {});
+    }).catch((e) => console.warn('[WalletPair]', e));
   });
 }
 
@@ -586,7 +619,7 @@ export default defineBackground(() => {
             pendingConfirmations.delete(msg.id);
             pending.resolve({ error: { code: 4001, message: 'User rejected the request' } });
             if (pending.windowId) {
-              chrome.windows.remove(pending.windowId).catch(() => {});
+              chrome.windows.remove(pending.windowId).catch((e) => console.warn('[WalletPair]', e));
             }
           }
           sendResponse({ ok: true });

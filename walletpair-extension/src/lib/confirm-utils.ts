@@ -46,6 +46,19 @@ export function tryDecodeHex(s: string | undefined): string {
   }
 }
 
+export function chainName(chainId: number): string {
+  switch (chainId) {
+    case 1: return 'Ethereum';
+    case 10: return 'Optimism';
+    case 56: return 'BSC';
+    case 137: return 'Polygon';
+    case 42161: return 'Arbitrum';
+    case 8453: return 'Base';
+    case 43114: return 'Avalanche';
+    default: return `Chain ${chainId}`;
+  }
+}
+
 export function formatTypedData(params: any): string {
   try {
     const data = typeof params === 'string' ? JSON.parse(params)

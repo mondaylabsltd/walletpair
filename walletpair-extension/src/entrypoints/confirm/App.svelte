@@ -6,6 +6,7 @@
     truncateHex,
     tryDecodeHex,
     formatTypedData,
+    chainName,
   } from '../../lib/confirm-utils.js';
 
   let method = $state('');
@@ -69,6 +70,12 @@
       <!-- Transaction details -->
       {#if method === 'eth_sendTransaction' || method === 'eth_signTransaction'}
         <div class="detail-card">
+          {#if params?.chainId}
+            <div class="detail-row">
+              <span class="label">Network</span>
+              <span class="value">{chainName(typeof params.chainId === 'string' ? parseInt(params.chainId, 16) : params.chainId)}</span>
+            </div>
+          {/if}
           <div class="detail-row">
             <span class="label">To</span>
             <span class="value mono">{shortenAddr(params?.to)}</span>

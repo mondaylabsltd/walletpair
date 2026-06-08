@@ -95,7 +95,7 @@ export function createProvider(postMessage: PostMessageFn) {
             pending.delete(id);
             reject(new ProviderRpcError(-32603, 'Request timed out'));
           }
-        }, 300_000);
+        }, 60_000);
       });
     },
 
