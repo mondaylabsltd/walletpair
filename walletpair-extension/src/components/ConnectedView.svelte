@@ -21,6 +21,7 @@
       1: 'Ethereum',
       10: 'Optimism',
       56: 'BNB Chain',
+      100: 'Gnosis',
       137: 'Polygon',
       42161: 'Arbitrum',
       8453: 'Base',
@@ -117,13 +118,14 @@
   .wallet-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
+    border-radius: 16px;
+    padding: 24px 20px;
     width: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 12px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
   }
 
   .wallet-avatar {
