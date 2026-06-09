@@ -1,24 +1,31 @@
 /**
  * Pure utility functions for the confirmation popup.
  * Extracted from confirm/App.svelte for testability.
+ *
+ * Generic (chain-agnostic) utilities are defined here directly.
+ * EVM-specific formatters delegate to the protocol handler so they
+ * work correctly when multi-chain support is added.
  */
+import { getHandler } from './protocols/registry';
 
-export function formatMethod(m: string): string {
-  switch (m) {
-    case 'eth_sendTransaction': return 'Send Transaction';
-    case 'eth_signTransaction': return 'Sign Transaction';
-    case 'personal_sign': return 'Sign Message';
-    case 'eth_signTypedData_v4':
-    case 'eth_signTypedData_v3': return 'Sign Typed Data';
-    default: return m;
-  }
+// Re-export formatTypedData from the EVM formatters (EVM-specific but imported directly where needed)
+export { formatTypedData } from './protocols/ethereum/formatters';
+
+// ── Protocol-aware formatters (delegate to handler) ────────────────────
+
+export function formatMethod(m: string, protocol = 'ethereum'): string {
+  return getHandler(protocol).formatMethodName(m);
 }
 
-export function formatValue(wei: string | undefined): string {
-  if (!wei || wei === '0x0' || wei === '0x') return '0 ETH';
-  const val = parseInt(wei, 16) / 1e18;
-  return `${val.toFixed(6)} ETH`;
+export function formatValue(wei: string | undefined, chainRef = '1', protocol = 'ethereum'): string {
+  return getHandler(protocol).formatDisplayValue(wei ?? '', chainRef);
 }
+
+export function chainName(chainId: number, protocol = 'ethereum'): string {
+  return getHandler(protocol).getChainName(String(chainId));
+}
+
+// ── Generic (chain-agnostic) utilities ─────────────────────────────────
 
 export function shortenAddr(addr: string | undefined): string {
   if (!addr) return 'Unknown';
@@ -28,7 +35,7 @@ export function shortenAddr(addr: string | undefined): string {
 export function truncateHex(hex: string | undefined, max = 120): string {
   if (!hex) return '';
   if (hex.length <= max) return hex;
-  return hex.slice(0, max) + '…';
+  return hex.slice(0, max) + '\u2026';
 }
 
 export function tryDecodeHex(s: string | undefined): string {
@@ -43,34 +50,5 @@ export function tryDecodeHex(s: string | undefined): string {
     return new TextDecoder().decode(bytes);
   } catch {
     return s;
-  }
-}
-
-export function chainName(chainId: number): string {
-  switch (chainId) {
-    case 1: return 'Ethereum';
-    case 10: return 'Optimism';
-    case 56: return 'BSC';
-    case 100: return 'Gnosis';
-    case 137: return 'Polygon';
-    case 42161: return 'Arbitrum';
-    case 8453: return 'Base';
-    case 43114: return 'Avalanche';
-    default: return `Chain ${chainId}`;
-  }
-}
-
-export function formatTypedData(params: any): string {
-  try {
-    const data = typeof params === 'string' ? JSON.parse(params)
-      : params?.data ? (typeof params.data === 'string' ? JSON.parse(params.data) : params.data)
-      : params?.[1] ? (typeof params[1] === 'string' ? JSON.parse(params[1]) : params[1])
-      : params;
-    if (data?.domain) {
-      return `Domain: ${data.domain.name ?? 'Unknown'}\nType: ${data.primaryType ?? 'Unknown'}`;
-    }
-    return JSON.stringify(data, null, 2).slice(0, 300);
-  } catch {
-    return String(params).slice(0, 300);
   }
 }

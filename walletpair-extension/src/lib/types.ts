@@ -10,6 +10,10 @@ export interface ConnectedWallet {
   chainId: number;
   name?: string;
   icon?: string;
+  /** Protocol name: 'ethereum', 'solana', etc. Defaults to 'ethereum'. */
+  protocolName?: string;
+  /** Chain reference string for the protocol. E.g., '1' for Ethereum mainnet. */
+  chainRef?: string;
 }
 
 /** Per-origin permission record */

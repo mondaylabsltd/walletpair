@@ -21,6 +21,7 @@ import {
   getConnectedAt,
 } from '@/lib/storage';
 import { READ_ONLY_METHODS, proxyRpcCall } from '@/lib/rpc-proxy';
+import { getHandler } from '@/lib/protocols/registry';
 import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request, PendingConfirmationInfo } from '@/lib/types';
 
 // ── Constants ───────────────────────────────────────────────────────────
@@ -91,14 +92,9 @@ interface PendingConfirmation {
 }
 const pendingConfirmations = new Map<string, PendingConfirmation>();
 
-/** Methods that require user confirmation before forwarding to wallet */
-const CONFIRMATION_METHODS = new Set([
-  'eth_sendTransaction',
-  'eth_signTransaction',
-  'personal_sign',
-  'eth_signTypedData_v4',
-  'eth_signTypedData_v3',
-]);
+/** Methods that require user confirmation before forwarding to wallet.
+ * Sourced from the protocol handler for the connected wallet's protocol. */
+const CONFIRMATION_METHODS = getHandler('ethereum').confirmationMethods;
 
 // Map of connected content script ports
 const contentPorts = new Map<number, chrome.runtime.Port>();

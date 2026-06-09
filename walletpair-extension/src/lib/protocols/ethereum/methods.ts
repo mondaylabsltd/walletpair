@@ -1,0 +1,41 @@
+/**
+ * EVM method constants — extracted from background.ts, rpc-proxy.ts, and provider-factory.ts.
+ *
+ * Single source of truth for which methods belong to which category.
+ */
+
+/** Methods that require user confirmation popup before forwarding to wallet */
+export const CONFIRMATION_METHODS: ReadonlySet<string> = new Set([
+  'eth_sendTransaction',
+  'eth_signTransaction',
+  'personal_sign',
+  'eth_signTypedData_v4',
+  'eth_signTypedData_v3',
+]);
+
+/** Methods handled locally in the extension (no relay trip needed) */
+export const LOCAL_METHODS: ReadonlySet<string> = new Set([
+  'eth_chainId',
+  'net_version',
+  'eth_accounts',
+  'wallet_getPermissions',
+]);
+
+/** Read-only methods routed to a public RPC node, NOT the wallet */
+export const READ_ONLY_METHODS: ReadonlySet<string> = new Set([
+  'eth_blockNumber', 'eth_call', 'eth_estimateGas', 'eth_feeHistory',
+  'eth_gasPrice', 'eth_maxPriorityFeePerGas',
+  'eth_getBalance', 'eth_getCode', 'eth_getStorageAt', 'eth_getTransactionCount',
+  'eth_getTransactionByHash', 'eth_getTransactionReceipt', 'eth_getLogs',
+  'eth_getBlockByNumber', 'eth_getBlockByHash',
+  'eth_newFilter', 'eth_newBlockFilter', 'eth_getFilterChanges', 'eth_uninstallFilter',
+  'eth_sendRawTransaction', 'eth_syncing',
+]);
+
+/** Methods that are explicitly unsupported */
+export const UNSUPPORTED_METHODS: ReadonlySet<string> = new Set([
+  'eth_getEncryptionPublicKey',
+  'eth_decrypt',
+  'eth_sign',
+  'wallet_addEthereumChain',
+]);
