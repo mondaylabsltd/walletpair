@@ -51,6 +51,7 @@ export function chainName(chainId: number): string {
     case 1: return 'Ethereum';
     case 10: return 'Optimism';
     case 56: return 'BSC';
+    case 100: return 'Gnosis';
     case 137: return 'Polygon';
     case 42161: return 'Arbitrum';
     case 8453: return 'Base';

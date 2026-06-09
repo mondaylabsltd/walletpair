@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WalletPair E2E — dApp</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3;
+  --muted: #8b949e; --green: #3fb950; --amber: #d29922; --red: #f85149; --blue: #58a6ff;
+  --font: system-ui, -apple-system, sans-serif; --mono: 'SF Mono', 'Fira Code', monospace;
+  --radius: 8px;
+}
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; padding: 24px; }
+main { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+header { font-size: 20px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 12px; }
+.field { margin-bottom: 8px; }
+.label { font-size: 12px; color: var(--muted); }
+.value { font-family: var(--mono); font-size: 13px; color: var(--text); word-break: break-all; }
+.value.green { color: var(--green); }
+.value.amber { color: var(--amber); }
+.value.red { color: var(--red); }
+#events-log { max-height: 200px; overflow-y: auto; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.evt-entry { padding: 2px 0; border-bottom: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<main>
+  <header>WalletPair E2E &mdash; dApp</header>
+
+  <section>
+    <h3>Provider Discovery</h3>
+    <div class="field">
+      <div class="label">EIP-6963 Provider</div>
+      <div class="value" id="provider-status">Waiting...</div>
+    </div>
+    <div class="field">
+      <div class="label">RDNS</div>
+      <div class="value" id="provider-rdns">--</div>
+    </div>
+    <div class="field">
+      <div class="label">UUID</div>
+      <div class="value" id="provider-uuid">--</div>
+    </div>
+    <div class="field">
+      <div class="label">Name</div>
+      <div class="value" id="provider-name">--</div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Connection</h3>
+    <div class="field">
+      <div class="label">Connected</div>
+      <div class="value" id="connected">No</div>
+    </div>
+    <div class="field">
+      <div class="label">Accounts</div>
+      <div class="value" id="accounts">--</div>
+    </div>
+    <div class="field">
+      <div class="label">Chain ID</div>
+      <div class="value" id="chain-id">--</div>
+    </div>
+  </section>
+
+  <section>
+    <h3>Events</h3>
+    <div id="events-log"></div>
+  </section>
+</main>
+
+<script>
+(function() {
+  // ── State ──────────────────────────────────────────────────────────
+  let provider = null;
+  let providerInfo = null;
+  let connectedAccounts = [];
+
+  // ── DOM refs ───────────────────────────────────────────────────────
+  const providerStatusEl = document.getElementById('provider-status');
+  const providerRdnsEl = document.getElementById('provider-rdns');
+  const providerUuidEl = document.getElementById('provider-uuid');
+  const providerNameEl = document.getElementById('provider-name');
+  const connectedEl = document.getElementById('connected');
+  const accountsEl = document.getElementById('accounts');
+  const chainIdEl = document.getElementById('chain-id');
+  const eventsLogEl = document.getElementById('events-log');
+
+  // ── Hex encoding helper ────────────────────────────────────────────
+  function toHex(str) {
+    return '0x' + Array.from(new TextEncoder().encode(str)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // ── Events array ───────────────────────────────────────────────────
+  const events = [];
+
+  function logEvent(name, data) {
+    events.push({ name, data, ts: Date.now() });
+    const entry = document.createElement('div');
+    entry.className = 'evt-entry';
+    entry.textContent = `${name}: ${JSON.stringify(data)}`;
+    eventsLogEl.appendChild(entry);
+    eventsLogEl.scrollTop = eventsLogEl.scrollHeight;
+  }
+
+  // ── Subscribe to provider events ──────────────────────────────────
+  function subscribeEvents(p) {
+    p.on('accountsChanged', (accs) => {
+      logEvent('accountsChanged', accs);
+      connectedAccounts = accs;
+      accountsEl.textContent = accs.join(', ') || '--';
+    });
+    p.on('chainChanged', (chainId) => {
+      logEvent('chainChanged', chainId);
+      chainIdEl.textContent = chainId;
+    });
+    p.on('connect', (info) => {
+      logEvent('connect', info);
+    });
+    p.on('disconnect', (err) => {
+      logEvent('disconnect', err);
+      connectedEl.textContent = 'No';
+      connectedEl.className = 'value red';
+    });
+  }
+
+  // ── EIP-6963 discovery ─────────────────────────────────────────────
+  window.addEventListener('eip6963:announceProvider', (event) => {
+    const { info, provider: p } = event.detail;
+    if (info.rdns === 'org.walletpair.extension') {
+      provider = p;
+      providerInfo = { rdns: info.rdns, uuid: info.uuid, name: info.name };
+      providerStatusEl.textContent = 'Discovered via EIP-6963';
+      providerStatusEl.className = 'value green';
+      providerRdnsEl.textContent = info.rdns;
+      providerUuidEl.textContent = info.uuid;
+      providerNameEl.textContent = info.name;
+      subscribeEvents(provider);
+    }
+  });
+
+  // Fire request on load
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+  // Fallback to window.ethereum after a short delay
+  setTimeout(() => {
+    if (!provider && window.ethereum) {
+      provider = window.ethereum;
+      providerInfo = { rdns: 'window.ethereum', uuid: null, name: 'window.ethereum (fallback)' };
+      providerStatusEl.textContent = 'Fallback: window.ethereum';
+      providerStatusEl.className = 'value amber';
+      providerRdnsEl.textContent = 'window.ethereum';
+      providerNameEl.textContent = 'window.ethereum (fallback)';
+      subscribeEvents(provider);
+    }
+  }, 500);
+
+  // ── Exposed API ────────────────────────────────────────────────────
+  window.dappE2E = {
+    events: events,
+
+    getProviderInfo: function() {
+      return providerInfo || null;
+    },
+
+    connectWallet: async function() {
+      if (!provider) throw new Error('No provider available');
+      const accounts = await provider.request({ method: 'eth_requestAccounts' });
+      connectedAccounts = accounts;
+      connectedEl.textContent = 'Yes';
+      connectedEl.className = 'value green';
+      accountsEl.textContent = accounts.join(', ');
+      return accounts;
+    },
+
+    getAccounts: async function() {
+      if (!provider) throw new Error('No provider available');
+      return await provider.request({ method: 'eth_accounts' });
+    },
+
+    getChainId: async function() {
+      if (!provider) throw new Error('No provider available');
+      const chainId = await provider.request({ method: 'eth_chainId' });
+      chainIdEl.textContent = chainId;
+      return chainId;
+    },
+
+    getNetVersion: async function() {
+      if (!provider) throw new Error('No provider available');
+      return await provider.request({ method: 'net_version' });
+    },
+
+    getBlockNumber: async function() {
+      if (!provider) throw new Error('No provider available');
+      return await provider.request({ method: 'eth_blockNumber' });
+    },
+
+    getBalance: async function(addr) {
+      if (!provider) throw new Error('No provider available');
+      return await provider.request({ method: 'eth_getBalance', params: [addr, 'latest'] });
+    },
+
+    signMessage: async function(msg) {
+      if (!provider) throw new Error('No provider available');
+      if (connectedAccounts.length === 0) throw new Error('Not connected');
+      const hexMsg = toHex(msg);
+      return await provider.request({ method: 'personal_sign', params: [hexMsg, connectedAccounts[0]] });
+    },
+
+    signTypedData: async function(typedData) {
+      if (!provider) throw new Error('No provider available');
+      if (connectedAccounts.length === 0) throw new Error('Not connected');
+      return await provider.request({
+        method: 'eth_signTypedData_v4',
+        params: [connectedAccounts[0], JSON.stringify(typedData)]
+      });
+    },
+
+    sendTransaction: async function(txParams) {
+      if (!provider) throw new Error('No provider available');
+      return await provider.request({ method: 'eth_sendTransaction', params: [txParams] });
+    },
+
+    switchChain: async function(chainIdHex) {
+      if (!provider) throw new Error('No provider available');
+      return await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: chainIdHex }]
+      });
+    },
+
+    callUnsupported: async function() {
+      if (!provider) throw new Error('No provider available');
+      return await provider.request({ method: 'eth_sign', params: [] });
+    }
+  };
+})();
+</script>
+</body>
+</html>
