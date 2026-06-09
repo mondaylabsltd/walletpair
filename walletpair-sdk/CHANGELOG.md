@@ -1,5 +1,11 @@
 # walletpair-sdk
 
+## 1.0.7
+
+### Patch Changes
+
+- Add EIP-5792 smart wallet support: walletCapabilities field in Capabilities type, wallet_sendCalls request/response mapping in EIP-1193 provider
+
 ## 1.0.6
 
 ### Patch Changes
