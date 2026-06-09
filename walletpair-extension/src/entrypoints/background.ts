@@ -179,6 +179,7 @@ function attachSessionListeners(autoAccepted: boolean) {
   });
 
   session.on('walletJoined', ({ meta }) => {
+    console.log('[WalletPair] walletJoined meta:', JSON.stringify(meta));
     updateState({ walletMeta: meta ? { name: meta.name, icon: meta.icon } : undefined });
   });
 
@@ -190,6 +191,7 @@ function attachSessionListeners(autoAccepted: boolean) {
           address: accounts[0]!,
           chainId: connectedWallet?.chainId ?? 1,
           name: session?.walletMeta?.name,
+          icon: session?.walletMeta?.icon,
         };
         saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
         updateState({ wallet: { ...connectedWallet } });
@@ -437,15 +439,9 @@ async function handleRpcRequest(
     }
   }
 
-  // ── Methods requiring user confirmation popup ─────────────────────────
-  if (CONFIRMATION_METHODS.has(method) && origin) {
-    if (!permitted) {
-      return { error: { code: 4100, message: 'Not permitted. Call eth_requestAccounts first.' } };
-    }
-    return requestUserConfirmation(method, params, origin);
-  }
-
-  // ── Forward all other wallet methods via SDK provider ──────────────────
+  // ── Forward wallet methods directly (no double confirmation) ────────────
+  // Signing and transaction confirmation happens in the real wallet, not here.
+  // The extension is a transparent bridge — it only forwards requests.
   if (!permitted && method !== 'eth_requestAccounts') {
     return { error: { code: 4100, message: 'Not permitted. Call eth_requestAccounts first.' } };
   }
@@ -460,6 +456,7 @@ async function handleRpcRequest(
           address: accounts[0]!,
           chainId: connectedWallet?.chainId ?? 1,
           name: session.walletMeta?.name,
+          icon: session.walletMeta?.icon,
         };
         saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
         updateState({ wallet: { ...connectedWallet } });

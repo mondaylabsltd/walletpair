@@ -5,35 +5,22 @@
   let { onBack }: { onBack: () => void } = $props();
 
   let relayUrl = $state(DEFAULT_RELAY_URL);
-  let autoConnect = $state(true);
-  let customRpc = $state('');
   let saved = $state(false);
-  let showAdvanced = $state(false);
 
   $effect(() => {
     getSettings().then((s) => {
       relayUrl = s.relayUrl;
-      autoConnect = s.autoConnect;
-      // Serialize custom RPCs for display
-      const custom = Object.entries(s.rpcUrls ?? {});
-      customRpc = custom.map(([id, url]) => `${id}=${url}`).join('\n');
     });
   });
 
   async function save() {
-    // Parse custom RPCs
-    const rpcUrls: Record<number, string> = {};
-    for (const line of customRpc.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const [idStr, ...urlParts] = trimmed.split('=');
-      const id = parseInt(idStr!, 10);
-      const url = urlParts.join('=').trim();
-      if (!isNaN(id) && url) rpcUrls[id] = url;
-    }
-    await saveSettings({ relayUrl, autoConnect, rpcUrls });
+    await saveSettings({ relayUrl });
     saved = true;
     setTimeout(() => (saved = false), 2000);
+  }
+
+  function resetRelay() {
+    relayUrl = DEFAULT_RELAY_URL;
   }
 </script>
 
@@ -52,7 +39,7 @@
       <svg viewBox="0 0 16 16" width="14" height="14" fill="var(--accent)" style="flex-shrink: 0; margin-top: 1px;">
         <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm-.75 3.75a.75.75 0 011.5 0v.5a.75.75 0 01-1.5 0v-.5zM8 7a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 018 7z"/>
       </svg>
-      <p>WalletPair is a transparent bridge. Network support is determined by your wallet, not by this extension.</p>
+      <p>WalletPair is a transparent bridge. Signing and transaction confirmations happen in your wallet, not here.</p>
     </div>
 
     <section class="section">
@@ -63,27 +50,8 @@
         bind:value={relayUrl}
         placeholder="wss://relay.walletpair.org/v1"
       />
-    </section>
-
-    <section class="section">
-      <label class="toggle-row">
-        <span>Auto-reconnect</span>
-        <input type="checkbox" bind:checked={autoConnect} class="toggle" />
-      </label>
-    </section>
-
-    <section class="section">
-      <button class="toggle-link" onclick={() => (showAdvanced = !showAdvanced)}>
-        {showAdvanced ? '▾' : '▸'} Custom RPC Endpoints
-      </button>
-      {#if showAdvanced}
-        <p class="section-hint">Override default RPCs for read-only queries. One per line: <code>chainId=url</code></p>
-        <textarea
-          class="input textarea"
-          bind:value={customRpc}
-          placeholder={"1=https://eth.llamarpc.com\n100=https://rpc.gnosis.gateway.fm"}
-          rows="4"
-        ></textarea>
+      {#if relayUrl !== DEFAULT_RELAY_URL}
+        <button class="btn-reset" onclick={resetRelay}>Reset to default</button>
       {/if}
     </section>
 
@@ -161,20 +129,6 @@
     color: var(--text-dim);
   }
 
-  .section-hint {
-    font-size: 11px;
-    color: var(--text-dimmer);
-    line-height: 1.4;
-  }
-
-  .section-hint code {
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    background: var(--bg-card);
-    padding: 1px 4px;
-    border-radius: 3px;
-    font-size: 10px;
-  }
-
   .input {
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -190,64 +144,15 @@
     border-color: var(--accent);
   }
 
-  .textarea {
-    resize: vertical;
-    min-height: 70px;
-    line-height: 1.6;
-  }
-
-  .toggle-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 14px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font-size: 13px;
-    cursor: pointer;
-  }
-
-  .toggle {
-    width: 36px;
-    height: 20px;
-    appearance: none;
-    background: var(--border);
-    border-radius: 10px;
-    position: relative;
-    cursor: pointer;
-    transition: background 0.2s;
-    flex-shrink: 0;
-  }
-  .toggle::after {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 16px;
-    height: 16px;
-    background: white;
-    border-radius: 50%;
-    transition: transform 0.2s;
-  }
-  .toggle:checked {
-    background: var(--accent);
-  }
-  .toggle:checked::after {
-    transform: translateX(16px);
-  }
-
-  .toggle-link {
+  .btn-reset {
     background: none;
-    color: var(--text-dim);
-    font-size: 12px;
-    font-weight: 500;
+    color: var(--text-dimmer);
+    font-size: 11px;
     padding: 0;
     text-align: left;
-    font-family: inherit;
   }
-  .toggle-link:hover {
-    color: var(--text);
+  .btn-reset:hover {
+    color: var(--accent);
   }
 
   .btn-save {
