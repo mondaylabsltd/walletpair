@@ -1,8 +1,29 @@
 <script lang="ts">
   import type { ActivityEntry } from '@/lib/types';
+  let { entries = [], filterOrigin, onClear }: {
+    entries: ActivityEntry[];
+    filterOrigin?: string;
+    onClear?: () => void;
+  } = $props();
 
-  let { entries = [] }: { entries: ActivityEntry[] } = $props();
   let expandedId = $state<string | null>(null);
+
+  // Filter entries by origin when filterOrigin is provided
+  let filteredEntries = $derived(
+    filterOrigin
+      ? entries.filter(e => {
+          try {
+            return new URL(e.origin).origin === filterOrigin;
+          } catch {
+            return e.origin === filterOrigin;
+          }
+        })
+      : entries,
+  );
+
+  let filterHostname = $derived(
+    filterOrigin ? (() => { try { return new URL(filterOrigin).hostname; } catch { return filterOrigin; } })() : null,
+  );
 
   function relativeTime(ts: number): string {
     const diff = Math.floor((Date.now() - ts) / 1000);
@@ -48,11 +69,27 @@
   }
 </script>
 
-{#if entries.length > 0}
+{#if filteredEntries.length > 0 || (filterOrigin && entries.length > 0)}
   <div class="activity">
-    <h4 class="activity-title">Activity</h4>
+    <div class="activity-header">
+      <h4 class="activity-title">
+        Activity
+        {#if filterHostname}
+          <span class="filter-badge">{filterHostname}</span>
+        {/if}
+      </h4>
+      {#if onClear && entries.length > 0}
+        <button class="clear-btn" onclick={onClear} title="Clear activity log">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          Clear
+        </button>
+      {/if}
+    </div>
+    {#if filteredEntries.length === 0}
+      <div class="empty-filter">No activity from this site yet</div>
+    {:else}
     <div class="activity-list">
-      {#each entries.slice(0, 20) as entry}
+      {#each filteredEntries.slice(0, 20) as entry}
         <button
           class="activity-row"
           class:expandable={hasDetail(entry)}
@@ -104,6 +141,7 @@
         {/if}
       {/each}
     </div>
+    {/if}
   </div>
 {/if}
 
@@ -113,14 +151,63 @@
     margin-top: 8px;
   }
 
+  .activity-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
   .activity-title {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--text-dimmer);
-    margin: 0 0 6px 0;
+    margin: 0;
     padding: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .filter-badge {
+    font-size: 9px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--accent);
+    background: var(--accent-dim);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+
+  .clear-btn {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 10px;
+    color: var(--text-dimmer);
+    background: none;
+    border: none;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .clear-btn:hover {
+    color: var(--red);
+    background: var(--red-dim);
+  }
+
+  .empty-filter {
+    font-size: 11px;
+    color: var(--text-dimmer);
+    text-align: center;
+    padding: 16px 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
   }
 
   .activity-list {

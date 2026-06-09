@@ -2,7 +2,7 @@
   import type { ConnectedWallet, ActivityEntry } from '@/lib/types';
   import ActivityLog from './ActivityLog.svelte';
   import SigningToast from './SigningToast.svelte';
-  import { getActivityLog } from '@/lib/storage';
+  import { getActivityLog, clearActivityLog } from '@/lib/storage';
   import { Copy, Check } from 'lucide-svelte';
 
   let {
@@ -16,13 +16,27 @@
   } = $props();
 
   let activity = $state<ActivityEntry[]>([]);
+  let currentOrigin = $state<string | undefined>(undefined);
 
   $effect(() => {
+    // Get the current active tab's origin for filtering
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const url = tabs[0]?.url;
+      if (url) {
+        try { currentOrigin = new URL(url).origin; } catch { /* ignore */ }
+      }
+    });
+
     const load = () => getActivityLog().then(a => { activity = a; });
     load();
     const timer = setInterval(load, 2000);
     return () => clearInterval(timer);
   });
+
+  async function handleClearActivity() {
+    await clearActivityLog();
+    activity = [];
+  }
 
   let address = $derived(wallet?.address ?? '');
   let shortAddress = $derived(
@@ -87,7 +101,7 @@
   </div>
 
   <SigningToast method={signingInProgress?.method} origin={signingInProgress?.origin} />
-  <ActivityLog entries={activity} />
+  <ActivityLog entries={activity} filterOrigin={currentOrigin} onClear={handleClearActivity} />
 
   <div class="actions">
     <button class="btn-disconnect" onclick={onDisconnect}>Disconnect</button>
