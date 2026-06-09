@@ -88,18 +88,8 @@
         <div class="hero-text">
           <h2 class="title">Connect Your Wallet</h2>
           <p class="subtitle">
-            Scan with any WalletPair-compatible wallet to bridge your wallet to dApps
+            Pair with your mobile wallet to use dApps on this browser
           </p>
-          <div class="trust-row">
-            <span class="trust-badge">
-              <svg viewBox="0 0 12 12" width="12" height="12" fill="var(--green)"><path d="M6 1a5 5 0 100 10A5 5 0 006 1zm-.5 7.5l-2-2 .7-.7L5.5 7.1l3.3-3.3.7.7-4 4z"/></svg>
-              End-to-end encrypted
-            </span>
-            <span class="trust-badge">
-              <svg viewBox="0 0 12 12" width="12" height="12" fill="var(--text-dim)"><path d="M6 0C2.7 0 0 2.7 0 6s2.7 6 6 6 6-2.7 6-6S9.3 0 6 0zM9 6.8H6.8V9H5.2V6.8H3V5.2h2.2V3h1.6v2.2H9v1.6z"/></svg>
-              Open source
-            </span>
-          </div>
         </div>
         {#if state.error}
           <div class="error-banner">
@@ -348,16 +338,4 @@
     50% { opacity: 0.4; }
   }
 
-  .trust-row {
-    display: flex;
-    gap: 12px;
-    margin-top: 4px;
-  }
-  .trust-badge {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    color: var(--text-dimmer);
-  }
 </style>
