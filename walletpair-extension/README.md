@@ -46,7 +46,7 @@ A Chrome/Firefox browser extension that bridges any dApp to your mobile wallet v
 | EIP-3326 | Full | `wallet_switchEthereumChain` |
 | personal_sign | Full | Hex and text messages |
 | eth_signTypedData_v4 | Full | EIP-712 structured data |
-| eth_sendTransaction | Full | With confirmation popup |
+| eth_sendTransaction | Full | Forwarded to wallet for confirmation |
 | Legacy (`send`, `sendAsync`, `enable`) | Full | MetaMask compatibility |
 
 ## Build
@@ -76,6 +76,16 @@ npm run test:watch     # Watch mode
 
 ## Architecture
 
+### Protocol Handler Abstraction
+
+The extension uses a chain-agnostic `ProtocolHandler` interface (`src/lib/protocols/`). All chain-specific logic (RPC proxying, method formatting, transaction building) is encapsulated in protocol handlers registered by CAIP-2 namespace. Currently ships with an Ethereum handler; adding new chains requires only implementing the interface — no core changes needed.
+
+### Transparent Bridge (No Double Approval)
+
+The extension acts as a **transparent bridge** — signing requests (`personal_sign`, `eth_signTypedData_v4`, `eth_sendTransaction`) are forwarded directly to the mobile wallet for confirmation. There is no confirmation popup in the extension itself, eliminating the double-approval friction.
+
+A signing toast notification appears in the popup to indicate that a request is pending wallet confirmation.
+
 ### Permission Model
 
 - Per-origin permissions stored in `chrome.storage.local`
@@ -87,9 +97,9 @@ npm run test:watch     # Watch mode
 
 Methods like `eth_call`, `eth_getBalance`, `eth_blockNumber` are proxied directly to public RPC nodes (configurable per chain), avoiding unnecessary round-trips through the wallet.
 
-### Confirmation Popup
+### Activity Log
 
-Signing methods (`personal_sign`, `eth_signTypedData_v4`, `eth_sendTransaction`) open a confirmation popup window for user approval before forwarding to the wallet.
+The popup displays a request activity log showing method names, origins, timestamps, and status (pending, success, rejected, error). Up to 20 entries are displayed from 50 stored in `chrome.storage.local`.
 
 ### Service Worker Lifecycle
 
@@ -97,6 +107,10 @@ Signing methods (`personal_sign`, `eth_signTypedData_v4`, `eth_sendTransaction`)
 - Restored on service worker restart
 - Keepalive alarm (every 20s) sends ping to maintain relay connection
 - Automatic reconnect with exponential backoff + jitter
+
+### Sidepanel
+
+The sidepanel reuses the popup's `App.svelte` component with its own container sizing, providing the same UI in either popup or sidepanel mode.
 
 ## Security
 
@@ -115,11 +129,10 @@ Default relay: `wss://relay.walletpair.org/v1`
 Configurable in extension settings:
 - Relay URL
 - Per-chain RPC endpoints
-- Enabled chains
 
 ## Tests
 
 ```bash
-npm run test       # 171 unit tests
-npm run test:e2e   # E2E tests (requires Puppeteer + Chrome)
+npm run test       # 236 unit tests
+npm run test:e2e   # Full-stack E2E tests (extension + SDK + relay)
 ```

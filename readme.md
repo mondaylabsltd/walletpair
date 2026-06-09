@@ -10,7 +10,7 @@ WalletPair replaces centralized pairing services with a zero-registration, relay
 - **Self-sovereign** - Peers exchange keys directly. No central authority holds your session.
 - **Relay-blind** - All payloads are end-to-end encrypted. The relay routes opaque bytes.
 - **Transport agnostic** - WebSocket, Bluetooth, local TCP - same protocol.
-- **EVM-first** - Full Ethereum support: transactions (legacy through EIP-7702), message signing (EIP-191, EIP-712), multi-chain (CAIP-2).
+- **Chain-agnostic** - CAIP-2 chain IDs, protocol handler abstraction. EVM fully supported; extensible to Solana, Cosmos, etc.
 
 ## How It Works
 
@@ -42,7 +42,7 @@ WalletPair replaces centralized pairing services with a zero-registration, relay
 ```
 walletpair/
   walletpair-sdk/              # TypeScript SDK - core protocol, crypto, sessions
-  walletpair-extension/        # Browser extension - bridge dApps to wallets
+  walletpair-extension/        # Browser extension - chain-agnostic bridge, transparent signing
   walletpair-websocket-relay/  # Rust relay server - production-grade message router
   walletpair-examples/         # Demo apps - standalone HTML, React Native, SvelteKit
   walletpair.org/              # Marketing site and interactive demo
@@ -270,8 +270,8 @@ The model is in [formal-verification/walletpair.pv](formal-verification/walletpa
 
 | Component | Tests | Framework |
 |-----------|-------|-----------|
-| SDK | 422 | Vitest |
-| Extension | 236 | Vitest |
+| SDK | 618 | Vitest |
+| Extension | 236 unit + E2E | Vitest + Playwright |
 | Relay | 212+ | cargo test |
 
 CI runs on every PR for all three components (lint, type check, test).
