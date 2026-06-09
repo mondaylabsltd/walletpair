@@ -4,6 +4,7 @@
 	import QRCode from 'qrcode';
 	import MessageLog from './MessageLog.svelte';
 	import { playground, type LogEntry } from './state.svelte';
+	import { Zap, RadioTower, Link } from 'lucide-svelte';
 
 	let bleSupported = $state(false);
 	let bleStatus = $state('');
@@ -388,7 +389,7 @@
 				<label>Wallet Capabilities</label>
 				<div class="caps-box">
 					<div class="caps-row">
-						<span class="caps-icon">⚡</span>
+						<span class="caps-icon"><Zap size={14} strokeWidth={1.5} /></span>
 						<span class="caps-label">Methods</span>
 						<div class="caps-tags">
 							{#each walletCaps.methods || [] as m}
@@ -404,7 +405,7 @@
 						</div>
 					</div>
 					<div class="caps-row">
-						<span class="caps-icon">📡</span>
+						<span class="caps-icon"><RadioTower size={14} strokeWidth={1.5} /></span>
 						<span class="caps-label">Events</span>
 						<div class="caps-tags">
 							{#each walletCaps.events || [] as e}
@@ -416,7 +417,7 @@
 						</div>
 					</div>
 					<div class="caps-row">
-						<span class="caps-icon">🔗</span>
+						<span class="caps-icon"><Link size={14} strokeWidth={1.5} /></span>
 						<span class="caps-label">Chains</span>
 						<div class="caps-tags">
 							{#each walletCaps.chains || [] as c}
@@ -574,8 +575,9 @@
 	}
 	.caps-icon {
 		flex-shrink: 0;
-		font-size: 0.75rem;
-		line-height: 1.8;
+		display: flex;
+		align-items: center;
+		color: var(--color-accent);
 	}
 	.caps-label {
 		flex-shrink: 0;

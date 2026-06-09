@@ -1,36 +1,37 @@
 <script lang="ts">
 	import FeatureCard from '$lib/components/FeatureCard.svelte';
 	import SequenceDiagram from '$lib/components/SequenceDiagram.svelte';
+	import { Braces, Lock, ArrowLeftRight, Diamond, ShieldCheck, Settings, Download } from 'lucide-svelte';
 
 	const features = [
 		{
-			icon: '{}',
+			icon: Braces,
 			title: 'Zero Registration',
 			description: 'No API keys, project IDs, or accounts. Deploy a relay and start pairing.'
 		},
 		{
-			icon: '🔒',
+			icon: Lock,
 			title: 'End-to-End Encrypted',
 			description: 'ChaCha20-Poly1305 AEAD. The relay routes only opaque bytes it cannot read.'
 		},
 		{
-			icon: '⇌',
+			icon: ArrowLeftRight,
 			title: 'Transport Agnostic',
 			description: 'WebSocket, Bluetooth, local TCP — same protocol, same code.'
 		},
 		{
-			icon: '◆',
+			icon: Diamond,
 			title: 'Multi-Network',
 			description:
 				'Chain-agnostic core with sub-protocols for EVM, Solana, Sui, and more via CAIP-2.'
 		},
 		{
-			icon: '✓',
+			icon: ShieldCheck,
 			title: 'Formally Verified',
 			description: 'ProVerif-proven under Dolev-Yao threat model. 7/7 security properties hold.'
 		},
 		{
-			icon: '⚙',
+			icon: Settings,
 			title: 'Self-Hostable',
 			description: 'One Rust binary. No vendor lock-in. Your infrastructure, your rules.'
 		}
@@ -71,6 +72,7 @@ session.on('request', ({ id, method, params }) => {
 
 <!-- Hero -->
 <section class="hero">
+	<img src="/logo.png" alt="WalletPair" class="hero-logo" />
 	<h1 class="hero-title">WalletPair</h1>
 	<p class="hero-sub">
 		Connect dApps to wallets.<br />
@@ -78,6 +80,7 @@ session.on('request', ({ id, method, params }) => {
 	</p>
 	<div class="hero-actions">
 		<a href="/docs/getting-started" class="btn btn-primary">Get Started</a>
+		<a href="/docs/install-extension" class="btn btn-ghost"><Download size={16} strokeWidth={1.5} /> Install Extension</a>
 		<a href="/playground" class="btn btn-ghost">Try the Playground →</a>
 	</div>
 </section>
@@ -139,6 +142,13 @@ session.on('request', ({ id, method, params }) => {
 		margin: 0 auto;
 	}
 
+	.hero-logo {
+		width: 72px;
+		height: 72px;
+		margin-bottom: var(--space-4);
+		border-radius: var(--radius-lg);
+	}
+
 	.hero-title {
 		font-family: var(--font-mono);
 		font-size: 3.5rem;
@@ -169,6 +179,7 @@ session.on('request', ({ id, method, params }) => {
 	.btn {
 		display: inline-flex;
 		align-items: center;
+		gap: var(--space-2);
 		padding: var(--space-3) var(--space-6);
 		border-radius: var(--radius-md);
 		font-size: 0.95rem;

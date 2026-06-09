@@ -4,6 +4,7 @@
 	import ProtocolDApp from '$lib/playground/ProtocolDApp.svelte';
 	import ProtocolWallet from '$lib/playground/ProtocolWallet.svelte';
 	import { playground } from '$lib/playground/state.svelte';
+	import { Smartphone } from 'lucide-svelte';
 
 	let width = $state(0);
 	const isMobile = $derived(width < 768);
@@ -96,7 +97,7 @@
 				<ProtocolDApp />
 				{#if playground.transport === 'ble'}
 					<div class="ble-wallet-hint">
-						<div class="ble-hint-icon">📱</div>
+						<div class="ble-hint-icon"><Smartphone size={32} strokeWidth={1.5} /></div>
 						<h3>Wallet on your device</h3>
 						<p>In Bluetooth mode, the wallet runs on your mobile device. Scan the QR code with your WalletPair-compatible wallet app.</p>
 					</div>
@@ -107,7 +108,7 @@
 				<PlaygroundDApp />
 				{#if playground.transport === 'ble'}
 					<div class="ble-wallet-hint">
-						<div class="ble-hint-icon">📱</div>
+						<div class="ble-hint-icon"><Smartphone size={32} strokeWidth={1.5} /></div>
 						<h3>Wallet on your device</h3>
 						<p>In Bluetooth mode, the wallet runs on your mobile device. Scan the QR code with your WalletPair-compatible wallet app.</p>
 					</div>

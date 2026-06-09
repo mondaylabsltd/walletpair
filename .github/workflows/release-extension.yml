@@ -1,0 +1,58 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - 'extension-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            walletpair-sdk/pnpm-lock.yaml
+            walletpair-extension/pnpm-lock.yaml
+
+      - name: Install & build SDK
+        working-directory: walletpair-sdk
+        run: pnpm install && pnpm build
+
+      - name: Install & build extension
+        working-directory: walletpair-extension
+        run: pnpm install && pnpm build
+
+      - name: Zip extension
+        working-directory: walletpair-extension
+        run: |
+          cd .output/chrome-mv3
+          zip -r ../../walletpair-extension-chrome-mv3.zip .
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/extension-}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: WalletPair Extension ${{ steps.version.outputs.version }}
+          body: |
+            ## Install
+
+            1. Download `walletpair-extension-chrome-mv3.zip` below
+            2. Unzip to a local folder
+            3. Open `chrome://extensions` and enable **Developer mode**
+            4. Click **Load unpacked** and select the unzipped folder
+          files: walletpair-extension/walletpair-extension-chrome-mv3.zip

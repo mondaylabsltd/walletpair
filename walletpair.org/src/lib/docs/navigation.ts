@@ -6,6 +6,7 @@ export interface NavItem {
 
 export const docsNav: NavItem[] = [
 	{ title: 'Overview', href: '/docs' },
+	{ title: 'Install Extension', href: '/docs/install-extension' },
 	{ title: 'Getting Started', href: '/docs/getting-started' },
 	{ title: 'Core Concepts', href: '/docs/core-concepts' },
 	{ title: 'dApp Integration', href: '/docs/dapp-integration' },

@@ -12,6 +12,7 @@
 <header class="header">
 	<div class="header-inner">
 		<a href="/" class="logo">
+			<img src="/logo.png" alt="" class="logo-icon" />
 			<span class="logo-text">WalletPair</span>
 		</a>
 
@@ -99,6 +100,12 @@
 		gap: var(--space-2);
 		text-decoration: none;
 		color: var(--color-text);
+	}
+
+	.logo-icon {
+		width: 24px;
+		height: 24px;
+		border-radius: 4px;
 	}
 
 	.logo-text {

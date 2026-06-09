@@ -1,9 +1,17 @@
 <script lang="ts">
-	let { title, description, icon }: { title: string; description: string; icon: string } = $props();
+	import type { Component } from 'svelte';
+
+	let {
+		title,
+		description,
+		icon: Icon
+	}: { title: string; description: string; icon: Component } = $props();
 </script>
 
 <div class="card">
-	<div class="card-icon">{icon}</div>
+	<div class="card-icon">
+		<Icon size={24} strokeWidth={1.5} />
+	</div>
 	<h3 class="card-title">{title}</h3>
 	<p class="card-desc">{description}</p>
 </div>
@@ -22,9 +30,7 @@
 	}
 
 	.card-icon {
-		font-size: 1.5rem;
 		margin-bottom: var(--space-3);
-		font-family: var(--font-mono);
 		color: var(--color-accent);
 	}
 

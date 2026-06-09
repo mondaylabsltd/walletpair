@@ -4,6 +4,7 @@
 	import QRCode from 'qrcode';
 	import MessageLog from './MessageLog.svelte';
 	import { playground, type LogEntry } from './state.svelte';
+	import { Zap, RadioTower, Link } from 'lucide-svelte';
 
 	let bleSupported = $state(false);
 	let bleStatus = $state('');
@@ -392,7 +393,7 @@
 				<label>Wallet Capabilities</label>
 				<div class="caps-box">
 					<div class="caps-row">
-						<span class="caps-icon">⚡</span>
+						<span class="caps-icon"><Zap size={14} strokeWidth={1.5} /></span>
 						<span class="caps-label">Methods</span>
 						<div class="caps-tags">
 							{#each walletCaps.methods || [] as m}
@@ -401,7 +402,7 @@
 						</div>
 					</div>
 					<div class="caps-row">
-						<span class="caps-icon">📡</span>
+						<span class="caps-icon"><RadioTower size={14} strokeWidth={1.5} /></span>
 						<span class="caps-label">Events</span>
 						<div class="caps-tags">
 							{#each walletCaps.events || [] as e}
@@ -410,7 +411,7 @@
 						</div>
 					</div>
 					<div class="caps-row">
-						<span class="caps-icon">🔗</span>
+						<span class="caps-icon"><Link size={14} strokeWidth={1.5} /></span>
 						<span class="caps-label">Chains</span>
 						<div class="caps-tags">
 							{#each walletCaps.chains || [] as c}
@@ -655,7 +656,7 @@
 
 	.caps-box { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
 	.caps-row { display: flex; align-items: flex-start; gap: var(--space-2); font-size: 0.8rem; }
-	.caps-icon { flex-shrink: 0; font-size: 0.75rem; line-height: 1.8; }
+	.caps-icon { flex-shrink: 0; display: flex; align-items: center; color: var(--color-accent); }
 	.caps-label { flex-shrink: 0; min-width: 4.5em; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600; color: var(--color-text-subtle); text-transform: uppercase; letter-spacing: 0.03em; line-height: 1.8; }
 	.caps-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 	.cap-tag { font-family: var(--font-mono); font-size: 0.7rem; padding: 2px 8px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; white-space: nowrap; }
