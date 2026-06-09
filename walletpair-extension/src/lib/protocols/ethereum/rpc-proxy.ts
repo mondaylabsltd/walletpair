@@ -15,7 +15,7 @@ export const DEFAULT_RPC: Record<number, string> = {
   10: 'https://mainnet.optimism.io',
   56: 'https://bsc-dataseed.binance.org',
   100: 'https://rpc.gnosis.gateway.fm',
-  137: 'https://polygon-rpc.com',
+  137: 'https://polygon.drpc.org',
   250: 'https://rpc.ftm.tools',
   324: 'https://mainnet.era.zksync.io',
   8453: 'https://mainnet.base.org',
