@@ -19,6 +19,7 @@ export const LOCAL_METHODS: ReadonlySet<string> = new Set([
   'net_version',
   'eth_accounts',
   'wallet_getPermissions',
+  'wallet_getCapabilities',
 ]);
 
 /** Read-only methods routed to a public RPC node, NOT the wallet */

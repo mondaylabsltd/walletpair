@@ -137,6 +137,12 @@ export interface Capabilities {
   chains: string[]
   /** Sub-protocol version map (e.g. { evm: 1 }). §8 */
   version?: Record<string, number> | undefined
+  /**
+   * RPC endpoint URLs keyed by CAIP-2 chain ID (e.g. { "eip155:1": "https://..." }).
+   * Wallet shares its RPC URLs so the dApp-side can proxy read-only requests locally
+   * without routing them through the relay.
+   */
+  rpcUrls?: Record<string, string> | undefined
 }
 
 export interface DAppMeta {
