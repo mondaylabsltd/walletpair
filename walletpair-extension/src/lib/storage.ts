@@ -4,17 +4,7 @@ import type { ConnectedWallet, ExtensionSettings, OriginPermission } from './typ
 const defaults: ExtensionSettings = {
   relayUrl: DEFAULT_RELAY_URL,
   autoConnect: true,
-  enabledChains: ['eip155:1', 'eip155:137', 'eip155:42161', 'eip155:10', 'eip155:8453', 'eip155:100'],
-  rpcUrls: {
-    1: 'https://eth.llamarpc.com',
-    10: 'https://mainnet.optimism.io',
-    56: 'https://bsc-dataseed.binance.org',
-    100: 'https://rpc.gnosis.gateway.fm',
-    137: 'https://polygon-rpc.com',
-    42161: 'https://arb1.arbitrum.io/rpc',
-    8453: 'https://mainnet.base.org',
-    43114: 'https://api.avax.network/ext/bc/C/rpc',
-  },
+  rpcUrls: {},
 };
 
 /** Get extension settings from chrome.storage.local */

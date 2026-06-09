@@ -44,8 +44,7 @@ describe('storage', () => {
       const settings = await getSettings();
       expect(settings.relayUrl).toBe('wss://relay.walletpair.org/v1');
       expect(settings.autoConnect).toBe(true);
-      expect(settings.enabledChains).toContain('eip155:1');
-      expect(settings.rpcUrls[1]).toBe('https://eth.llamarpc.com');
+      expect(settings.rpcUrls).toEqual({});
     });
 
     it('merges stored values with defaults', async () => {

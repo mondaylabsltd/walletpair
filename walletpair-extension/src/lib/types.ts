@@ -23,7 +23,9 @@ export interface OriginPermission {
 export interface ExtensionSettings {
   relayUrl: string;
   autoConnect: boolean;
-  enabledChains: string[];
+  /** @deprecated No longer used — the bridge is chain-agnostic. Kept for backward compat. */
+  enabledChains?: string[];
+  /** Custom RPC URLs per chain (for read-only method proxying) */
   rpcUrls: Record<number, string>;
 }
 

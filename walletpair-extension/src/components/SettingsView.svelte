@@ -6,38 +6,32 @@
 
   let relayUrl = $state(DEFAULT_RELAY_URL);
   let autoConnect = $state(true);
+  let customRpc = $state('');
   let saved = $state(false);
-
-  const CHAINS = [
-    { id: 'eip155:1', name: 'Ethereum', icon: 'ETH' },
-    { id: 'eip155:137', name: 'Polygon', icon: 'MATIC' },
-    { id: 'eip155:42161', name: 'Arbitrum', icon: 'ARB' },
-    { id: 'eip155:10', name: 'Optimism', icon: 'OP' },
-    { id: 'eip155:8453', name: 'Base', icon: 'BASE' },
-    { id: 'eip155:56', name: 'BNB Chain', icon: 'BNB' },
-    { id: 'eip155:43114', name: 'Avalanche', icon: 'AVAX' },
-  ];
-
-  let enabledChains = $state<string[]>([]);
+  let showAdvanced = $state(false);
 
   $effect(() => {
     getSettings().then((s) => {
       relayUrl = s.relayUrl;
       autoConnect = s.autoConnect;
-      enabledChains = [...s.enabledChains];
+      // Serialize custom RPCs for display
+      const custom = Object.entries(s.rpcUrls ?? {});
+      customRpc = custom.map(([id, url]) => `${id}=${url}`).join('\n');
     });
   });
 
-  function toggleChain(chainId: string) {
-    if (enabledChains.includes(chainId)) {
-      enabledChains = enabledChains.filter((c) => c !== chainId);
-    } else {
-      enabledChains = [...enabledChains, chainId];
-    }
-  }
-
   async function save() {
-    await saveSettings({ relayUrl, autoConnect, enabledChains });
+    // Parse custom RPCs
+    const rpcUrls: Record<number, string> = {};
+    for (const line of customRpc.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const [idStr, ...urlParts] = trimmed.split('=');
+      const id = parseInt(idStr!, 10);
+      const url = urlParts.join('=').trim();
+      if (!isNaN(id) && url) rpcUrls[id] = url;
+    }
+    await saveSettings({ relayUrl, autoConnect, rpcUrls });
     saved = true;
     setTimeout(() => (saved = false), 2000);
   }
@@ -54,6 +48,13 @@
   </div>
 
   <div class="settings-body">
+    <div class="info-card">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="var(--accent)" style="flex-shrink: 0; margin-top: 1px;">
+        <path d="M8 1a7 7 0 100 14A7 7 0 008 1zm-.75 3.75a.75.75 0 011.5 0v.5a.75.75 0 01-1.5 0v-.5zM8 7a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 018 7z"/>
+      </svg>
+      <p>WalletPair is a transparent bridge. Network support is determined by your wallet, not by this extension.</p>
+    </div>
+
     <section class="section">
       <h3 class="section-label">Relay Server</h3>
       <input
@@ -72,19 +73,18 @@
     </section>
 
     <section class="section">
-      <h3 class="section-label">Chains</h3>
-      <div class="chain-grid">
-        {#each CHAINS as chain}
-          <button
-            class="chain-chip"
-            class:active={enabledChains.includes(chain.id)}
-            onclick={() => toggleChain(chain.id)}
-          >
-            <span class="chip-icon">{chain.icon}</span>
-            <span class="chip-name">{chain.name}</span>
-          </button>
-        {/each}
-      </div>
+      <button class="toggle-link" onclick={() => (showAdvanced = !showAdvanced)}>
+        {showAdvanced ? '▾' : '▸'} Custom RPC Endpoints
+      </button>
+      {#if showAdvanced}
+        <p class="section-hint">Override default RPCs for read-only queries. One per line: <code>chainId=url</code></p>
+        <textarea
+          class="input textarea"
+          bind:value={customRpc}
+          placeholder={"1=https://eth.llamarpc.com\n100=https://rpc.gnosis.gateway.fm"}
+          rows="4"
+        ></textarea>
+      {/if}
     </section>
 
     <button class="btn-save" onclick={save}>
@@ -112,8 +112,8 @@
   .back-btn {
     background: none;
     color: var(--text-dim);
-    padding: 4px;
-    border-radius: 6px;
+    padding: 6px;
+    border-radius: 8px;
     display: flex;
     align-items: center;
   }
@@ -123,8 +123,21 @@
   }
 
   .settings-title {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .info-card {
+    display: flex;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--accent-dim);
+    border: 1px solid rgba(99, 102, 241, 0.12);
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-dim);
   }
 
   .settings-body {
@@ -137,22 +150,36 @@
   .section {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
 
   .section-label {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+  }
+
+  .section-hint {
+    font-size: 11px;
     color: var(--text-dimmer);
+    line-height: 1.4;
+  }
+
+  .section-hint code {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: var(--bg-card);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 10px;
   }
 
   .input {
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 8px 12px;
+    border-radius: 10px;
+    padding: 10px 14px;
     font-size: 12px;
     color: var(--text);
     font-family: 'SF Mono', 'Fira Code', monospace;
@@ -163,24 +190,30 @@
     border-color: var(--accent);
   }
 
+  .textarea {
+    resize: vertical;
+    min-height: 70px;
+    line-height: 1.6;
+  }
+
   .toggle-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
+    padding: 10px 14px;
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: 10px;
     font-size: 13px;
     cursor: pointer;
   }
 
   .toggle {
-    width: 34px;
-    height: 18px;
+    width: 36px;
+    height: 20px;
     appearance: none;
     background: var(--border);
-    border-radius: 9px;
+    border-radius: 10px;
     position: relative;
     cursor: pointer;
     transition: background 0.2s;
@@ -191,8 +224,8 @@
     position: absolute;
     top: 2px;
     left: 2px;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     background: white;
     border-radius: 50%;
     transition: transform 0.2s;
@@ -204,55 +237,32 @@
     transform: translateX(16px);
   }
 
-  .chain-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .chain-chip {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 100px;
+  .toggle-link {
+    background: none;
     color: var(--text-dim);
     font-size: 12px;
-  }
-  .chain-chip:hover {
-    background: var(--bg-hover);
-    color: var(--text);
-  }
-  .chain-chip.active {
-    border-color: var(--accent);
-    background: var(--accent-dim);
-    color: var(--accent-hover);
-  }
-
-  .chip-icon {
-    font-size: 10px;
-    font-weight: 700;
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    opacity: 0.7;
-  }
-
-  .chip-name {
     font-weight: 500;
+    padding: 0;
+    text-align: left;
+    font-family: inherit;
+  }
+  .toggle-link:hover {
+    color: var(--text);
   }
 
   .btn-save {
     background: var(--accent);
     color: white;
     font-size: 13px;
-    font-weight: 500;
-    padding: 10px 20px;
-    border-radius: var(--radius-sm);
+    font-weight: 600;
+    padding: 12px 20px;
+    border-radius: 10px;
     width: 100%;
     margin-top: auto;
+    box-shadow: 0 2px 10px rgba(99, 102, 241, 0.2);
   }
   .btn-save:hover {
     background: var(--accent-hover);
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
   }
 </style>

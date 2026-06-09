@@ -6,15 +6,27 @@
  */
 import { getSettings } from './storage';
 
-/** Default RPC endpoints per chain */
+/**
+ * Default RPC endpoints per chain for read-only method proxying.
+ * The bridge itself is chain-agnostic — it forwards any chain the wallet supports.
+ * These RPCs are only used for `eth_call`, `eth_getBalance`, etc. so the dApp
+ * doesn't need its own RPC provider.
+ */
 export const DEFAULT_RPC: Record<number, string> = {
   1: 'https://eth.llamarpc.com',
   10: 'https://mainnet.optimism.io',
   56: 'https://bsc-dataseed.binance.org',
+  100: 'https://rpc.gnosis.gateway.fm',
   137: 'https://polygon-rpc.com',
-  42161: 'https://arb1.arbitrum.io/rpc',
+  250: 'https://rpc.ftm.tools',
+  324: 'https://mainnet.era.zksync.io',
   8453: 'https://mainnet.base.org',
+  42161: 'https://arb1.arbitrum.io/rpc',
+  42170: 'https://nova.arbitrum.io/rpc',
   43114: 'https://api.avax.network/ext/bc/C/rpc',
+  59144: 'https://rpc.linea.build',
+  534352: 'https://rpc.scroll.io',
+  7777777: 'https://rpc.zora.energy',
 };
 
 /** Read-only methods routed to a public RPC node, NOT the wallet */
