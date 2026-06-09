@@ -1,5 +1,11 @@
 # walletpair-sdk
 
+## 1.0.8
+
+### Patch Changes
+
+- Add contractBytecode field to Capabilities for counterfactual smart wallet detection via eth_getCode
+
 ## 1.0.7
 
 ### Patch Changes

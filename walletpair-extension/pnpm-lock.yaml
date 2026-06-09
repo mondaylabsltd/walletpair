@@ -15,8 +15,8 @@ importers:
         specifier: ^1.5.4
         version: 1.5.4
       walletpair-sdk:
-        specifier: ^1.0.7
-        version: 1.0.7
+        specifier: ^1.0.8
+        version: 1.0.8
     devDependencies:
       '@tsconfig/svelte':
         specifier: ^5.0.8
@@ -2234,8 +2234,8 @@ packages:
       jsdom:
         optional: true
 
-  walletpair-sdk@1.0.7:
-    resolution: {integrity: sha512-IAEPt3m0hnFn1ZqAdyuHslGx2XD8dHWl8rMAoIGAiC89pJLHhav3spWOQz3uscWN+IBR0atkBJpLHxb+gwZ3Lw==}
+  walletpair-sdk@1.0.8:
+    resolution: {integrity: sha512-dERNl+jheKDvHY9kzxTOSbcovS5DUCF7u/qAK4NkR7ugkaaITsISatX13tca+D0RuK4xznpovJY5oOEXvGvw8A==}
     peerDependencies:
       '@wagmi/core': '>=2.0.0'
     peerDependenciesMeta:
@@ -4346,7 +4346,7 @@ snapshots:
     transitivePeerDependencies:
       - msw
 
-  walletpair-sdk@1.0.7:
+  walletpair-sdk@1.0.8:
     dependencies:
       '@noble/ciphers': 1.3.0
       '@noble/curves': 1.9.7
