@@ -46,6 +46,9 @@ let pairingInProgress = false;
 /** RPC URLs received from the wallet via capabilities (CAIP-2 keyed, e.g. "eip155:1") */
 let walletRpcUrls: Record<string, string> = {};
 
+/** EIP-5792 wallet capabilities keyed by hex chain ID, relayed from wallet */
+let walletEip5792Capabilities: Record<string, Record<string, unknown>> = {};
+
 // Exponential backoff state for reconnection
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -201,7 +204,7 @@ function attachSessionListeners(autoAccepted: boolean) {
   };
   sessionRef.on('sessionFingerprint', onFingerprint);
 
-  const onWalletJoined = ({ meta, capabilities }: { meta?: { name?: string; icon?: string }; capabilities?: { rpcUrls?: Record<string, string> } }) => {
+  const onWalletJoined = ({ meta, capabilities }: { meta?: { name?: string; icon?: string }; capabilities?: any }) => {
     console.log('[WalletPair] walletJoined meta:', JSON.stringify(meta));
     updateState({ walletMeta: meta ? { name: meta.name, icon: meta.icon } : undefined });
 
@@ -209,6 +212,12 @@ function attachSessionListeners(autoAccepted: boolean) {
     if (capabilities?.rpcUrls) {
       walletRpcUrls = capabilities.rpcUrls;
       console.log('[WalletPair] Received wallet RPC URLs:', Object.keys(walletRpcUrls).join(', '));
+    }
+
+    // Capture EIP-5792 wallet capabilities for wallet_getCapabilities
+    if (capabilities?.walletCapabilities) {
+      walletEip5792Capabilities = capabilities.walletCapabilities;
+      console.log('[WalletPair] Received wallet capabilities:', Object.keys(walletEip5792Capabilities).join(', '));
     }
   };
   sessionRef.on('walletJoined', onWalletJoined);
@@ -270,6 +279,7 @@ function attachSessionListeners(autoAccepted: boolean) {
 function handleSessionClosed() {
   pairingInProgress = false;
   walletRpcUrls = {};
+  walletEip5792Capabilities = {};
   // Reject all deferred requests since session is gone
   rejectAllDeferred(4001, 'Session closed');
 
@@ -423,7 +433,7 @@ async function forwardToWallet(
 function classifyMethod(method: string): ActivityEntry['category'] {
   if (['eth_requestAccounts', 'wallet_requestPermissions'].includes(method)) return 'auth';
   if (['personal_sign', 'eth_signTypedData_v4', 'eth_signTypedData_v3'].includes(method)) return 'sign';
-  if (['eth_sendTransaction', 'eth_signTransaction'].includes(method)) return 'tx';
+  if (['eth_sendTransaction', 'eth_signTransaction', 'wallet_sendCalls'].includes(method)) return 'tx';
   if (['eth_chainId', 'net_version', 'web3_clientVersion', 'eth_accounts', 'wallet_getPermissions', 'wallet_getCapabilities'].includes(method)) return 'local';
   return 'read';
 }
@@ -488,7 +498,7 @@ async function handleRpcRequest(
 
   // ── wallet_getCapabilities (EIP-5792, local) ──────────────────────────
   if (method === 'wallet_getCapabilities') {
-    return { result: {} };
+    return { result: walletEip5792Capabilities };
   }
 
   // ── Read-only methods → proxy to public RPC ───────────────────────────

@@ -126,6 +126,12 @@ const defaultMapper: MethodMapper = {
           params: { chain: hexId ? hexChainToCaip2(hexId) : undefined },
         }
       }
+      case 'wallet_sendCalls': {
+        // EIP-5792: params[0] = { calls: [...], chainId, from, ... }
+        // Forward as wallet_sendCalls with the full payload
+        const p = params as [Record<string, unknown>] | undefined
+        return { method: 'wallet_sendCalls', params: p?.[0] ?? {} }
+      }
       case 'wallet_addEthereumChain':
         return null // unsupported — mapRequest returning null triggers unsupported_method error
       default:
@@ -152,6 +158,11 @@ const defaultMapper: MethodMapper = {
     if (method === 'personal_sign' || method === 'eth_signTypedData_v4') {
       const r = result as { signature?: string } | undefined
       if (r?.signature) return r.signature
+    }
+    // Unwrap wallet_sendCalls result → EIP-5792 expects { id: "0x..." }
+    if (method === 'wallet_sendCalls') {
+      const r = result as { id?: string } | undefined
+      if (r?.id) return r.id
     }
     return result
   },

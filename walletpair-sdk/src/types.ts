@@ -143,6 +143,12 @@ export interface Capabilities {
    * without routing them through the relay.
    */
   rpcUrls?: Record<string, string> | undefined
+  /**
+   * EIP-5792 wallet capabilities keyed by hex chain ID.
+   * Returned as-is by the dApp-side for wallet_getCapabilities.
+   * Example: { "0x1": { "atomic": { "status": "supported" } } }
+   */
+  walletCapabilities?: Record<string, Record<string, unknown>> | undefined
 }
 
 export interface DAppMeta {
