@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'extension-v*'
+    branches:
+      - main
+    paths:
+      - 'walletpair-extension/**'
+      - 'walletpair-sdk/**'
 
 permissions:
   contents: write
@@ -41,14 +46,36 @@ jobs:
           zip -r ../../walletpair-extension-chrome-mv3.zip .
 
       - name: Extract version from tag
-        id: version
+        if: startsWith(github.ref, 'refs/tags/extension-v')
+        id: tag_version
         run: echo "version=${GITHUB_REF#refs/tags/extension-}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate dev version
+        if: "!startsWith(github.ref, 'refs/tags/extension-v')"
+        id: dev_version
+        run: echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set version
+        id: version
+        run: echo "version=${{ steps.tag_version.outputs.version || steps.dev_version.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Delete existing dev release
+        if: "!startsWith(github.ref, 'refs/tags/extension-v')"
+        run: gh release delete extension-dev --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/extension-v') && github.ref_name || 'extension-dev' }}
           name: WalletPair Extension ${{ steps.version.outputs.version }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/extension-v') }}
           body: |
+            ## WalletPair Extension ${{ steps.version.outputs.version }}
+
+            Commit: ${{ github.sha }}
+
             ## Install
 
             1. Download `walletpair-extension-chrome-mv3.zip` below
