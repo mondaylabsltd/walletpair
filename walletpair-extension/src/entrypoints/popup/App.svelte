@@ -47,13 +47,7 @@
 <div class="popup">
   <header class="header">
     <div class="header-left">
-      <div class="logo">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-          <rect width="24" height="24" rx="7" fill="#2563eb" />
-          <path d="M7 12L12 7L17 12L12 17Z" fill="white" opacity="0.9" />
-          <circle cx="12" cy="12" r="2" fill="#2563eb" />
-        </svg>
-      </div>
+      <img src="/icon/48.png" alt="WalletPair" class="logo-img" />
       <span class="header-title">WalletPair</span>
     </div>
     {#if page === 'main'}
@@ -70,20 +64,7 @@
       <div class="idle-view animate-in">
         <!-- Decorative glow -->
         <div class="hero-glow"></div>
-        <div class="hero-icon">
-          <svg viewBox="0 0 80 80" width="72" height="72" fill="none">
-            <!-- Shield outline -->
-            <path d="M40 6L14 20v20c0 16.6 11.1 32.1 26 36 14.9-3.9 26-19.4 26-36V20L40 6z"
-                  fill="var(--accent)" opacity="0.1" stroke="var(--accent)" stroke-width="1.5"/>
-            <!-- Inner shield -->
-            <path d="M40 12L18 24v16c0 13.3 9.4 25.7 22 28.8 12.6-3.1 22-15.5 22-28.8V24L40 12z"
-                  fill="var(--accent)" opacity="0.08"/>
-            <!-- Chain link icon inside -->
-            <path d="M33 36a5 5 0 010-7.07l3.54-3.54a5 5 0 017.07 0l.7.71" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" fill="none"/>
-            <path d="M47 44a5 5 0 010 7.07l-3.54 3.54a5 5 0 01-7.07 0l-.7-.71" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" fill="none"/>
-            <path d="M44 36L36 44" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-        </div>
+      
         <div class="hero-text">
           <h2 class="title">Connect Your Wallet</h2>
           <p class="subtitle">
@@ -100,7 +81,6 @@
           {#if loading}
             <span class="spinner"></span>
           {:else}
-            <Link size={16} strokeWidth={1.5} />
             Pair Wallet
           {/if}
         </button>
@@ -155,8 +135,10 @@
     gap: 10px;
   }
 
-  .logo {
-    display: flex;
+  .logo-img {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
     filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.3));
   }
 
