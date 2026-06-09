@@ -25,7 +25,10 @@
 
   async function startPairing() {
     loading = true;
-    const s = await sendToBackground<ExtensionState>({ action: 'start-pairing' });
+    const [s] = await Promise.all([
+      sendToBackground<ExtensionState>({ action: 'start-pairing' }),
+      new Promise((r) => setTimeout(r, 600)), // min loading time for smooth transition
+    ]);
     state = s;
     loading = false;
   }
