@@ -19,10 +19,12 @@ import {
   getPermissions,
   saveConnectedAt,
   getConnectedAt,
+  addActivityEntry,
+  updateActivityStatus,
 } from '@/lib/storage';
 import { READ_ONLY_METHODS, proxyRpcCall } from '@/lib/rpc-proxy';
 import { getHandler } from '@/lib/protocols/registry';
-import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request, PendingConfirmationInfo } from '@/lib/types';
+import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request, PendingConfirmationInfo, ActivityEntry } from '@/lib/types';
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -352,6 +354,16 @@ async function forwardToWallet(
   }
 }
 
+// ── Activity Logging ────────────────────────────────────────────────────
+
+function classifyMethod(method: string): ActivityEntry['category'] {
+  if (['eth_requestAccounts', 'wallet_requestPermissions'].includes(method)) return 'auth';
+  if (['personal_sign', 'eth_signTypedData_v4', 'eth_signTypedData_v3'].includes(method)) return 'sign';
+  if (['eth_sendTransaction', 'eth_signTransaction'].includes(method)) return 'tx';
+  if (['eth_chainId', 'net_version', 'web3_clientVersion', 'eth_accounts', 'wallet_getPermissions'].includes(method)) return 'local';
+  return 'read';
+}
+
 // ── RPC Request Handling ─────────────────────────────────────────────────
 
 async function handleRpcRequest(
@@ -361,6 +373,26 @@ async function handleRpcRequest(
 ): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
   let { method, params } = payload;
   const permitted = origin ? await isPermitted(origin) : true;
+
+  // Activity logging setup
+  const category = classifyMethod(method);
+  const activityId = `act-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const shouldLog = category !== 'local';
+
+  if (shouldLog) {
+    addActivityEntry({
+      id: activityId,
+      timestamp: Date.now(),
+      origin: origin || 'unknown',
+      method,
+      category,
+      status: 'pending',
+    }).catch(() => {});
+  }
+
+  if (category === 'sign' || category === 'tx') {
+    updateState({ signingInProgress: { method, origin: origin || 'unknown' } });
+  }
 
   // Normalize v3 → v4 (v4 is a superset of v3)
   if (method === 'eth_signTypedData_v3') {
@@ -394,8 +426,10 @@ async function handleRpcRequest(
     const chainId = connectedWallet?.chainId ?? 1;
     try {
       const result = await proxyRpcCall(chainId, method, params);
+      if (shouldLog) updateActivityStatus(activityId, 'success').catch(() => {});
       return { result };
     } catch (err: any) {
+      if (shouldLog) updateActivityStatus(activityId, 'error').catch(() => {});
       return { error: { code: err.code ?? -32603, message: err.message ?? 'RPC proxy error' } };
     }
   }
@@ -421,11 +455,16 @@ async function handleRpcRequest(
           if (origin && response.result && !response.error) {
             grantPermission(origin).catch((e) => console.warn('[WalletPair]', e));
           }
+          if (shouldLog) {
+            updateActivityStatus(activityId, response.error ? 'error' : 'success').catch(() => {});
+          }
           resolve(response);
         }, origin);
       });
     }
 
+    if (shouldLog) updateActivityStatus(activityId, 'error').catch(() => {});
+    if (category === 'sign' || category === 'tx') updateState({ signingInProgress: undefined });
     return { error: { code: 4100, message: 'Not connected. Call eth_requestAccounts first.' } };
   }
 
@@ -433,8 +472,10 @@ async function handleRpcRequest(
   if (method === 'wallet_requestPermissions') {
     try {
       await evmProvider!.request({ method: 'eth_requestAccounts', params: [] });
+      if (shouldLog) updateActivityStatus(activityId, 'success').catch(() => {});
       return { result: [{ parentCapability: 'eth_accounts' }] };
     } catch (err: any) {
+      if (shouldLog) updateActivityStatus(activityId, 'error').catch(() => {});
       return { error: { code: err.code ?? -32603, message: err.message ?? 'Request failed' } };
     }
   }
@@ -443,6 +484,8 @@ async function handleRpcRequest(
   // Signing and transaction confirmation happens in the real wallet, not here.
   // The extension is a transparent bridge — it only forwards requests.
   if (!permitted && method !== 'eth_requestAccounts') {
+    if (shouldLog) updateActivityStatus(activityId, 'error').catch(() => {});
+    if (category === 'sign' || category === 'tx') updateState({ signingInProgress: undefined });
     return { error: { code: 4100, message: 'Not permitted. Call eth_requestAccounts first.' } };
   }
   try {
@@ -465,8 +508,15 @@ async function handleRpcRequest(
       }
     }
 
+    if (shouldLog) updateActivityStatus(activityId, 'success').catch(() => {});
+    if (category === 'sign' || category === 'tx') updateState({ signingInProgress: undefined });
     return { result };
   } catch (err: any) {
+    if (shouldLog) {
+      const status = err.code === 4001 ? 'rejected' : 'error';
+      updateActivityStatus(activityId, status).catch(() => {});
+    }
+    if (category === 'sign' || category === 'tx') updateState({ signingInProgress: undefined });
     return {
       error: { code: err.code ?? -32603, message: err.message ?? 'Request failed' },
     };

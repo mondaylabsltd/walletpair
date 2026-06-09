@@ -1,13 +1,27 @@
 <script lang="ts">
-  import type { ConnectedWallet } from '@/lib/types';
+  import type { ConnectedWallet, ActivityEntry } from '@/lib/types';
+  import ActivityLog from './ActivityLog.svelte';
+  import SigningToast from './SigningToast.svelte';
+  import { getActivityLog } from '@/lib/storage';
 
   let {
     wallet,
     onDisconnect,
+    signingInProgress,
   }: {
     wallet?: ConnectedWallet | null;
     onDisconnect: () => void;
+    signingInProgress?: { method: string; origin: string };
   } = $props();
+
+  let activity = $state<ActivityEntry[]>([]);
+
+  $effect(() => {
+    const load = () => getActivityLog().then(a => { activity = a; });
+    load();
+    const timer = setInterval(load, 2000);
+    return () => clearInterval(timer);
+  });
 
   let address = $derived(wallet?.address ?? '');
   let shortAddress = $derived(
@@ -75,12 +89,8 @@
     <div class="chain-badge">{chainName}</div>
   </div>
 
-  <div class="trust-footer">
-    <svg viewBox="0 0 12 12" width="11" height="11" fill="var(--text-dimmer)">
-      <path d="M6 1L2 3.5v3C2 9.8 3.8 12.6 6 13.5c2.2-.9 4-3.7 4-7V3.5L6 1z"/>
-    </svg>
-    <span>Secured by WalletPair — end-to-end encrypted</span>
-  </div>
+  <SigningToast method={signingInProgress?.method} origin={signingInProgress?.origin} />
+  <ActivityLog entries={activity} />
 
   <div class="actions">
     <button class="btn-disconnect" onclick={onDisconnect}>Disconnect</button>
@@ -216,16 +226,6 @@
     color: var(--red);
     border-color: var(--red);
     background: var(--red-dim);
-  }
-
-  .trust-footer {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    font-size: 10px;
-    color: var(--text-dimmer);
-    padding-top: 12px;
   }
 
   @keyframes fadeInScale {

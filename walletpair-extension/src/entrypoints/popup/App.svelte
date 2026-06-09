@@ -124,7 +124,7 @@
       />
     {:else if state.phase === 'connected'}
       <div class="animate-scale">
-        <ConnectedView wallet={state.wallet} onDisconnect={disconnect} />
+        <ConnectedView wallet={state.wallet} onDisconnect={disconnect} signingInProgress={state.signingInProgress} />
       </div>
     {:else if state.phase === 'disconnected'}
       <div class="disconnected-view">

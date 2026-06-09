@@ -72,4 +72,15 @@ export interface ExtensionState {
   wallet?: ConnectedWallet;
   walletMeta?: { name?: string; icon?: string };
   error?: string;
+  signingInProgress?: { method: string; origin: string };
+}
+
+/** Activity log entry for request tracking */
+export interface ActivityEntry {
+  id: string;
+  timestamp: number;
+  origin: string;
+  method: string;
+  category: 'read' | 'sign' | 'tx' | 'auth' | 'local';
+  status: 'pending' | 'success' | 'rejected' | 'error';
 }

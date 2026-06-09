@@ -1,5 +1,5 @@
 import { STORAGE_KEYS, DEFAULT_RELAY_URL } from './constants';
-import type { ConnectedWallet, ExtensionSettings, OriginPermission } from './types';
+import type { ConnectedWallet, ExtensionSettings, OriginPermission, ActivityEntry } from './types';
 
 const defaults: ExtensionSettings = {
   relayUrl: DEFAULT_RELAY_URL,
@@ -94,4 +94,34 @@ export async function saveConnectedAt(ts: number | null): Promise<void> {
 export async function getConnectedAt(): Promise<number | null> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.CONNECTED_AT);
   return result[STORAGE_KEYS.CONNECTED_AT] ?? null;
+}
+
+// ── Activity Log ─────────────────────────────────────────────────────
+
+const ACTIVITY_KEY = 'activityLog';
+const MAX_ACTIVITY = 50;
+
+export async function getActivityLog(): Promise<ActivityEntry[]> {
+  const result = await chrome.storage.local.get(ACTIVITY_KEY);
+  return result[ACTIVITY_KEY] ?? [];
+}
+
+export async function addActivityEntry(entry: ActivityEntry): Promise<void> {
+  const log = await getActivityLog();
+  log.unshift(entry); // newest first
+  if (log.length > MAX_ACTIVITY) log.length = MAX_ACTIVITY;
+  await chrome.storage.local.set({ [ACTIVITY_KEY]: log });
+}
+
+export async function updateActivityStatus(id: string, status: ActivityEntry['status']): Promise<void> {
+  const log = await getActivityLog();
+  const entry = log.find(e => e.id === id);
+  if (entry) {
+    entry.status = status;
+    await chrome.storage.local.set({ [ACTIVITY_KEY]: log });
+  }
+}
+
+export async function clearActivityLog(): Promise<void> {
+  await chrome.storage.local.remove(ACTIVITY_KEY);
 }
