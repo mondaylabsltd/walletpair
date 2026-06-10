@@ -1,5 +1,11 @@
 # walletpair-sdk
 
+## 1.0.10
+
+### Patch Changes
+
+- Increase the dApp-session request timeout to 300s for transaction methods. `eth_sendTransaction` must wait for on-chain confirmation before returning the txHash, and the previous 120s timeout was too short once gas estimation, passkey signing, bundler submission, and receipt polling on slower chains were combined.
+
 ## 1.0.9
 
 ### Patch Changes
