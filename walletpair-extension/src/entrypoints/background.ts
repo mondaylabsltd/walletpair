@@ -5,6 +5,7 @@
  * instead of reimplementing it.
  */
 import { DAppSession, WebSocketTransport } from 'walletpair-sdk';
+import * as WalletPairSDK from 'walletpair-sdk';
 import { WalletPairProvider } from 'walletpair-sdk/evm/eip1193';
 import { DEFAULT_RELAY_URL } from '@/lib/constants';
 import {
@@ -55,8 +56,28 @@ let walletContractBytecode: string | null = null;
 // Exponential backoff state for reconnection
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+/** Guards against overlapping rebuild-and-reconnect attempts (scheduleReconnect,
+ * keepalive-alarm backstop, and SW-startup can all fire near-simultaneously). */
+let reconnecting = false;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+
+/**
+ * Pipe the SDK's developer-only disconnect diagnostics into the extension
+ * console so disconnect reasons (close code, relay terminate reason, phase,
+ * willReconnect) are queryable while debugging. NOT shown to end users.
+ *
+ * Forward-compatible: `setDisconnectLogSink` ships in a newer walletpair-sdk
+ * than is currently installed, so we feature-detect — this is a no-op until the
+ * SDK dependency is bumped, then it activates automatically.
+ */
+function wireDisconnectDiagnostics() {
+  const sink = (WalletPairSDK as { setDisconnectLogSink?: (fn: (e: unknown) => void) => void })
+    .setDisconnectLogSink;
+  if (typeof sink === 'function') {
+    sink((entry) => console.debug('[WalletPair][disconnect]', entry));
+  }
+}
 
 function scheduleReconnect() {
   if (reconnectTimer) return; // already scheduled
@@ -119,10 +140,39 @@ function updateState(patch: Partial<ExtensionState>) {
   chrome.runtime.sendMessage({ action: 'state-update', state }).catch((e) => console.warn('[WalletPair]', e));
 }
 
+/** Resolve the page origin behind a content-script port's sender, if determinable. */
+function senderOrigin(sender: { origin?: string; url?: string } | undefined): string | undefined {
+  if (sender?.origin) return sender.origin;
+  if (!sender?.url) return undefined;
+  try {
+    return new URL(sender.url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 function broadcastEvent(event: string, data: unknown) {
   const msg = { action: 'emit-event', event, data };
+  // Only deliver wallet events (accountsChanged/chainChanged/connect/disconnect)
+  // to origins the user has authorized — parity with injected wallets like
+  // MetaMask. Fail closed: a tab whose origin can't be determined or isn't
+  // permitted never observes the wallet's account/chain state. The connecting
+  // dApp still gets its initial state from the eth_requestAccounts result.
   for (const [, port] of contentPorts) {
-    try { port.postMessage(msg); } catch {}
+    const origin = senderOrigin(port.sender);
+    if (!origin) continue;
+    isPermitted(origin)
+      .then((ok) => {
+        if (!ok) return;
+        try {
+          port.postMessage(msg);
+        } catch {
+          /* port closed */
+        }
+      })
+      .catch(() => {
+        /* storage error — do not leak the event */
+      });
   }
 }
 
@@ -332,6 +382,19 @@ async function createSession(): Promise<void> {
 }
 
 async function tryReconnect(): Promise<boolean> {
+  // Prevent overlapping rebuilds: the keepalive-alarm backstop, scheduleReconnect,
+  // and SW-startup can all call this near-simultaneously, which would otherwise
+  // create several competing DAppSession instances.
+  if (reconnecting) return false;
+  reconnecting = true;
+  try {
+    return await doTryReconnect();
+  } finally {
+    reconnecting = false;
+  }
+}
+
+async function doTryReconnect(): Promise<boolean> {
   const saved = await getSessionState();
   if (!saved) return false;
 
@@ -848,21 +911,37 @@ export default defineBackground(() => {
 
   // Handle keepalive alarm (fires even after SW restart)
   chrome.alarms.onAlarm.addListener(async (alarm) => {
-    if (alarm.name === 'walletpair-keepalive') {
-      if (session?.phase === 'connected') {
-        // Check 24-hour session expiry
-        const connectedAt = await getConnectedAt();
-        if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
-          session.close();
-          session = null;
-          evmProvider = null;
-          handleSessionClosed();
-          return;
-        }
-        session.ping();
+    if (alarm.name !== 'walletpair-keepalive') return;
+
+    if (session?.phase === 'connected') {
+      // Check 24-hour session expiry
+      const connectedAt = await getConnectedAt();
+      if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
+        session.close();
+        session = null;
+        evmProvider = null;
+        handleSessionClosed();
+        return;
       }
+      // Keep the relay socket warm (CF Worker idle-closes ~30s).
+      session.ping();
+      return;
     }
+
+    // Not connected but the alarm exists, so we *had* a live session. The MV3
+    // service worker was likely killed while idle — which silently drops the
+    // WebSocket and discards the in-memory setTimeout reconnect timers (both the
+    // extension's and the SDK's). This persistent alarm is the recovery
+    // backstop: rebuild from the saved snapshot and reconnect. tryReconnect is
+    // guarded, so this is a no-op if a reconnect is already in flight.
+    const saved = await getSessionState();
+    if (!saved) return;
+    const ok = await tryReconnect();
+    if (ok) console.log('[WalletPair] reconnected via keepalive backstop');
   });
+
+  // Pipe SDK disconnect diagnostics to the console (developer-only).
+  wireDisconnectDiagnostics();
 
   // On SW start, try to restore session
   tryReconnect().then((ok) => {
