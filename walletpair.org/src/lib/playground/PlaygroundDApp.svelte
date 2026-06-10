@@ -111,7 +111,7 @@
 		};
 	}
 
-	const evmMethods = ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain'];
+	const evmMethods = ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain', 'wallet_sendCalls', 'wallet_getCallsStatus'];
 
 	async function connect() {
 		showReconnectPrompt = false;
@@ -276,6 +276,10 @@
 		else if (method === 'wallet_signTypedData') params = '{}';
 		else if (method === 'wallet_sendTransaction')
 			params = '{"chain":"eip155:1","address":"0x...","tx":{"to":"0x...","value":"0x0","data":"0x","type":"0x2","chainId":"0x1"}}';
+		else if (method === 'wallet_sendCalls')
+			params = '{"version":"2.0.0","chainId":"0x1","from":"0x...","atomicRequired":false,"calls":[{"to":"0x...","value":"0x0","data":"0x"}]}';
+		else if (method === 'wallet_getCallsStatus')
+			params = '"0xabababababababababababababababababababababababababababababababab"';
 		else params = '{}';
 	}
 </script>
@@ -435,6 +439,8 @@
 					<option value="wallet_signMessage">wallet_signMessage</option>
 					<option value="wallet_signTypedData">wallet_signTypedData</option>
 					<option value="wallet_sendTransaction">wallet_sendTransaction</option>
+					<option value="wallet_sendCalls">wallet_sendCalls</option>
+					<option value="wallet_getCallsStatus">wallet_getCallsStatus</option>
 				{/if}
 				<option value="custom">custom...</option>
 			</select>

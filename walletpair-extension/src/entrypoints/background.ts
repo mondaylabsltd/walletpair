@@ -182,6 +182,7 @@ function attachSessionListeners(autoAccepted: boolean) {
       case 'connected':
         updateState({ phase: 'connected' });
         pairingInProgress = false;
+        clearActionBadge();
         resetReconnectBackoff();
         saveSessionState(sessionRef.serialize()).catch((e) => console.warn('[WalletPair]', e));
         saveConnectedAt(Date.now()).catch((e) => console.warn('[WalletPair]', e));
@@ -295,6 +296,7 @@ function handleSessionClosed() {
 
   // Clear keepalive alarm
   chrome.alarms.clear('walletpair-keepalive');
+  clearActionBadge();
 
   updateState({
     phase: 'idle',
@@ -647,25 +649,32 @@ function flushDeferredRequests() {
   }
 }
 
-async function openPopup() {
-  // Prefer side panel; fall back to popup window
-  try {
-    const win = await chrome.windows.getCurrent();
-    if (win.id != null) {
-      await (chrome.sidePanel as any).open({ windowId: win.id });
-      return;
-    }
-  } catch { /* side panel not available */ }
+function showActionBadge() {
+  chrome.action.setBadgeText({ text: '●' }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ color: '#2563eb' }).catch(() => {});
+}
 
-  chrome.action.openPopup().catch(() => {
-    chrome.windows.create({
-      url: chrome.runtime.getURL('/popup.html'),
-      type: 'popup',
-      width: 380,
-      height: 600,
-      focused: true,
-    }).catch((e: any) => console.warn('[WalletPair]', e));
-  });
+function clearActionBadge() {
+  chrome.action.setBadgeText({ text: '' }).catch(() => {});
+}
+
+async function openPopup() {
+  // Side-panel only: never spawn a separate popup window or action popup.
+  // chrome.sidePanel.open() requires transient user activation, which is lost
+  // along the dApp → content-script → port → service-worker message chain, so
+  // the auto-open often rejects. When it does, badge the toolbar icon so the
+  // user clicks it (a real gesture) to open the panel — never open a window.
+  try {
+    let windowId = (await chrome.windows.getLastFocused().catch(() => null))?.id;
+    if (windowId == null) windowId = (await chrome.windows.getCurrent().catch(() => null))?.id;
+    if (windowId == null) throw new Error('no focused window');
+    await (chrome.sidePanel as any).open({ windowId });
+    clearActionBadge();
+  } catch (e) {
+    // Panel may already be open, or no user gesture is available.
+    console.warn('[WalletPair] sidePanel.open failed; badging action icon:', e);
+    showActionBadge();
+  }
 }
 
 // ── Port & Message Handlers ──────────────────────────────────────────────
@@ -706,6 +715,12 @@ export default defineBackground(() => {
       switch (msg.action) {
         case 'get-state':
           sendResponse(state);
+          break;
+
+        case 'ui-opened':
+          // The side panel mounted — it's now visible, so drop the badge hint.
+          clearActionBadge();
+          sendResponse({ ok: true });
           break;
 
         case 'start-pairing':

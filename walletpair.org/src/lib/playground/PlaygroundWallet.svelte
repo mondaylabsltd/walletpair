@@ -115,13 +115,21 @@
 			: playground.relayUrl;
 	}
 
+	// Safe v1.4.1 SafeProxy runtime bytecode — advertised so dApps get non-empty
+	// eth_getCode for a counterfactual smart account and detect EIP-1271.
+	const SAFE_PROXY_RUNTIME_CODE =
+		'0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033';
+
 	function createWalletSession(transport: WebSocketTransport): WalletSession {
 		const s = new WalletSession({
 			transport,
 			capabilities: {
-				methods: ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain'],
+				methods: ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain', 'wallet_sendCalls', 'wallet_getCallsStatus'],
 				events: ['accountsChanged', 'chainChanged', 'disconnect'],
-				chains: ['eip155:1']
+				chains: ['eip155:1'],
+				// Smart contract wallet: advertise the proxy runtime so the dApp's
+				// EIP-1193 provider answers eth_getCode for a counterfactual account.
+				contractBytecode: SAFE_PROXY_RUNTIME_CODE
 			},
 			meta: {
 				name: metaName || 'EVM Wallet',
@@ -226,6 +234,16 @@
 						cr.concatBytes
 					)
 				};
+				break;
+			}
+			case 'wallet_sendCalls':
+				// EIP-5792 batched atomic calls → return a batch id
+				result = { id: '0x' + 'ab'.repeat(32) };
+				break;
+			case 'wallet_getCallsStatus': {
+				// EIP-5792 batch status poll
+				const id = typeof req.params === 'string' ? req.params : ((req.params as any)?.id ?? '0x');
+				result = { version: '2.0.0', id, chainId: '0x1', status: 200, atomic: true, receipts: [] };
 				break;
 			}
 			default:
