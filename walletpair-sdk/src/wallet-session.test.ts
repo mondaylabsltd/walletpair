@@ -14,6 +14,7 @@ import {
   unsealJoin,
   unsealPayload,
 } from './crypto.js'
+import { clearDisconnectLog, getDisconnectLog } from './disconnect-log.js'
 import { MockTransport } from './test-helpers.js'
 import type { ProtocolMessage } from './types.js'
 import { WalletSession } from './wallet-session.js'
@@ -906,6 +907,129 @@ describe('WalletSession', () => {
       expect(caps.methods).toEqual(['a', 'b', 'c'])
       expect(caps.chains).toEqual(['eip155:1', 'eip155:137'])
       expect(caps.events).toEqual(['accountsChanged'])
+    })
+  })
+
+  describe('terminate handling / reconnect', () => {
+    async function connect(): Promise<void> {
+      await session.joinFromUri(makePairingUri())
+      receiveConnected()
+      expect(session.phase).toBe('connected')
+    }
+
+    function receiveTerminate(reason: string): void {
+      transport.receive({
+        v: 1,
+        t: 'terminate',
+        ch: channelId,
+        ts: Date.now(),
+        from: '_adapter',
+        body: { reason },
+      } as ProtocolMessage)
+    }
+
+    beforeEach(() => {
+      clearDisconnectLog()
+    })
+
+    it('does NOT permanently close on a recoverable terminate (channel_not_found)', async () => {
+      await connect()
+      // dApp momentarily dropped → relay answers a forward with channel_not_found.
+      // The bug was: wallet closes forever. Now: stay recoverable.
+      receiveTerminate('channel_not_found')
+      expect(session.phase).toBe('disconnected')
+      expect(session.phase).not.toBe('closed')
+    })
+
+    it.each([
+      'rate_limited',
+      'payload_too_large',
+      'timeout',
+      'invalid_state',
+    ])('stays recoverable on terminate reason %s', async (reason) => {
+      await connect()
+      receiveTerminate(reason)
+      expect(session.phase).toBe('disconnected')
+    })
+
+    it.each([
+      'normal',
+      'user_rejected',
+      'unsupported_version',
+    ])('permanently closes on terminal terminate reason %s', async (reason) => {
+      await connect()
+      receiveTerminate(reason)
+      expect(session.phase).toBe('closed')
+    })
+
+    it('records the terminate in the developer disconnect log with willReconnect', async () => {
+      await connect()
+      receiveTerminate('channel_not_found')
+      const entry = getDisconnectLog().find((e) => e.kind === 'terminate')
+      expect(entry).toMatchObject({
+        side: 'wallet',
+        kind: 'terminate',
+        reason: 'channel_not_found',
+        willReconnect: true,
+      })
+    })
+
+    it('actually attempts to reconnect (sends a fresh join) after a recoverable terminate', async () => {
+      vi.useFakeTimers()
+      try {
+        await session.joinFromUri(makePairingUri())
+        receiveConnected()
+        expect(session.phase).toBe('connected')
+
+        const joinsBefore = transport.sent.filter((m) => m.t === 'join').length
+        receiveTerminate('channel_not_found')
+        expect(session.phase).toBe('disconnected')
+
+        await vi.advanceTimersByTimeAsync(1500)
+        const joinsAfter = transport.sent.filter((m) => m.t === 'join').length
+        expect(joinsAfter).toBeGreaterThan(joinsBefore)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  describe('heartbeat / liveness (P0-2)', () => {
+    it('pings on the interval and forces a reconnect when no pong arrives', async () => {
+      vi.useFakeTimers()
+      const hb = new WalletSession({
+        transport,
+        capabilities: { methods: ['wallet_getAccounts'], events: [], chains: ['eip155:1'] },
+        meta: { name: 'hb', description: '', url: '', icon: '' },
+        heartbeatInterval: 1000,
+        heartbeatTimeout: 500,
+      })
+      try {
+        await hb.joinFromUri(makePairingUri())
+        // ready.connected for the wallet
+        transport.receive({
+          v: 1,
+          t: 'ready',
+          ch: channelId,
+          ts: Date.now(),
+          from: '_adapter',
+          body: { state: 'connected', reconnect: false, remote: dappKp.publicKeyB64 },
+        } as ProtocolMessage)
+        expect(hb.phase).toBe('connected')
+
+        const disconnectSpy = vi.spyOn(transport, 'disconnect')
+        const pingsBefore = transport.sent.filter((m) => m.t === 'ping').length
+
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(transport.sent.filter((m) => m.t === 'ping').length).toBe(pingsBefore + 1)
+
+        await vi.advanceTimersByTimeAsync(500)
+        expect(disconnectSpy).toHaveBeenCalled()
+        expect(hb.phase).toBe('disconnected')
+      } finally {
+        vi.useRealTimers()
+        hb.close()
+      }
     })
   })
 })

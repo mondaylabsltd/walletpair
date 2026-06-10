@@ -195,6 +195,26 @@ describe('walletPair connector factory', () => {
     expect(storage.getItem).toHaveBeenCalledWith('walletPair.session')
   })
 
+  it('isAuthorized returns true when a snapshot exists, without mutating the session', async () => {
+    const transport = new MockTransport()
+    const factory = walletPair({ transport, meta })
+    const storage = {
+      getItem: vi.fn(() => Promise.resolve('some-snapshot')),
+      setItem: vi.fn(() => Promise.resolve()),
+      removeItem: vi.fn(() => Promise.resolve()),
+    }
+    const connector = factory({
+      chains: [{ id: 1, name: 'Ethereum' }] as const,
+      emitter: { emit: vi.fn(), on: vi.fn(), off: vi.fn(), listenerCount: vi.fn(() => 0) },
+      storage,
+    })
+
+    expect(await connector.isAuthorized()).toBe(true)
+    expect(storage.getItem).toHaveBeenCalledWith('walletPair.session')
+    // Pure predicate: no transport activity (the old impl restored + could connect).
+    expect(transport.sent).toHaveLength(0)
+  })
+
   it('connect({ isReconnecting: true }) restores and reconnects without a new pairing URI', async () => {
     const saved = await makePersistedDappSession()
     const transport = new MockTransport()

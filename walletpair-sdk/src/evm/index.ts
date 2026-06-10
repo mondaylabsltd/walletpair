@@ -4,6 +4,14 @@
  * Provides EIP-1193 provider and wagmi connector for Ethereum/EVM networks.
  */
 
+// EIP-1193 error types so dApps can branch on numeric `error.code` (4001 etc.)
+export {
+  ProviderErrorCode,
+  ProviderRpcError,
+  RpcErrorCode,
+  toProviderRpcError,
+  walletPairCodeToRpcCode,
+} from '../errors.js'
 export {
   type EIP1193Provider,
   type EIP1193ProviderEvents,

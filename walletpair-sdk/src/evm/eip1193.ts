@@ -11,6 +11,7 @@
 
 import type { DAppSession } from '../dapp-session.js'
 import { Emitter } from '../emitter.js'
+import { ProviderErrorCode, ProviderRpcError, RpcErrorCode, toProviderRpcError } from '../errors.js'
 import { type Capabilities, evmNumericChainId } from '../types.js'
 
 // ---------------------------------------------------------------------------
@@ -66,7 +67,7 @@ function hexChainToCaip2(hex: string): string {
  */
 function validateTxObject(tx: Record<string, unknown> | undefined): void {
   if (!tx || typeof tx !== 'object') {
-    throw Object.assign(new Error('Missing required transaction object'), { code: -32602 })
+    throw new ProviderRpcError(RpcErrorCode.INVALID_PARAMS, 'Missing required transaction object')
   }
 }
 
@@ -307,11 +308,7 @@ export interface RpcProvider {
 const RPC_TIMEOUT_MS = 30_000
 const RPC_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
-async function jsonRpcFetch(
-  url: string,
-  method: string,
-  params: unknown,
-): Promise<unknown> {
+async function jsonRpcFetch(url: string, method: string, params: unknown): Promise<unknown> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), RPC_TIMEOUT_MS)
   try {
@@ -325,7 +322,10 @@ async function jsonRpcFetch(
     if (contentLength && Number.parseInt(contentLength, 10) > RPC_MAX_RESPONSE_BYTES) {
       throw new Error('RPC response too large')
     }
-    const json = (await res.json()) as { result?: unknown; error?: { code: number; message: string } }
+    const json = (await res.json()) as {
+      result?: unknown
+      error?: { code: number; message: string }
+    }
     if (json.error) {
       throw Object.assign(new Error(json.error.message), { code: json.error.code })
     }
@@ -355,7 +355,10 @@ async function jsonRpcFetchFailover(
     try {
       return await jsonRpcFetch(url, method, params)
     } catch (err) {
-      const code = err && typeof err === 'object' && 'code' in err ? (err as { code?: unknown }).code : undefined
+      const code =
+        err && typeof err === 'object' && 'code' in err
+          ? (err as { code?: unknown }).code
+          : undefined
       // A JSON-RPC error carrying a numeric code is a definitive node answer
       // (e.g. an execution revert) and must not be masked by trying another
       // endpoint — unless it is a known transient/rate-limit code. Errors with no
@@ -366,7 +369,9 @@ async function jsonRpcFetchFailover(
       lastErr = err
     }
   }
-  throw new RpcEndpointsUnavailable(lastErr instanceof Error ? lastErr.message : 'All RPC endpoints failed')
+  throw new RpcEndpointsUnavailable(
+    lastErr instanceof Error ? lastErr.message : 'All RPC endpoints failed',
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +428,9 @@ export class WalletPairProvider implements EIP1193Provider {
     this.staticRpcUrls = normalizeRpcUrls(options.rpcUrls)
     // undefined → default service; null/'' → disabled (relay fallback only).
     this.ethereumDataBaseUrl = (
-      options.ethereumDataUrl === undefined ? DEFAULT_ETHEREUM_DATA_URL : (options.ethereumDataUrl ?? '')
+      options.ethereumDataUrl === undefined
+        ? DEFAULT_ETHEREUM_DATA_URL
+        : (options.ethereumDataUrl ?? '')
     ).replace(/\/+$/, '')
     this.chainId = options.chainId ?? 1
 
@@ -496,8 +503,20 @@ export class WalletPairProvider implements EIP1193Provider {
   }
 
   async request(args: EIP1193RequestArgs): Promise<unknown> {
+    // Normalize every failure into an EIP-1193 ProviderRpcError with a numeric
+    // code so dApps/viem/wagmi can branch on `error.code` (e.g. 4001 user
+    // rejected). Numeric codes (node reverts, provider 4200/4900) are preserved;
+    // WalletPair string codes (e.g. 'user_rejected') are mapped to numeric.
+    try {
+      return await this.dispatch(args)
+    } catch (err) {
+      throw toProviderRpcError(err)
+    }
+  }
+
+  private async dispatch(args: EIP1193RequestArgs): Promise<unknown> {
     if (this.disconnected) {
-      throw Object.assign(new Error('Provider is disconnected'), { code: 4900 })
+      throw new ProviderRpcError(ProviderErrorCode.DISCONNECTED, 'Provider is disconnected')
     }
 
     const { method, params } = args
@@ -506,9 +525,9 @@ export class WalletPairProvider implements EIP1193Provider {
     // Reject it explicitly with 4200 instead of relaying it to the wallet, where
     // it has no mapping and would hang until the request timeout.
     if (method === 'eth_sign') {
-      throw Object.assign(
-        new Error('eth_sign is unsupported (deprecated/unsafe); use personal_sign or eth_signTypedData_v4'),
-        { code: 4200 },
+      throw new ProviderRpcError(
+        ProviderErrorCode.UNSUPPORTED_METHOD,
+        'eth_sign is unsupported (deprecated/unsafe); use personal_sign or eth_signTypedData_v4',
       )
     }
 
@@ -553,7 +572,9 @@ export class WalletPairProvider implements EIP1193Provider {
     // account, return that bytecode when the account isn't deployed yet, so
     // dApps detect a smart contract wallet (EIP-1271) instead of an EOA.
     if (method === 'eth_getCode') {
-      const caps = this.session.walletCapabilities as unknown as { contractBytecode?: string } | undefined
+      const caps = this.session.walletCapabilities as unknown as
+        | { contractBytecode?: string }
+        | undefined
       const target = (params as [string] | undefined)?.[0]?.toLowerCase()
       const self = this.accounts[0]?.toLowerCase()
       if (caps?.contractBytecode && target && self && target === self) {
@@ -587,7 +608,10 @@ export class WalletPairProvider implements EIP1193Provider {
 
     const mapped = this.mapper.mapRequest(method, params)
     if (!mapped) {
-      throw Object.assign(new Error(`Unsupported method: ${method}`), { code: 4200 })
+      throw new ProviderRpcError(
+        ProviderErrorCode.UNSUPPORTED_METHOD,
+        `Unsupported method: ${method}`,
+      )
     }
 
     // Inject chain for methods that require it per EVM sub-protocol

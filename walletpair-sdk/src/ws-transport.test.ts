@@ -154,7 +154,14 @@ describe('WebSocketTransport', () => {
       MockWebSocket.instances[0]?.simulateOpen()
       await promise
 
-      const msg = { v: 1, t: 'ready', ch: 'abc', state: 'waiting' }
+      const msg = {
+        v: 1,
+        t: 'ready',
+        ch: 'abc',
+        ts: 123,
+        from: '_adapter',
+        body: { state: 'waiting' },
+      }
       MockWebSocket.instances[0]?.simulateMessage(JSON.stringify(msg))
 
       expect(handler).toHaveBeenCalledWith(msg)
@@ -228,6 +235,81 @@ describe('WebSocketTransport', () => {
 
       ws?.simulateOpen()
       await promise
+    })
+  })
+
+  describe('hardening (P0-5)', () => {
+    const frame = (t = 'ping'): ProtocolMessage =>
+      ({ v: 1, t, ch: 'abc', ts: 1, from: 'x', body: {} }) as unknown as ProtocolMessage
+
+    it('buffers frames sent while connecting and flushes them on open', async () => {
+      const t = new WebSocketTransport('ws://localhost:8080/v1')
+      const promise = t.connect() // state 'connecting', socket not open
+      t.send(frame())
+      expect(MockWebSocket.instances[0]?.sentMessages).toHaveLength(0) // buffered, not dropped
+      MockWebSocket.instances[0]?.simulateOpen()
+      await promise
+      expect(MockWebSocket.instances[0]?.sentMessages).toHaveLength(1) // flushed on open
+    })
+
+    it('does not replay frames buffered before a disconnect', async () => {
+      const t = new WebSocketTransport('ws://localhost:8080/v1')
+      t.connect().catch(() => {})
+      t.send(frame()) // buffered on the first (abandoned) attempt
+      t.disconnect() // clears the buffer
+
+      const promise = t.connect()
+      MockWebSocket.instances[1]?.simulateOpen()
+      await promise
+      expect(MockWebSocket.instances[1]?.sentMessages).toHaveLength(0) // stale frame not replayed
+    })
+
+    it('drops oversized inbound frames before parsing', async () => {
+      const t = new WebSocketTransport('ws://localhost:8080/v1')
+      const handler = vi.fn()
+      t.onMessage(handler)
+      const promise = t.connect()
+      MockWebSocket.instances[0]?.simulateOpen()
+      await promise
+
+      const huge = JSON.stringify({
+        v: 1,
+        t: 'req',
+        ch: 'a',
+        ts: 1,
+        from: 'x',
+        body: { b: 'A'.repeat(200 * 1024) },
+      })
+      MockWebSocket.instances[0]?.simulateMessage(huge)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('drops valid JSON with the wrong shape', async () => {
+      const t = new WebSocketTransport('ws://localhost:8080/v1')
+      const handler = vi.fn()
+      t.onMessage(handler)
+      const promise = t.connect()
+      MockWebSocket.instances[0]?.simulateOpen()
+      await promise
+
+      MockWebSocket.instances[0]?.simulateMessage(JSON.stringify({ hello: 'world' }))
+      MockWebSocket.instances[0]?.simulateMessage(JSON.stringify({ v: 1, t: 'ready' })) // missing ch/from/body
+      MockWebSocket.instances[0]?.simulateMessage(JSON.stringify([1, 2, 3]))
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('rejects connect() after connectTimeout when the socket never opens', async () => {
+      vi.useFakeTimers()
+      try {
+        const t = new WebSocketTransport({ url: 'ws://localhost:8080/v1', connectTimeout: 1000 })
+        const promise = t.connect()
+        const rejected = expect(promise).rejects.toThrow(/timed out/)
+        await vi.advanceTimersByTimeAsync(1100)
+        await rejected
+        expect(t.state).toBe('disconnected')
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })

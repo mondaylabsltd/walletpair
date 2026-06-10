@@ -7,7 +7,7 @@
 
 /// <reference path="./web-bluetooth.d.ts" />
 
-import type { ProtocolMessage, Transport, TransportState } from '../types.js'
+import type { ProtocolMessage, Transport, TransportCloseInfo, TransportState } from '../types.js'
 import {
   BLE_NOTIFY_CHAR_UUID,
   BLE_SERVICE_UUID,
@@ -30,13 +30,13 @@ export class WebBleCentralTransport implements Transport {
   private mtuPayload = 509
 
   private messageHandler: ((msg: ProtocolMessage) => void) | null = null
-  private closeHandler: (() => void) | null = null
+  private closeHandler: ((info?: TransportCloseInfo) => void) | null = null
   private openHandler: (() => void) | null = null
 
   onMessage(handler: (msg: ProtocolMessage) => void): void {
     this.messageHandler = handler
   }
-  onClose(handler: () => void): void {
+  onClose(handler: (info?: TransportCloseInfo) => void): void {
     this.closeHandler = handler
   }
   onOpen(handler: () => void): void {

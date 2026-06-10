@@ -206,6 +206,41 @@ describe('WalletPairProvider', () => {
     })
   })
 
+  describe('eth_signTypedData_v3 / v4', () => {
+    const typedData = JSON.stringify({
+      domain: { name: 'Test' },
+      types: { Mail: [{ name: 'contents', type: 'string' }] },
+      primaryType: 'Mail',
+      message: { contents: 'hi' },
+    })
+
+    it.each([
+      'eth_signTypedData_v3',
+      'eth_signTypedData_v4',
+    ])('maps %s to wallet_signTypedData and unwraps the signature', async (method) => {
+      await setupConnectedSession()
+      const promise = provider.request({ method, params: ['0xabc', typedData] })
+      await flushMicrotasks()
+
+      const reqMsg = transport.sent.find((m) => m.t === 'req') as any
+      expect(reqMsg?.body.sealed).toBeTruthy() // routed to the wallet, not rejected
+
+      respondToLatestReq({ signature: '0xtyped...' })
+      await expect(promise).resolves.toBe('0xtyped...')
+    })
+  })
+
+  describe('eth_sign (deprecated)', () => {
+    it('rejects with a 4200 Unsupported error and never reaches the wallet', async () => {
+      await setupConnectedSession()
+      const before = transport.sent.filter((m) => m.t === 'req').length
+      await expect(
+        provider.request({ method: 'eth_sign', params: ['0xabc', '0xdeadbeef'] }),
+      ).rejects.toMatchObject({ code: 4200 })
+      expect(transport.sent.filter((m) => m.t === 'req').length).toBe(before) // not relayed
+    })
+  })
+
   // -----------------------------------------------------------------------
   // eth_sendTransaction
   // -----------------------------------------------------------------------
@@ -451,6 +486,37 @@ describe('WalletPairProvider', () => {
       respondToLatestReq({ code: 'user_rejected', message: 'Denied' }, false)
       await expect(promise).rejects.toThrow('Denied')
     })
+
+    it('normalizes a wallet user_rejected into a 4001 ProviderRpcError', async () => {
+      await setupConnectedSession()
+      const promise = provider.request({
+        method: 'personal_sign',
+        params: ['0x48656c6c6f', '0xabc'],
+      })
+      await flushMicrotasks()
+
+      respondToLatestReq({ code: 'user_rejected', message: 'User denied' }, false)
+      const err = await promise.then(
+        () => null,
+        (e) => e as { name: string; code: number },
+      )
+      expect(err).toBeTruthy()
+      expect(err?.name).toBe('ProviderRpcError')
+      expect(err?.code).toBe(4001)
+    })
+
+    it('maps rate_limited to -32005 and unsupported_method to 4200', async () => {
+      await setupConnectedSession()
+      const p1 = provider.request({ method: 'personal_sign', params: ['0x48', '0xabc'] })
+      await flushMicrotasks()
+      respondToLatestReq({ code: 'rate_limited', message: 'slow down' }, false)
+      await expect(p1).rejects.toMatchObject({ code: -32005 })
+
+      const p2 = provider.request({ method: 'personal_sign', params: ['0x48', '0xabc'] })
+      await flushMicrotasks()
+      respondToLatestReq({ code: 'unsupported_method', message: 'nope' }, false)
+      await expect(p2).rejects.toMatchObject({ code: 4200 })
+    })
   })
 
   // -----------------------------------------------------------------------
@@ -552,7 +618,9 @@ describe('WalletPairProvider', () => {
           ok: true,
           headers: { get: () => null },
           // insecure + placeholder URLs must be filtered out
-          json: async () => ({ rpc: ['http://insecure', 'https://${KEY}', 'https://poly.public.test'] }),
+          json: async () => ({
+            rpc: ['http://insecure', 'https://${KEY}', 'https://poly.public.test'],
+          }),
         })
         .mockResolvedValueOnce(rpcResult('0xblock'))
       vi.stubGlobal('fetch', fetchMock)
@@ -634,7 +702,7 @@ describe('WalletPairProvider', () => {
       respondToLatestReq(['0xcached'])
       await p
 
-      const before = countRelayReqs();
+      const before = countRelayReqs()
       const accounts = await provider.request({ method: 'eth_accounts' })
 
       expect(accounts).toEqual(['0xcached'])
@@ -647,7 +715,10 @@ describe('WalletPairProvider', () => {
         ...(session as any).walletCapabilities,
         walletCapabilities: { '0x1': { foo: true }, '0x89': { bar: true } },
       }
-      const out = await provider.request({ method: 'wallet_getCapabilities', params: ['0xaddr', [137]] })
+      const out = await provider.request({
+        method: 'wallet_getCapabilities',
+        params: ['0xaddr', [137]],
+      })
       expect(out).toEqual({ '0x89': { bar: true } })
     })
 
@@ -727,7 +798,8 @@ describe('WalletPairProvider', () => {
   // -----------------------------------------------------------------------
 
   describe('eth_getCode (counterfactual smart account)', () => {
-    const RUNTIME = '0x363d3d373d3d3d363d73deadbeefcafebabe000000000000000000005af43d82803e903d91602b57fd5bf3'
+    const RUNTIME =
+      '0x363d3d373d3d3d363d73deadbeefcafebabe000000000000000000005af43d82803e903d91602b57fd5bf3'
 
     async function connectWithAccount(addr = '0xAbC123', contractBytecode?: string) {
       await setupConnectedSession()
@@ -767,7 +839,10 @@ describe('WalletPairProvider', () => {
     it('does NOT override eth_getCode for a different address', async () => {
       await connectWithAccount('0xAbC123', RUNTIME)
 
-      const promise = provider.request({ method: 'eth_getCode', params: ['0xsomeOtherContract', 'latest'] })
+      const promise = provider.request({
+        method: 'eth_getCode',
+        params: ['0xsomeOtherContract', 'latest'],
+      })
       await flushMicrotasks()
       respondToLatestReq('0x')
       const result = await promise
@@ -790,7 +865,10 @@ describe('WalletPairProvider', () => {
       const rpcProvider = { request: vi.fn().mockResolvedValue('0x') }
       ;(provider as any).rpcProvider = rpcProvider
 
-      const result = await provider.request({ method: 'eth_getCode', params: ['0xabc123', 'latest'] })
+      const result = await provider.request({
+        method: 'eth_getCode',
+        params: ['0xabc123', 'latest'],
+      })
       expect(rpcProvider.request).toHaveBeenCalled()
       expect(result).toBe(RUNTIME)
     })
@@ -800,7 +878,10 @@ describe('WalletPairProvider', () => {
       const rpcProvider = { request: vi.fn().mockResolvedValue('0x6080604052deployed') }
       ;(provider as any).rpcProvider = rpcProvider
 
-      const result = await provider.request({ method: 'eth_getCode', params: ['0xabc123', 'latest'] })
+      const result = await provider.request({
+        method: 'eth_getCode',
+        params: ['0xabc123', 'latest'],
+      })
       expect(result).toBe('0x6080604052deployed')
     })
   })

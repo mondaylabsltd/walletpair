@@ -26,19 +26,26 @@ import {
   unsealPayload,
   verifySnapshot,
 } from './crypto.js'
+import { recordDisconnect } from './disconnect-log.js'
 import { Emitter } from './emitter.js'
 import type {
   Capabilities,
   ProtocolMessage,
   SessionPersistence,
   Transport,
+  TransportCloseInfo,
   WalletMeta,
   WalletPhase,
   WalletSessionEvents,
   WalletSessionOptions,
 } from './types.js'
+import { isRecoverableCloseReason } from './types.js'
 
 const BACKOFF = [1000, 2000, 5000, 10000, 30000]
+const DEFAULT_HEARTBEAT_INTERVAL = 20_000
+const DEFAULT_HEARTBEAT_TIMEOUT = 10_000
+const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10
+const DEFAULT_MAX_RECONNECT_DURATION = 300_000
 const MAX_SEND_SEQ = 2 ** 31
 const MAX_PENDING_REQUESTS = 32 // §15 rule 11
 const MAX_MESSAGE_BYTES = 65536 // §15 rule 10: 64 KB
@@ -96,9 +103,20 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   private sessionTtl: number
   private sessionTtlTimer: ReturnType<typeof setTimeout> | null = null
   private sessionStartTime: number | null = null
+  private heartbeatInterval: number
+  private heartbeatTimeout: number
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private livenessTimer: ReturnType<typeof setTimeout> | null = null
 
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
+  /** True while an auto-reconnect cycle is in progress; cleared on a successful
+   * reconnect. Drives the backoff-preservation race fix. */
+  private reconnecting = false
+  /** Epoch ms when the current reconnect streak began (0 = not reconnecting). */
+  private reconnectStartedAt = 0
+  private maxReconnectAttempts: number
+  private maxReconnectDurationMs: number
   private pendingRequestRecords = new Map<string, PendingRequestRecord>()
   private idempotencyCache = new Map<string, CachedRequestResponse>()
   private broadcastResponseCache = new Map<string, CachedRequestResponse>()
@@ -110,11 +128,15 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     this.capabilities = options.capabilities
     this.meta = options.meta
     this.sessionTtl = options.sessionTtl ?? DEFAULT_SESSION_TTL
+    this.heartbeatInterval = options.heartbeatInterval ?? DEFAULT_HEARTBEAT_INTERVAL
+    this.heartbeatTimeout = options.heartbeatTimeout ?? DEFAULT_HEARTBEAT_TIMEOUT
+    this.maxReconnectAttempts = options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS
+    this.maxReconnectDurationMs = options.maxReconnectDurationMs ?? DEFAULT_MAX_RECONNECT_DURATION
     this.effectiveCapabilities = { ...options.capabilities }
     this.persistence = options.persistence
 
     this.transport.onMessage((msg) => this.handleMessage(msg))
-    this.transport.onClose(() => this.handleTransportClose())
+    this.transport.onClose((info) => this.handleTransportClose(info))
   }
 
   // -------------------------------------------------------------------------
@@ -279,6 +301,14 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
 
   /** Gracefully close. */
   close(reason: string = 'normal'): void {
+    recordDisconnect({
+      side: 'wallet',
+      kind: 'session_close',
+      reason,
+      phase: this.phase,
+      channelId: this.channelId,
+      willReconnect: false,
+    })
     this.intentionalClose = true
     this.stopReconnect()
     this.clearSessionTtl()
@@ -435,8 +465,12 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
         if (readyBody.state === 'waiting') {
           this.setPhase('waiting_accept')
         } else if (readyBody.state === 'connected') {
+          this.reconnecting = false
+          this.reconnectAttempt = 0
+          this.reconnectStartedAt = 0
           this.setPhase('connected')
           this.startSessionTtl()
+          this.startHeartbeat()
           this.persistSnapshotAsync()
         }
         break
@@ -495,6 +529,7 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
         break
 
       case 'pong':
+        this.clearLiveness()
         break
 
       case 'close': {
@@ -510,18 +545,30 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       }
 
       case 'terminate': {
-        const termBody = msg.body as { reason?: string }
-        // Race condition: relay sends channel_not_found when we join during reconnect
-        if (
-          termBody.reason === 'channel_not_found' &&
-          (this.phase === 'disconnected' || this.phase === 'waiting_accept')
-        ) {
+        const reason = (msg.body as { reason?: string }).reason
+        const recoverable = isRecoverableCloseReason(reason)
+        const willReconnect = recoverable && this.canReconnect()
+        recordDisconnect({
+          side: 'wallet',
+          kind: 'terminate',
+          reason,
+          phase: this.phase,
+          channelId: this.channelId,
+          willReconnect,
+        })
+        // Already finished — nothing left to recover.
+        if (this.intentionalClose || this.phase === 'closed') break
+        if (recoverable) {
+          // Relay dropped us for a transient/recoverable reason (channel_not_found
+          // when the dApp momentarily disconnected, rate_limited, payload_too_large,
+          // timeout, invalid_state, …). Keep the session and reconnect — do NOT
+          // wipe persistence. Disconnect first so the socket's own onclose can't
+          // double-trigger reconnect.
           this.transport.disconnect()
           this.startReconnect()
-          break
-        }
-        // Adapter-sent termination — treat like close
-        if (this.phase !== 'disconnected') {
+        } else {
+          // Genuinely terminal (normal / user_rejected / unsupported_* /
+          // already_connected / decryption_failed) — close permanently.
           this.pendingRequestRecords.clear()
           this.idempotencyCache.clear()
           this.broadcastResponseCache.clear()
@@ -561,7 +608,11 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       )
       return
     }
-    const { _method: _, _params, ...rest } = payload as { _method: string; _params?: unknown } & Record<string, unknown>
+    const {
+      _method: _,
+      _params,
+      ...rest
+    } = payload as { _method: string; _params?: unknown } & Record<string, unknown>
     const params: unknown = _params !== undefined ? _params : rest
     const paramsHash = sha256Hex(plaintext)
 
@@ -843,8 +894,23 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     return wrapped
   }
 
-  private handleTransportClose(): void {
-    if (this.intentionalClose || this.phase === 'closed') return
+  /** Whether the session is still eligible to auto-reconnect. */
+  private canReconnect(): boolean {
+    return !this.intentionalClose && this.phase !== 'closed'
+  }
+
+  private handleTransportClose(info?: TransportCloseInfo): void {
+    const willReconnect = this.canReconnect()
+    recordDisconnect({
+      side: 'wallet',
+      kind: 'transport_close',
+      code: info?.code,
+      reason: info?.reason ?? (info?.wasError ? 'transport_error' : undefined),
+      phase: this.phase,
+      channelId: this.channelId,
+      willReconnect,
+    })
+    if (!willReconnect) return
     this.startReconnect()
   }
 
@@ -853,13 +919,61 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   // -------------------------------------------------------------------------
 
   private startReconnect(): void {
+    // Preserve the growing backoff when already mid-reconnect (avoids a tight
+    // loop when the relay keeps terminating us). Keyed off an explicit flag, not
+    // the phase, so a terminate arriving while still 'connected' doesn't reset
+    // the backoff. Cleared only on a successful reconnect.
+    const wasReconnecting = this.reconnecting
+    this.reconnecting = true
     this.setPhase('disconnected')
-    this.reconnectAttempt = 0
+    if (!wasReconnecting) {
+      this.reconnectAttempt = 0
+      this.reconnectStartedAt = 0
+    }
     this.scheduleReconnect()
+  }
+
+  /** Whether the current reconnect streak has hit its attempt or duration cap. */
+  private reconnectExhausted(): boolean {
+    const attemptsCapped =
+      this.maxReconnectAttempts > 0 && this.reconnectAttempt >= this.maxReconnectAttempts
+    const durationCapped =
+      this.maxReconnectDurationMs > 0 &&
+      this.reconnectStartedAt > 0 &&
+      Date.now() - this.reconnectStartedAt >= this.maxReconnectDurationMs
+    return attemptsCapped || durationCapped
+  }
+
+  /** Give up reconnecting: clear caches, emit `reconnectExhausted`, close. */
+  private giveUpReconnect(): void {
+    this.stopReconnect()
+    this.reconnecting = false
+    const attempts = this.reconnectAttempt
+    recordDisconnect({
+      side: 'wallet',
+      kind: 'reconnect_failed',
+      reason: 'reconnect_exhausted',
+      phase: this.phase,
+      channelId: this.channelId,
+      willReconnect: false,
+    })
+    this.pendingRequestRecords.clear()
+    this.idempotencyCache.clear()
+    this.broadcastResponseCache.clear()
+    this.clearPersistence()
+    this.intentionalClose = true
+    this.emit('reconnectExhausted', { attempts })
+    this.setPhase('closed')
   }
 
   private scheduleReconnect(): void {
     if (this.intentionalClose || this.phase === 'closed') return
+    if (this.reconnectStartedAt === 0) this.reconnectStartedAt = Date.now()
+    if (this.reconnectExhausted()) {
+      this.giveUpReconnect()
+      return
+    }
+    this.stopReconnect() // idempotent: never stack reconnect timers
     const base = BACKOFF[Math.min(this.reconnectAttempt, BACKOFF.length - 1)] ?? 1000
     const delay = base + Math.floor(Math.random() * base * 0.3) // ±30% jitter
     this.reconnectTimer = setTimeout(() => {
@@ -885,6 +999,13 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       this.setPhase('waiting_accept')
       await this.sendJoin()
     } catch {
+      recordDisconnect({
+        side: 'wallet',
+        kind: 'reconnect_failed',
+        phase: this.phase,
+        channelId: this.channelId,
+        willReconnect: this.canReconnect(),
+      })
       this.scheduleReconnect()
     }
   }
@@ -920,9 +1041,61 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Internal: heartbeat / liveness (P0-2)
+  // -------------------------------------------------------------------------
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+    if (this.heartbeatInterval <= 0) return
+    this.heartbeatTimer = setInterval(() => this.heartbeatTick(), this.heartbeatInterval)
+    // Don't let the heartbeat keep a Node process (or test runner) alive on its own.
+    ;(this.heartbeatTimer as unknown as { unref?: () => void }).unref?.()
+  }
+
+  private heartbeatTick(): void {
+    if (this.phase !== 'connected') return
+    this.ping()
+    if (this.livenessTimer) return // already awaiting a pong from the previous tick
+    this.livenessTimer = setTimeout(() => {
+      this.livenessTimer = null
+      // No pong within the deadline → the connection is dead even though the
+      // socket never reported a close (half-open TCP). Force a reconnect.
+      recordDisconnect({
+        side: 'wallet',
+        kind: 'transport_close',
+        reason: 'heartbeat_timeout',
+        phase: this.phase,
+        channelId: this.channelId,
+        willReconnect: this.canReconnect(),
+      })
+      this.transport.disconnect()
+      this.handleTransportClose({ reason: 'heartbeat_timeout' })
+    }, this.heartbeatTimeout)
+    ;(this.livenessTimer as unknown as { unref?: () => void }).unref?.()
+  }
+
+  private clearLiveness(): void {
+    if (this.livenessTimer) {
+      clearTimeout(this.livenessTimer)
+      this.livenessTimer = null
+    }
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+    this.clearLiveness()
+  }
+
   private setPhase(phase: WalletPhase): void {
     if (this.phase === phase) return
     this.phase = phase
+    // Heartbeat only runs while connected; any transition away stops it. It is
+    // (re)started explicitly when the relay reports the channel connected.
+    if (phase !== 'connected') this.stopHeartbeat()
     this.emit('phase', phase)
   }
 }

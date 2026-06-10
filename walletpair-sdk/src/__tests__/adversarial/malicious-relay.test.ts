@@ -311,15 +311,18 @@ describe('Malicious Relay: Reflection attack', () => {
 // ---------------------------------------------------------------------------
 
 describe('Malicious Relay: Fake terminate', () => {
-  it('terminate from relay closes session but does not compromise data', async () => {
+  it('forged recoverable terminate cannot permanently kill the session (it reconnects)', async () => {
     // ATTACK: A malicious relay sends terminate messages to disrupt
     // the session. This is a DoS attack — the relay can always do this
     // since it controls transport. The protocol acknowledges this
     // (Section 19.5) and ensures no data compromise occurs.
     //
-    // PREVENTS: Nothing — this is an inherent DoS vector. But we verify
-    // the session transitions cleanly to closed state without leaking
-    // any key material or corrupting state.
+    // HARDENING: A forged *recoverable* terminate (rate_limited,
+    // channel_not_found, …) must NOT permanently close the session — that
+    // would let a relay kill a session for good with a single spoofed frame.
+    // Instead the session stays recoverable and reconnects. No key material is
+    // exposed: reconnect re-runs the E2E handshake; sendKey/recvKey never leave
+    // the client.
 
     const ctx = setupDAppManual()
     const { transport, session } = ctx
@@ -327,7 +330,7 @@ describe('Malicious Relay: Fake terminate', () => {
 
     expect(session.phase).toBe('connected')
 
-    // Relay sends a fake terminate
+    // Relay sends a fake recoverable terminate.
     transport.receive({
       v: 1,
       t: 'terminate',
@@ -335,6 +338,27 @@ describe('Malicious Relay: Fake terminate', () => {
       ts: Date.now(),
       from: '_adapter',
       body: { reason: 'rate_limited' },
+    } as ProtocolMessage)
+
+    // Stays recoverable (reconnecting), not permanently closed.
+    expect(session.phase).toBe('disconnected')
+    expect(session.phase).not.toBe('closed')
+  })
+
+  it('terminal terminate (user_rejected) closes the session cleanly', async () => {
+    const ctx = setupDAppManual()
+    const { transport, session } = ctx
+    await connectDAppManual(ctx)
+
+    expect(session.phase).toBe('connected')
+
+    transport.receive({
+      v: 1,
+      t: 'terminate',
+      ch: session.channelId,
+      ts: Date.now(),
+      from: '_adapter',
+      body: { reason: 'user_rejected' },
     } as ProtocolMessage)
 
     expect(session.phase).toBe('closed')

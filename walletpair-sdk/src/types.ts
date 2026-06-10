@@ -10,13 +10,27 @@
 
 export type TransportState = 'disconnected' | 'connecting' | 'connected'
 
+/**
+ * Diagnostic details about why a transport closed, passed to `onClose`
+ * handlers. Used for developer-only disconnect logging. All fields are
+ * best-effort: a transport that cannot determine the code/reason omits them.
+ */
+export interface TransportCloseInfo {
+  /** WebSocket close code (e.g. 1000 normal, 1006 abnormal/network). */
+  code?: number | undefined
+  /** WebSocket close reason string, when provided by the peer. */
+  reason?: string | undefined
+  /** True when the close followed a transport-level error event. */
+  wasError?: boolean | undefined
+}
+
 export interface Transport {
   readonly state: TransportState
   send(msg: ProtocolMessage): void
   connect(): Promise<void>
   disconnect(): void
   onMessage(handler: (msg: ProtocolMessage) => void): void
-  onClose(handler: () => void): void
+  onClose(handler: (info?: TransportCloseInfo) => void): void
   onOpen(handler: () => void): void
 }
 
@@ -124,6 +138,40 @@ export type CloseReason =
   | 'unsupported_version'
   | 'decryption_failed'
 
+/**
+ * Terminate/close reasons that are *terminal* — the session is genuinely over
+ * and the SDK must NOT auto-reconnect. Everything else (rate_limited,
+ * channel_not_found, payload_too_large, timeout, invalid_state, invalid_role,
+ * protocol_error, channel_exists, and any unknown reason) is treated as
+ * transient and recoverable by reconnecting.
+ *
+ * Rationale: a live session should survive relay-initiated drops caused by
+ * recoverable conditions (e.g. a momentary peer disconnect that makes the relay
+ * answer a request with `channel_not_found`, or hitting the relay's pending /
+ * payload limits). Only a deliberate end (`normal`, `user_rejected`) or an
+ * unfixable mismatch (`unsupported_*`, `decryption_failed`, `already_connected`)
+ * should permanently close.
+ */
+export const PERMANENT_CLOSE_REASONS: readonly CloseReason[] = [
+  'normal',
+  'user_rejected',
+  'unsupported_capability',
+  'unsupported_version',
+  'already_connected',
+  'decryption_failed',
+]
+
+/**
+ * Whether a relay `terminate` (or close) with this reason is recoverable by
+ * reconnecting rather than permanently closing the session. Unknown/undefined
+ * reasons are treated as recoverable so new relay reasons fail safe (reconnect)
+ * instead of silently killing the session.
+ */
+export function isRecoverableCloseReason(reason: string | undefined): boolean {
+  if (!reason) return true
+  return !PERMANENT_CLOSE_REASONS.includes(reason as CloseReason)
+}
+
 // ---------------------------------------------------------------------------
 // Capabilities & metadata (multi-chain via CAIP-2)
 // ---------------------------------------------------------------------------
@@ -205,6 +253,9 @@ export interface DAppSessionEvents {
   walletJoined: { capabilities?: Capabilities | undefined; meta?: WalletMeta | undefined }
   response: { id: string; ok: boolean; result: unknown }
   event: { event: string; data: unknown }
+  /** Emitted when auto-reconnect gives up (attempt/duration limit hit); the
+   * session then closes. Distinct from a single transport drop, which is silent. */
+  reconnectExhausted: { attempts: number }
   error: Error
 }
 
@@ -213,6 +264,9 @@ export interface WalletSessionEvents {
   phase: WalletPhase
   sessionFingerprint: string
   request: { id: string; method: string; params: unknown }
+  /** Emitted when auto-reconnect gives up (attempt/duration limit hit); the
+   * session then closes. */
+  reconnectExhausted: { attempts: number }
   error: Error
 }
 
@@ -243,6 +297,9 @@ export interface PairingParams {
 export interface PendingRequest {
   id: string
   method: string
+  /** Original request params, retained so the request can be re-sealed and
+   * re-sent after a transport reconnect (the seq changes, the params do not). */
+  params: unknown
   resolve: (result: unknown) => void
   reject: (error: Error) => void
   timer?: ReturnType<typeof setTimeout>
@@ -279,6 +336,40 @@ export interface DAppSessionOptions {
   sessionTtl?: number | undefined
   /** Auto-accept known wallets on rejoin (default true). */
   autoAccept?: boolean | undefined
+  /**
+   * Re-send in-flight requests after an automatic reconnect (default true).
+   * On a transport drop the SDK re-handshakes and, once reconnected, re-seals
+   * and re-sends every still-pending request with a fresh sequence number but
+   * the same request id + params. The wallet's idempotency cache de-duplicates
+   * by request id, so a request whose response was lost returns the cached
+   * response and one whose frame never arrived is processed fresh — turning a
+   * brief blip into a sub-second recovery instead of a request-timeout hang.
+   */
+  resendOnReconnect?: boolean | undefined
+  /**
+   * Application-level heartbeat ping interval in ms while connected
+   * (default 20_000; 0 disables). Detects a dead-but-open connection (mobile
+   * network switch, NAT rebind, laptop sleep) long before the OS surfaces a
+   * WebSocket close, by pinging the peer and forcing a reconnect when no pong
+   * arrives within {@link heartbeatTimeout}.
+   */
+  heartbeatInterval?: number | undefined
+  /** Max time in ms to wait for a pong before treating the connection as dead
+   * and forcing a reconnect (default 10_000). */
+  heartbeatTimeout?: number | undefined
+  /**
+   * Maximum consecutive auto-reconnect attempts before giving up and closing the
+   * session with a `reconnectExhausted` event (default 10). The counter resets
+   * on every successful reconnect, so this bounds a single failure streak — not
+   * a session's lifetime. 0 or Infinity = retry forever.
+   */
+  maxReconnectAttempts?: number | undefined
+  /**
+   * Maximum wall-clock time in ms to keep retrying a single reconnect streak
+   * before giving up (default 300_000 = 5 min). Resets on a successful
+   * reconnect. 0 or Infinity = no time limit.
+   */
+  maxReconnectDurationMs?: number | undefined
   /** Durable snapshot persistence for reconnect and write-ahead counters. */
   persistence?: SessionPersistence | undefined
 }
@@ -291,6 +382,16 @@ export interface WalletSessionOptions {
   meta: WalletMeta
   /** Session lifetime in ms (default 86_400_000 = 24h). §16 rule 16. */
   sessionTtl?: number | undefined
+  /** Heartbeat ping interval in ms while connected (default 20_000; 0 disables).
+   * See {@link DAppSessionOptions.heartbeatInterval}. */
+  heartbeatInterval?: number | undefined
+  /** Max time in ms to wait for a pong before forcing a reconnect (default 10_000). */
+  heartbeatTimeout?: number | undefined
+  /** Max consecutive auto-reconnect attempts before giving up (default 10; 0/Infinity = forever).
+   * See {@link DAppSessionOptions.maxReconnectAttempts}. */
+  maxReconnectAttempts?: number | undefined
+  /** Max wall-clock ms for a reconnect streak before giving up (default 300_000; 0/Infinity = no limit). */
+  maxReconnectDurationMs?: number | undefined
   /** Durable snapshot persistence for reconnect and write-ahead counters. */
   persistence?: SessionPersistence | undefined
 }

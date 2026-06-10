@@ -189,6 +189,21 @@ export function walletPair(options: WalletPairConnectorOptions): CreateConnector
         config.emitter.emit('change', { chainId: newId })
       }
     })
+
+    // A permanently-closed session (graceful close, terminal terminate, or
+    // exhausted reconnect) must move wagmi to a disconnected state — otherwise
+    // wagmi keeps showing "connected" against a dead session.
+    s.on('phase', (phase) => {
+      if (phase === 'closed') config.emitter.emit('disconnect', undefined as never)
+    })
+
+    // Auto-reconnect gave up: surface it as a wagmi error (the disconnect itself
+    // is emitted by the phase→closed handler above).
+    s.on('reconnectExhausted', ({ attempts }) => {
+      config.emitter.emit('error', {
+        error: new Error(`WalletPair reconnect failed after ${attempts} attempts`),
+      })
+    })
   }
 
   async function requestAccountsWhenConnected(
@@ -289,8 +304,15 @@ export function walletPair(options: WalletPairConnectorOptions): CreateConnector
       },
 
       async isAuthorized() {
+        // Pure predicate: report only whether a reconnectable snapshot exists,
+        // without restoring it into (and mutating) the live session. The actual
+        // restore + reconnect happens in connect({ isReconnecting: true }). The
+        // old implementation called restoreFromPersistence() here, which (a) had
+        // a side effect on every page load and (b) reported a dead session as
+        // authorized purely because a stale snapshot was present.
         if (!config.storage) return false
-        return getOrCreateSession(config).restoreFromPersistence()
+        const snapshot = await config.storage.getItem('walletPair.session')
+        return !!snapshot
       },
 
       onAccountsChanged(accounts: string[]) {

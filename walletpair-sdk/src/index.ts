@@ -40,8 +40,24 @@ export {
 } from './crypto.js'
 // Sessions
 export { DAppSession } from './dapp-session.js'
+// Developer-only disconnect diagnostics (never user-facing)
+export type { DisconnectKind, DisconnectLogEntry } from './disconnect-log.js'
+export {
+  clearDisconnectLog,
+  getDisconnectLog,
+  setDisconnectLogSink,
+  setWalletpairDebugLogging,
+} from './disconnect-log.js'
 // Emitter
 export { Emitter } from './emitter.js'
+// Typed errors (EIP-1193 / JSON-RPC numeric codes for dApp consumers)
+export {
+  ProviderErrorCode,
+  ProviderRpcError,
+  RpcErrorCode,
+  toProviderRpcError,
+  walletPairCodeToRpcCode,
+} from './errors.js'
 // Types
 export type {
   AcceptMessage,
@@ -67,17 +83,20 @@ export type {
   SessionPersistence,
   TerminateMessage,
   Transport,
+  TransportCloseInfo,
   TransportState,
   WalletMeta,
   WalletPhase,
   WalletSessionEvents,
   WalletSessionOptions,
 } from './types.js'
-// Chain ID helpers (CAIP-2)
+// Chain ID helpers (CAIP-2) + close-reason classification
 export {
   evmChainId,
   evmNumericChainId,
   formatChainId,
+  isRecoverableCloseReason,
+  PERMANENT_CLOSE_REASONS,
   parseChainId,
 } from './types.js'
 export { WalletSession } from './wallet-session.js'

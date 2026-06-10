@@ -8,8 +8,10 @@ import {
   generateX25519KeyPair,
   parsePairingUri,
   sealPayload,
+  unsealPayload,
 } from './crypto.js'
 import { DAppSession } from './dapp-session.js'
+import { clearDisconnectLog, getDisconnectLog } from './disconnect-log.js'
 import { MockTransport, makeJoinBody } from './test-helpers.js'
 import type { ProtocolMessage } from './types.js'
 
@@ -779,6 +781,432 @@ describe('DAppSession', () => {
       expect((closeMsg as any).body.reason).toBe('timeout')
 
       vi.useRealTimers()
+    })
+  })
+
+  describe('terminate handling / reconnect', () => {
+    async function connect(): Promise<ReturnType<typeof generateX25519KeyPair>> {
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
+      receiveFreshJoin(transport, session, walletKp)
+      receiveConnected(transport, session, walletKp.publicKeyB64)
+      expect(session.phase).toBe('connected')
+      return walletKp
+    }
+
+    function receiveTerminate(reason: string): void {
+      transport.receive({
+        v: 1,
+        t: 'terminate',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: '_adapter',
+        body: { reason },
+      } as ProtocolMessage)
+    }
+
+    beforeEach(() => {
+      clearDisconnectLog()
+    })
+
+    it('does NOT permanently close on a recoverable terminate (rate_limited)', async () => {
+      await connect()
+      receiveTerminate('rate_limited')
+      // The bug was: any terminate → closed forever. Now: stay recoverable.
+      expect(session.phase).toBe('disconnected')
+      expect(session.phase).not.toBe('closed')
+    })
+
+    it.each([
+      'channel_not_found',
+      'payload_too_large',
+      'timeout',
+      'invalid_state',
+    ])('stays recoverable on terminate reason %s', async (reason) => {
+      await connect()
+      receiveTerminate(reason)
+      expect(session.phase).toBe('disconnected')
+    })
+
+    it.each([
+      'normal',
+      'user_rejected',
+      'unsupported_version',
+    ])('permanently closes on terminal terminate reason %s', async (reason) => {
+      await connect()
+      receiveTerminate(reason)
+      expect(session.phase).toBe('closed')
+    })
+
+    it('records the terminate in the developer disconnect log with willReconnect', async () => {
+      await connect()
+      receiveTerminate('rate_limited')
+      const entry = getDisconnectLog().find((e) => e.kind === 'terminate')
+      expect(entry).toMatchObject({
+        side: 'dapp',
+        kind: 'terminate',
+        reason: 'rate_limited',
+        willReconnect: true,
+      })
+    })
+
+    it('records willReconnect=false for a terminal terminate', async () => {
+      await connect()
+      receiveTerminate('user_rejected')
+      const entry = getDisconnectLog().find((e) => e.kind === 'terminate')
+      expect(entry).toMatchObject({ reason: 'user_rejected', willReconnect: false })
+    })
+
+    it('actually attempts to reconnect (sends a fresh create) after a recoverable terminate', async () => {
+      vi.useFakeTimers()
+      try {
+        await session.createPairing()
+        const walletKp = generateX25519KeyPair()
+        receiveFreshJoin(transport, session, walletKp)
+        receiveConnected(transport, session, walletKp.publicKeyB64)
+        expect(session.phase).toBe('connected')
+
+        const createsBefore = transport.sent.filter((m) => m.t === 'create').length
+        receiveTerminate('rate_limited')
+        expect(session.phase).toBe('disconnected')
+
+        // Advance past the first backoff (1000ms + up to 30% jitter).
+        await vi.advanceTimersByTimeAsync(1500)
+        const createsAfter = transport.sent.filter((m) => m.t === 'create').length
+        expect(createsAfter).toBeGreaterThan(createsBefore)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  describe('request resilience across reconnect (P0-1)', () => {
+    async function connectWithKeys(s: DAppSession = session): Promise<{
+      walletKp: ReturnType<typeof generateX25519KeyPair>
+      sendKey: Uint8Array
+      walletToDappKey: Uint8Array
+    }> {
+      await s.createPairing()
+      const walletKp = generateX25519KeyPair()
+      receiveFreshJoin(transport, s, walletKp)
+      receiveConnected(transport, s, walletKp.publicKeyB64)
+      expect(s.phase).toBe('connected')
+      return {
+        walletKp,
+        sendKey: (s as any).sendKey as Uint8Array, // dappToWalletKey
+        walletToDappKey: (s as any).recvKey as Uint8Array,
+      }
+    }
+
+    const reqFrames = () => transport.sent.filter((m) => m.t === 'req') as any[]
+
+    function decodeReq(frame: any, sendKey: Uint8Array): { seq: number; data: unknown } {
+      const { seq, data } = unsealPayload(sendKey, session.channelId, frame.body.sealed, {
+        type: 'req',
+        from: frame.from,
+        id: frame.body.id,
+      })
+      return { seq, data }
+    }
+
+    it('re-sends in-flight requests with same id and a fresh seq after reconnect', async () => {
+      vi.useFakeTimers()
+      try {
+        const { walletKp, sendKey, walletToDappKey } = await connectWithKeys()
+
+        const promise = session.request('wallet_getAccounts', { foo: 'bar' })
+        const first = reqFrames()
+        expect(first).toHaveLength(1)
+        const firstDecoded = decodeReq(first[0], sendKey)
+
+        // Transport drops mid-request → reconnect cycle begins.
+        transport.simulateClose({ code: 1006 })
+        expect(session.phase).toBe('disconnected')
+
+        // Advance past the first backoff → fresh `create`, transport reconnected.
+        await vi.advanceTimersByTimeAsync(1500)
+        // Relay reports the channel connected again.
+        receiveConnected(transport, session, walletKp.publicKeyB64)
+        expect(session.phase).toBe('connected')
+
+        // The same request was re-sent: same id, new (higher) seq, same payload.
+        const second = reqFrames()
+        expect(second).toHaveLength(2)
+        expect(second[1].body.id).toBe(first[0].body.id)
+        const secondDecoded = decodeReq(second[1], sendKey)
+        expect(secondDecoded.seq).toBeGreaterThan(firstDecoded.seq)
+        expect(secondDecoded.data).toEqual(firstDecoded.data)
+
+        // Responding to the re-sent request resolves the original promise.
+        const id = second[1].body.id
+        transport.receive({
+          v: 1,
+          t: 'res',
+          ch: session.channelId,
+          ts: Date.now(),
+          from: walletKp.publicKeyB64,
+          body: {
+            id,
+            sealed: sealPayload(
+              walletToDappKey,
+              session.channelId,
+              0,
+              { _ok: true, _result: ['0xabc'] },
+              { type: 'res', from: walletKp.publicKeyB64, id },
+            ),
+          },
+        } as ProtocolMessage)
+        await expect(promise).resolves.toEqual(['0xabc'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does NOT re-send when resendOnReconnect is false', async () => {
+      vi.useFakeTimers()
+      const noResend = new DAppSession({
+        transport,
+        meta: { name: 'x', description: '', url: '', icon: '' },
+        resendOnReconnect: false,
+      })
+      try {
+        const { walletKp } = await connectWithKeys(noResend)
+        const p = noResend.request('wallet_getAccounts')
+        p.catch(() => {}) // keep unhandled rejection quiet
+        expect(reqFrames()).toHaveLength(1)
+
+        transport.simulateClose({ code: 1006 })
+        await vi.advanceTimersByTimeAsync(1500)
+        receiveConnected(transport, noResend, walletKp.publicKeyB64)
+
+        expect(reqFrames()).toHaveLength(1) // no re-send
+        noResend.close()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  describe('reject pending on inbound close / terminate (P0-3)', () => {
+    async function connectSession(): Promise<ReturnType<typeof generateX25519KeyPair>> {
+      await session.createPairing()
+      const walletKp = generateX25519KeyPair()
+      receiveFreshJoin(transport, session, walletKp)
+      receiveConnected(transport, session, walletKp.publicKeyB64)
+      expect(session.phase).toBe('connected')
+      return walletKp
+    }
+
+    function receiveTerminate(reason: string): void {
+      transport.receive({
+        v: 1,
+        t: 'terminate',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: '_adapter',
+        body: { reason },
+      } as ProtocolMessage)
+    }
+
+    it('rejects pending requests immediately on an inbound close', async () => {
+      const walletKp = await connectSession()
+      const p = session.request('wallet_getAccounts')
+      const rejected = expect(p).rejects.toThrow('Session closed by peer')
+      transport.receive({
+        v: 1,
+        t: 'close',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
+        body: { reason: 'normal' },
+      } as ProtocolMessage)
+      await rejected
+      expect(session.phase).toBe('closed')
+      expect((session as any).pendingRequests.size).toBe(0)
+    })
+
+    it('rejects pending requests immediately on a terminal terminate', async () => {
+      await connectSession()
+      const p = session.request('wallet_getAccounts')
+      const rejected = expect(p).rejects.toThrow('Session terminated: user_rejected')
+      receiveTerminate('user_rejected')
+      await rejected
+      expect(session.phase).toBe('closed')
+      expect((session as any).pendingRequests.size).toBe(0)
+    })
+
+    it('keeps pending requests on a recoverable terminate (they are re-sent on reconnect)', async () => {
+      await connectSession()
+      const p = session.request('wallet_getAccounts')
+      let settled = false
+      p.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        },
+      )
+      receiveTerminate('rate_limited')
+      await flushMicrotasks()
+      expect(session.phase).toBe('disconnected')
+      expect(settled).toBe(false)
+      expect((session as any).pendingRequests.size).toBe(1)
+      session.close() // cleanup (rejects the still-pending promise, already caught)
+    })
+  })
+
+  describe('heartbeat / liveness (P0-2)', () => {
+    async function connectHb(opts: Record<string, unknown>): Promise<{
+      s: DAppSession
+      walletKp: ReturnType<typeof generateX25519KeyPair>
+    }> {
+      const s = new DAppSession({
+        transport,
+        meta: { name: 'hb', description: '', url: '', icon: '' },
+        ...opts,
+      })
+      await s.createPairing()
+      const walletKp = generateX25519KeyPair()
+      receiveFreshJoin(transport, s, walletKp)
+      receiveConnected(transport, s, walletKp.publicKeyB64)
+      expect(s.phase).toBe('connected')
+      return { s, walletKp }
+    }
+
+    const pings = () => transport.sent.filter((m) => m.t === 'ping').length
+
+    it('pings on the interval and forces a reconnect when no pong arrives', async () => {
+      vi.useFakeTimers()
+      let s: DAppSession | undefined
+      try {
+        const conn = await connectHb({ heartbeatInterval: 1000, heartbeatTimeout: 500 })
+        s = conn.s
+        const disconnectSpy = vi.spyOn(transport, 'disconnect')
+        const before = pings()
+
+        await vi.advanceTimersByTimeAsync(1000) // one interval → a ping
+        expect(pings()).toBe(before + 1)
+
+        await vi.advanceTimersByTimeAsync(500) // no pong within timeout → dead
+        expect(disconnectSpy).toHaveBeenCalled()
+        expect(s.phase).toBe('disconnected')
+      } finally {
+        vi.useRealTimers()
+        s?.close()
+      }
+    })
+
+    it('stays connected while pongs keep arriving', async () => {
+      vi.useFakeTimers()
+      let s: DAppSession | undefined
+      try {
+        const conn = await connectHb({ heartbeatInterval: 1000, heartbeatTimeout: 500 })
+        s = conn.s
+        const disconnectSpy = vi.spyOn(transport, 'disconnect')
+
+        await vi.advanceTimersByTimeAsync(1000) // ping sent, awaiting pong
+        transport.receive({
+          v: 1,
+          t: 'pong',
+          ch: s.channelId,
+          ts: Date.now(),
+          from: conn.walletKp.publicKeyB64,
+          body: {},
+        } as ProtocolMessage)
+
+        await vi.advanceTimersByTimeAsync(1000) // would have fired liveness without the pong
+        expect(disconnectSpy).not.toHaveBeenCalled()
+        expect(s.phase).toBe('connected')
+      } finally {
+        vi.useRealTimers()
+        s?.close()
+      }
+    })
+
+    it('does not start a heartbeat when heartbeatInterval is 0', async () => {
+      vi.useFakeTimers()
+      let s: DAppSession | undefined
+      try {
+        const conn = await connectHb({ heartbeatInterval: 0 })
+        s = conn.s
+        const disconnectSpy = vi.spyOn(transport, 'disconnect')
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(pings()).toBe(0)
+        expect(disconnectSpy).not.toHaveBeenCalled()
+        expect(s.phase).toBe('connected')
+      } finally {
+        vi.useRealTimers()
+        s?.close()
+      }
+    })
+  })
+
+  describe('bounded reconnect + cleanup (P0-4)', () => {
+    it('gives up after maxReconnectAttempts, emits reconnectExhausted, rejects pending', async () => {
+      vi.useFakeTimers()
+      const s = new DAppSession({
+        transport,
+        meta: { name: 'x', description: '', url: '', icon: '' },
+        maxReconnectAttempts: 2,
+        heartbeatInterval: 0,
+      })
+      let exhausted: { attempts: number } | undefined
+      s.on('reconnectExhausted', (e) => {
+        exhausted = e as { attempts: number }
+      })
+      try {
+        await s.createPairing()
+        const walletKp = generateX25519KeyPair()
+        receiveFreshJoin(transport, s, walletKp)
+        receiveConnected(transport, s, walletKp.publicKeyB64)
+        expect(s.phase).toBe('connected')
+
+        const p = s.request('wallet_getAccounts')
+        const rejected = expect(p).rejects.toThrow(/Reconnect failed/)
+
+        // Every reconnect attempt now fails at the transport level.
+        ;(transport as unknown as { connect: () => Promise<void> }).connect = async () => {
+          throw new Error('connect failed')
+        }
+        transport.simulateClose({ code: 1006 })
+
+        await vi.advanceTimersByTimeAsync(15_000)
+
+        expect(exhausted).toBeDefined()
+        expect(exhausted?.attempts).toBeGreaterThanOrEqual(2)
+        expect(s.phase).toBe('closed')
+        await rejected
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('clears the pending-accept timer on a transport drop (no bogus close)', async () => {
+      vi.useFakeTimers()
+      const s = new DAppSession({
+        transport,
+        meta: { name: 'x', description: '', url: '', icon: '' },
+        autoAccept: false,
+        heartbeatInterval: 0,
+      })
+      try {
+        await s.createPairing()
+        const walletKp = generateX25519KeyPair()
+        receiveFreshJoin(transport, s, walletKp)
+        expect(s.phase).toBe('pending_accept') // 60s accept timer armed
+
+        transport.simulateClose({ code: 1006 })
+        expect(s.phase).toBe('disconnected')
+
+        // Past the 60s accept timeout. Without the cleanup, the stale accept
+        // timer would fire close('timeout') and move the session to 'closed'.
+        await vi.advanceTimersByTimeAsync(70_000)
+        expect(s.phase).not.toBe('closed')
+      } finally {
+        vi.useRealTimers()
+        s.close()
+      }
     })
   })
 })

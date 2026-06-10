@@ -14,6 +14,7 @@ import type {
   Capabilities,
   ProtocolMessage,
   Transport,
+  TransportCloseInfo,
   TransportState,
   WalletMeta,
 } from './types.js'
@@ -79,7 +80,7 @@ export class MockTransport implements Transport {
   sent: ProtocolMessage[] = []
 
   private messageHandler: ((msg: ProtocolMessage) => void) | null = null
-  private closeHandler: (() => void) | null = null
+  private closeHandler: ((info?: TransportCloseInfo) => void) | null = null
   private openHandler: (() => void) | null = null
 
   /** Link to the peer's transport. */
@@ -88,7 +89,7 @@ export class MockTransport implements Transport {
   onMessage(handler: (msg: ProtocolMessage) => void): void {
     this.messageHandler = handler
   }
-  onClose(handler: () => void): void {
+  onClose(handler: (info?: TransportCloseInfo) => void): void {
     this.closeHandler = handler
   }
   onOpen(handler: () => void): void {
@@ -119,9 +120,9 @@ export class MockTransport implements Transport {
   }
 
   /** Simulate transport close (disconnect from relay). */
-  simulateClose(): void {
+  simulateClose(info?: TransportCloseInfo): void {
     this.state = 'disconnected'
-    this.closeHandler?.()
+    this.closeHandler?.(info)
   }
 }
 
