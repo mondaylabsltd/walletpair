@@ -143,12 +143,21 @@ describe('E2E: EVM provider ↔ wallet (smart contract wallet)', () => {
     })
     expect(otherCode).toBe('0x')
 
-    // --- EIP-5792: wallet_sendCalls returns a batch id ---
-    const batchId = await provider.request({
+    // --- EIP-5792: wallet_sendCalls returns { id } (spec v2.0.0 object shape) ---
+    const sendCallsResult = (await provider.request({
       method: 'wallet_sendCalls',
-      params: [{ version: '2.0.0', chainId: '0x1', from: WALLET_ADDR, calls: [{ to: '0xdead', value: '0x0' }] }],
-    })
-    expect(batchId).toBe('0xbatch001')
+      params: [
+        {
+          version: '2.0.0',
+          chainId: '0x1',
+          from: WALLET_ADDR,
+          atomicRequired: false,
+          calls: [{ to: '0xdead', value: '0x0' }],
+        },
+      ],
+    })) as { id: string }
+    expect(sendCallsResult).toEqual({ id: '0xbatch001' })
+    const batchId = sendCallsResult.id
 
     // --- EIP-5792: wallet_getCallsStatus resolves the batch ---
     const status = (await provider.request({
@@ -157,6 +166,86 @@ describe('E2E: EVM provider ↔ wallet (smart contract wallet)', () => {
     })) as { status: number; id: string }
     expect(status.status).toBe(200)
     expect(status.id).toBe('0xbatch001')
+
+    dappSession.close()
+  })
+
+  // --------------------------------------------------------------------------
+  // eth_sendTransaction without an embedded chainId (PancakeSwap pattern):
+  // the dApp switches networks first, then sends a tx relying on the wallet's
+  // active chain. The provider must fill tx.chainId from the session chain and
+  // keep the top-level `chain` param consistent.
+  // --------------------------------------------------------------------------
+  it('fills tx.chainId from the session chain when the dApp omits it (incl. after a switch)', async () => {
+    const dappTransport = new MockTransport()
+    const walletTransport = new MockTransport()
+    const _relay = new MockRelay(dappTransport, walletTransport)
+
+    const dappSession = new DAppSession({
+      transport: dappTransport,
+      meta: { name: 'Test dApp', description: 'Test', url: 'https://test.com', icon: 'https://test.com/icon.png' },
+    })
+    const provider = new WalletPairProvider({ session: dappSession, chainId: 1 })
+
+    const walletSession = new WalletSession({
+      transport: walletTransport,
+      capabilities: {
+        methods: ['wallet_getAccounts', 'wallet_sendTransaction', 'wallet_switchChain'],
+        chains: ['eip155:1', 'eip155:56'],
+        events: ['chainChanged'],
+      },
+      meta: { name: 'Wallet', description: 'Test wallet', url: 'https://wallet.com', icon: 'https://wallet.com/icon.png', address: WALLET_ADDR },
+    })
+
+    // Capture what the wallet actually receives for each sendTransaction.
+    const received: { chain: unknown; tx: Record<string, unknown> | undefined }[] = []
+    walletSession.on('request', ({ id, method, params }) => {
+      const p = params as { chain?: unknown; tx?: Record<string, unknown> }
+      switch (method) {
+        case 'wallet_getAccounts':
+          return walletSession.approve(id, [WALLET_ADDR])
+        case 'wallet_switchChain':
+          walletSession.approve(id, { chain: (p as { chain: string }).chain })
+          // Per EVM sub-protocol §6.6 the wallet MUST emit chainChanged.
+          walletSession.pushEvent('chainChanged', { chain: (p as { chain: string }).chain })
+          return
+        case 'wallet_sendTransaction':
+          received.push({ chain: p.chain, tx: p.tx })
+          return walletSession.approve(id, { txHash: '0xtx...' })
+        default:
+          return walletSession.reject(id, 'unsupported_method', method)
+      }
+    })
+
+    const pairingUri = await dappSession.createPairing()
+    await wait()
+    await walletSession.joinFromUri(pairingUri)
+    await wait()
+    await provider.request({ method: 'eth_requestAccounts' })
+
+    // 1) No switch, no embedded chainId → filled from the default session chain (1).
+    const hash1 = await provider.request({
+      method: 'eth_sendTransaction',
+      params: [{ from: WALLET_ADDR, to: '0xdead', value: '0x0' }],
+    })
+    expect(hash1).toBe('0xtx...')
+    expect(received[0]?.chain).toBe('eip155:1')
+    expect(received[0]?.tx?.chainId).toBe('0x1')
+
+    // 2) dApp switches to BSC (56), then sends a tx WITHOUT chainId.
+    await provider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: '0x38' }],
+    })
+    await wait() // let the chainChanged event propagate to the provider
+    expect(provider.getChainId()).toBe('0x38')
+
+    await provider.request({
+      method: 'eth_sendTransaction',
+      params: [{ from: WALLET_ADDR, to: '0xdead', value: '0x0' }],
+    })
+    expect(received[1]?.chain).toBe('eip155:56')
+    expect(received[1]?.tx?.chainId).toBe('0x38')
 
     dappSession.close()
   })

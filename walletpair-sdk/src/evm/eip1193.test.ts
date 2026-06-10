@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AadHeader } from '../crypto.js'
 import {
   b64urlDecode,
@@ -35,7 +35,9 @@ describe('WalletPairProvider', () => {
         icon: 'https://test.com/icon.png',
       },
     })
-    provider = new WalletPairProvider({ session, chainId })
+    // ethereumDataUrl: null keeps unit tests offline/deterministic — the network
+    // RPC fallback is exercised separately with a mocked fetch.
+    provider = new WalletPairProvider({ session, chainId, ethereumDataUrl: null })
 
     await session.createPairing()
     walletKp = generateX25519KeyPair()
@@ -249,6 +251,46 @@ describe('WalletPairProvider', () => {
       respondToLatestReq({ success: true })
       await promise
     })
+
+    it('syncs chainId and emits chainChanged on success without waiting for the wallet event', async () => {
+      await setupConnectedSession(1)
+      const handler = vi.fn()
+      provider.on('chainChanged', handler)
+
+      const promise = provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x89' }],
+      })
+      await flushMicrotasks()
+      respondToLatestReq({ success: true })
+      await promise
+
+      // eth_chainId must reflect the new chain immediately — before the wallet's
+      // chainChanged event arrives — so viem/wagmi don't see a network mismatch.
+      expect(await provider.request({ method: 'eth_chainId' })).toBe('0x89')
+      expect(handler).toHaveBeenCalledWith('0x89')
+
+      // A redundant chainChanged event from the wallet for the same chain is de-duped.
+      handler.mockClear()
+      transport.receive({
+        v: 1,
+        t: 'evt',
+        ch: session.channelId,
+        ts: Date.now(),
+        from: walletKp.publicKeyB64,
+        body: {
+          id: 'evt-dup',
+          sealed: sealPayload(
+            sessionKey,
+            session.channelId,
+            walletSendSeq++,
+            { _event: 'chainChanged', chain: 'eip155:137' },
+            { type: 'evt', from: walletKp.publicKeyB64, id: 'evt-dup' },
+          ),
+        },
+      } as ProtocolMessage)
+      expect(handler).not.toHaveBeenCalled()
+    })
   })
 
   // -----------------------------------------------------------------------
@@ -446,6 +488,147 @@ describe('WalletPairProvider', () => {
   })
 
   // -----------------------------------------------------------------------
+  // Read-only RPC interception (served dApp-side, never relayed to wallet)
+  // -----------------------------------------------------------------------
+
+  describe('read-only RPC interception', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    // A fetch mock that returns a JSON-RPC result for any RPC POST.
+    function rpcResult(result: unknown) {
+      return { ok: true, headers: { get: () => null }, json: async () => ({ result }) }
+    }
+
+    function countRelayReqs(): number {
+      return transport.sent.filter((m) => m.t === 'req').length
+    }
+
+    it('serves a read-only call from wallet-advertised rpcUrls instead of relaying', async () => {
+      await setupConnectedSession(1)
+      ;(session as any).walletCapabilities = {
+        ...(session as any).walletCapabilities,
+        rpcUrls: { 'eip155:1': 'https://wallet.rpc.test' },
+      }
+      const fetchMock = vi.fn().mockResolvedValue(rpcResult('0xbalance'))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const result = await provider.request({ method: 'eth_getBalance', params: ['0x1', 'latest'] })
+
+      expect(result).toBe('0xbalance')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock.mock.calls[0]?.[0]).toBe('https://wallet.rpc.test')
+      expect(countRelayReqs()).toBe(0) // never touched the wallet channel
+    })
+
+    it('prefers constructor rpcUrls over wallet rpcUrls', async () => {
+      await setupConnectedSession(1)
+      ;(session as any).walletCapabilities = {
+        ...(session as any).walletCapabilities,
+        rpcUrls: { 'eip155:1': 'https://wallet.rpc.test' },
+      }
+      const ctorProvider = new WalletPairProvider({
+        session,
+        chainId: 1,
+        ethereumDataUrl: null,
+        rpcUrls: { 1: 'https://ctor.rpc.test' },
+      })
+      const fetchMock = vi.fn().mockResolvedValue(rpcResult('0x5'))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const result = await ctorProvider.request({ method: 'eth_blockNumber', params: [] })
+
+      expect(result).toBe('0x5')
+      expect(fetchMock.mock.calls[0]?.[0]).toBe('https://ctor.rpc.test')
+    })
+
+    it('falls back to the ethereum-data service when no rpcUrls are known', async () => {
+      await setupConnectedSession(1)
+      const edProvider = new WalletPairProvider({ session, chainId: 137 }) // ethereum-data enabled
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: { get: () => null },
+          // insecure + placeholder URLs must be filtered out
+          json: async () => ({ rpc: ['http://insecure', 'https://${KEY}', 'https://poly.public.test'] }),
+        })
+        .mockResolvedValueOnce(rpcResult('0xblock'))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const result = await edProvider.request({ method: 'eth_blockNumber', params: [] })
+
+      expect(result).toBe('0xblock')
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        'https://ethereum-data.awesometools.dev/chains/eip155-137.json',
+      )
+      expect(fetchMock.mock.calls[1]?.[0]).toBe('https://poly.public.test')
+      expect(countRelayReqs()).toBe(0)
+    })
+
+    it('de-duplicates the ethereum-data lookup across concurrent reads (single-flight)', async () => {
+      await setupConnectedSession(1)
+      const edProvider = new WalletPairProvider({ session, chainId: 137 })
+      const fetchMock = vi.fn().mockImplementation((url: string) =>
+        String(url).includes('/chains/')
+          ? Promise.resolve({
+              ok: true,
+              headers: { get: () => null },
+              json: async () => ({ rpc: ['https://poly.public.test'] }),
+            })
+          : Promise.resolve(rpcResult('0xok')),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+
+      await Promise.all([
+        edProvider.request({ method: 'eth_blockNumber', params: [] }),
+        edProvider.request({ method: 'eth_gasPrice', params: [] }),
+        edProvider.request({ method: 'eth_blockNumber', params: [] }),
+      ])
+
+      const chainLookups = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/chains/'))
+      expect(chainLookups.length).toBe(1)
+    })
+
+    it('propagates an execution revert without masking it or relaying', async () => {
+      await setupConnectedSession(1)
+      ;(session as any).walletCapabilities = {
+        ...(session as any).walletCapabilities,
+        rpcUrls: { 'eip155:1': 'https://wallet.rpc.test' },
+      }
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({ error: { code: 3, message: 'execution reverted' } }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      await expect(
+        provider.request({ method: 'eth_call', params: [{ to: '0x1' }, 'latest'] }),
+      ).rejects.toThrow('execution reverted')
+      expect(countRelayReqs()).toBe(0)
+    })
+
+    it('falls back to the wallet relay when every endpoint fails at the transport level', async () => {
+      await setupConnectedSession(1)
+      ;(session as any).walletCapabilities = {
+        ...(session as any).walletCapabilities,
+        rpcUrls: { 'eip155:1': 'https://down.rpc.test' },
+      }
+      const fetchMock = vi.fn().mockRejectedValue(new Error('network down'))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const promise = provider.request({ method: 'eth_getBalance', params: ['0x1', 'latest'] })
+      await flushMicrotasks()
+      respondToLatestReq('0xrelayed')
+
+      expect(await promise).toBe('0xrelayed')
+      expect(countRelayReqs()).toBe(1)
+    })
+  })
+
+  // -----------------------------------------------------------------------
   // eth_getCode — counterfactual smart-account override
   // -----------------------------------------------------------------------
 
@@ -525,6 +708,128 @@ describe('WalletPairProvider', () => {
 
       const result = await provider.request({ method: 'eth_getCode', params: ['0xabc123', 'latest'] })
       expect(result).toBe('0x6080604052deployed')
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // wallet_sendCalls (EIP-5792)
+  // -----------------------------------------------------------------------
+
+  describe('wallet_sendCalls (EIP-5792)', () => {
+    it('returns the spec object { id } when the wallet responds with { id }', async () => {
+      await setupConnectedSession()
+
+      const promise = provider.request({
+        method: 'wallet_sendCalls',
+        params: [
+          {
+            version: '2.0.0',
+            chainId: '0x1',
+            from: '0xabc',
+            atomicRequired: false,
+            calls: [{ to: '0xdead', value: '0x0' }],
+          },
+        ],
+      })
+      await flushMicrotasks()
+      respondToLatestReq({ id: '0xbatch001' })
+      const result = await promise
+      // EIP-5792 v2.0.0: wallet_sendCalls returns an object, NOT a bare string.
+      expect(result).toEqual({ id: '0xbatch001' })
+    })
+
+    it('preserves the capabilities field on the result object', async () => {
+      await setupConnectedSession()
+
+      const promise = provider.request({
+        method: 'wallet_sendCalls',
+        params: [{ version: '2.0.0', chainId: '0x1', atomicRequired: false, calls: [] }],
+      })
+      await flushMicrotasks()
+      respondToLatestReq({ id: '0xbatch002', capabilities: { atomic: { status: 'supported' } } })
+      const result = await promise
+      expect(result).toEqual({
+        id: '0xbatch002',
+        capabilities: { atomic: { status: 'supported' } },
+      })
+    })
+
+    it('normalizes a legacy bare-string wallet response to { id }', async () => {
+      await setupConnectedSession()
+
+      const promise = provider.request({
+        method: 'wallet_sendCalls',
+        params: [{ version: '2.0.0', chainId: '0x1', atomicRequired: false, calls: [] }],
+      })
+      await flushMicrotasks()
+      // Pre-2.0.0 wallets answered with a bare id string — normalize it.
+      respondToLatestReq('0xlegacybatch')
+      const result = await promise
+      expect(result).toEqual({ id: '0xlegacybatch' })
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // wallet_getCapabilities (EIP-5792)
+  // -----------------------------------------------------------------------
+
+  describe('wallet_getCapabilities (EIP-5792)', () => {
+    const CAPS = {
+      '0x1': { atomic: { status: 'supported' } },
+      '0x89': { atomic: { status: 'supported' } },
+    }
+
+    async function connectWithCaps() {
+      await setupConnectedSession()
+      ;(session as any).walletCapabilities = {
+        ...(session as any).walletCapabilities,
+        walletCapabilities: CAPS,
+      }
+    }
+
+    it('is answered locally (no relay round-trip)', async () => {
+      await connectWithCaps()
+      const before = transport.sent.length
+      await provider.request({ method: 'wallet_getCapabilities', params: ['0xabc'] })
+      // No new `req` frame was emitted on the wire.
+      expect(transport.sent.filter((m) => m.t === 'req').length).toBe(0)
+      expect(transport.sent.length).toBe(before)
+    })
+
+    it('returns the full capabilities record when no chain filter is given', async () => {
+      await connectWithCaps()
+      const result = await provider.request({
+        method: 'wallet_getCapabilities',
+        params: ['0xabc'],
+      })
+      expect(result).toEqual(CAPS)
+    })
+
+    it('filters to the requested chains (EIP-5792 [address, [chainIds]])', async () => {
+      await connectWithCaps()
+      const result = await provider.request({
+        method: 'wallet_getCapabilities',
+        params: ['0xabc', ['0x89']],
+      })
+      expect(result).toEqual({ '0x89': { atomic: { status: 'supported' } } })
+    })
+
+    it('matches chain ids by numeric value (ignores hex casing / leading zeros)', async () => {
+      await connectWithCaps()
+      const result = await provider.request({
+        method: 'wallet_getCapabilities',
+        params: ['0xabc', ['0x01']],
+      })
+      expect(result).toEqual({ '0x1': { atomic: { status: 'supported' } } })
+    })
+
+    it('returns an empty object when capabilities are not yet available', async () => {
+      await setupConnectedSession()
+      const result = await provider.request({
+        method: 'wallet_getCapabilities',
+        params: ['0xabc'],
+      })
+      expect(result).toEqual({})
     })
   })
 
