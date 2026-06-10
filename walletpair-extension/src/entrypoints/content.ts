@@ -82,6 +82,13 @@ export default defineContentScript({
       }, '*');
     }
 
+    // The MAIN-world provider dispatches this synchronously while the dApp's
+    // user gesture is still active. Relaying via sendMessage right now forwards
+    // the user activation to the service worker so it may open the side panel.
+    window.addEventListener('walletpair:open-panel', () => {
+      chrome.runtime.sendMessage({ action: 'open-panel' }).catch(() => {});
+    });
+
     // Forward RPC requests from page -> background
     window.addEventListener('message', (event) => {
       if (event.source !== window || event.data?.channel !== MSG_CHANNEL) return;

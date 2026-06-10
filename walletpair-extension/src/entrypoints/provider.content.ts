@@ -17,6 +17,11 @@ export default defineContentScript({
 
     const { provider, handleMessage } = createProvider(
       (message, targetOrigin) => window.postMessage(message, targetOrigin),
+      // Fires synchronously inside the dApp's click handler. Dispatching a
+      // CustomEvent reaches the isolated-world content script in the same call
+      // stack, so user activation is preserved long enough to open the side
+      // panel from the service worker.
+      () => window.dispatchEvent(new CustomEvent('walletpair:open-panel')),
     );
 
     // --- Listen for responses and events from content script bridge ---

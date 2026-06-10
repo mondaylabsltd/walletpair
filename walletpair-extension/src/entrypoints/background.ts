@@ -182,7 +182,6 @@ function attachSessionListeners(autoAccepted: boolean) {
       case 'connected':
         updateState({ phase: 'connected' });
         pairingInProgress = false;
-        clearActionBadge();
         resetReconnectBackoff();
         saveSessionState(sessionRef.serialize()).catch((e) => console.warn('[WalletPair]', e));
         saveConnectedAt(Date.now()).catch((e) => console.warn('[WalletPair]', e));
@@ -296,7 +295,6 @@ function handleSessionClosed() {
 
   // Clear keepalive alarm
   chrome.alarms.clear('walletpair-keepalive');
-  clearActionBadge();
 
   updateState({
     phase: 'idle',
@@ -649,31 +647,18 @@ function flushDeferredRequests() {
   }
 }
 
-function showActionBadge() {
-  chrome.action.setBadgeText({ text: '●' }).catch(() => {});
-  chrome.action.setBadgeBackgroundColor({ color: '#2563eb' }).catch(() => {});
-}
-
-function clearActionBadge() {
-  chrome.action.setBadgeText({ text: '' }).catch(() => {});
-}
-
 async function openPopup() {
   // Side-panel only: never spawn a separate popup window or action popup.
-  // chrome.sidePanel.open() requires transient user activation, which is lost
-  // along the dApp → content-script → port → service-worker message chain, so
-  // the auto-open often rejects. When it does, badge the toolbar icon so the
-  // user clicks it (a real gesture) to open the panel — never open a window.
+  // Auto-opening the panel reliably happens via the 'open-panel' message that
+  // carries the dApp's user gesture (see onMessage). This best-effort attempt
+  // covers non-gesture flows; it silently no-ops when activation is missing.
   try {
     let windowId = (await chrome.windows.getLastFocused().catch(() => null))?.id;
     if (windowId == null) windowId = (await chrome.windows.getCurrent().catch(() => null))?.id;
-    if (windowId == null) throw new Error('no focused window');
-    await (chrome.sidePanel as any).open({ windowId });
-    clearActionBadge();
-  } catch (e) {
-    // Panel may already be open, or no user gesture is available.
-    console.warn('[WalletPair] sidePanel.open failed; badging action icon:', e);
-    showActionBadge();
+    if (windowId != null) await (chrome.sidePanel as any).open({ windowId });
+  } catch {
+    // No user activation here — the gesture-forwarded 'open-panel' path handles
+    // the common case, so just leave the panel closed rather than open a window.
   }
 }
 
@@ -682,6 +667,20 @@ async function openPopup() {
 export default defineBackground(() => {
   // Default to side panel mode: clicking the extension icon opens side panel
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+
+  // Dedicated listener for the gesture-forwarded panel open. Kept separate from
+  // the async handler below so sidePanel.open() runs synchronously within the
+  // user activation propagated from the content script's sendMessage — this is
+  // what makes the side panel auto-open on a dApp connect click.
+  chrome.runtime.onMessage.addListener((msg: BackgroundMessage, sender: any) => {
+    if (msg?.action !== 'open-panel') return;
+    const tabId = sender.tab?.id;
+    if (tabId == null) return;
+    (chrome.sidePanel as any)
+      .open({ tabId })
+      .catch((e: any) => console.warn('[WalletPair] open-panel failed:', e));
+    // No return true: response is sent by the main handler's 'open-panel' case.
+  });
 
   // Handle port connections from content scripts
   chrome.runtime.onConnect.addListener((port) => {
@@ -717,9 +716,10 @@ export default defineBackground(() => {
           sendResponse(state);
           break;
 
-        case 'ui-opened':
-          // The side panel mounted — it's now visible, so drop the badge hint.
-          clearActionBadge();
+        case 'open-panel':
+          // Handled synchronously by the dedicated listener below (which can
+          // call sidePanel.open within the forwarded user gesture). Ack here so
+          // the message channel closes cleanly.
           sendResponse({ ok: true });
           break;
 

@@ -63,7 +63,7 @@ export type BackgroundMessage =
   | { action: 'get-confirmation'; id: string }
   | { action: 'approve-confirmation'; id: string }
   | { action: 'reject-confirmation'; id: string }
-  | { action: 'ui-opened' };
+  | { action: 'open-panel' };
 
 /** State shared from background to popup/content */
 export interface ExtensionState {

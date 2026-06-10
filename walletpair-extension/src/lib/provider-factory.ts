@@ -30,6 +30,16 @@ export interface PostMessageFn {
   (message: any, targetOrigin: string): void;
 }
 
+/** Methods that should surface the wallet UI (and thus open the side panel). */
+const UI_SURFACING_METHODS = new Set([
+  'eth_requestAccounts',
+  'wallet_requestPermissions',
+]);
+
+export interface GestureFn {
+  (method: string): void;
+}
+
 export interface ProviderState {
   accounts: string[];
   chainId: string;
@@ -41,8 +51,11 @@ export interface ProviderState {
  *
  * @param postMessage - function used to send messages to the content bridge
  *                      (defaults to window.postMessage)
+ * @param onGesture   - optional synchronous hook invoked for UI-surfacing
+ *                      methods (e.g. eth_requestAccounts) while the dApp's user
+ *                      gesture is still active, used to open the side panel.
  */
-export function createProvider(postMessage: PostMessageFn) {
+export function createProvider(postMessage: PostMessageFn, onGesture?: GestureFn) {
   const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   let reqCounter = 0;
   const eventListeners = new Map<string, Set<(...args: any[]) => void>>();
@@ -81,6 +94,13 @@ export function createProvider(postMessage: PostMessageFn) {
       }
       if (method === 'web3_clientVersion') {
         return 'WalletPair/0.1.0';
+      }
+
+      // Synchronously, while the dApp's user gesture is still active, signal
+      // that the wallet UI should surface. This must happen before the async
+      // postMessage below so the side panel can open with user activation.
+      if (UI_SURFACING_METHODS.has(method)) {
+        try { onGesture?.(method); } catch {}
       }
 
       const id = `wp-${++reqCounter}-${Date.now()}`;
