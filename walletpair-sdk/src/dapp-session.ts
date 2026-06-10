@@ -41,7 +41,7 @@ import type {
 } from './types.js'
 
 const BACKOFF = [1000, 2000, 5000, 10000, 30000]
-const DEFAULT_REQUEST_TIMEOUT = 120_000
+const DEFAULT_REQUEST_TIMEOUT = 300_000
 const PENDING_ACCEPT_TIMEOUT = 60_000
 const MAX_SEND_SEQ = 2 ** 31
 const MAX_PENDING_REQUESTS = 32 // §15 rule 11
