@@ -1,6 +1,6 @@
 # WalletPair
 
-A minimal, self-sovereign two-party channel protocol for connecting dApps with blockchain wallets over any transport.
+A minimal, self-sovereign two-party channel protocol for connecting dApps with blockchain wallets over a WebSocket relay.
 
 WalletPair replaces centralized pairing services with a zero-registration, relay-blind protocol. The dApp creates a channel and generates a pairing URI (QR code), the wallet scans it, and after a cryptographic handshake with visual confirmation, they establish an end-to-end encrypted session.
 

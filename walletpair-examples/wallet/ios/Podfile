@@ -25,9 +25,6 @@ prepare_react_native_project!
 target 'wallet' do
   use_expo_modules!
 
-  # Local BLE Peripheral module (Expo autolinking doesn't pick up local modules' pods automatically)
-  pod 'BlePeripheral', path: '../modules/ble-peripheral/ios'
-
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else

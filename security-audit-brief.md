@@ -148,12 +148,12 @@ dApp private key + wallet public key
 
 ## 4. Threat Model
 
-### Attacker Capabilities (from spec Section 19)
+### Attacker Capabilities (from spec Section 18)
 
-The protocol assumes the relay or transport may be fully compromised. The attacker can:
+The protocol assumes the relay may be fully compromised. The attacker can:
 - Read all relay traffic (encrypted blobs + metadata)
 - Modify, drop, reorder, or replay messages in transit
-- Impersonate the adapter (send `terminate`)
+- Impersonate the relay (send `terminate`)
 - Create fake channels and attempt to squat legitimate ones
 
 ### What IS Protected

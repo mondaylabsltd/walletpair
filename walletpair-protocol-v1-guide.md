@@ -487,7 +487,7 @@ Recommended provider info:
 - `name`: Default "WalletPair Wallet". Update if the wallet provides
   a name via encrypted methods.
 - `icon`: Wallet's `meta.icon` if available, or generic WalletPair icon.
-  See spec Section 19.5 for icon URL privacy considerations.
+  See spec Section 18.4 for icon URL privacy considerations.
 - `rdns`: `io.walletpair.sdk`
 
 ## 12. Testing Checklist

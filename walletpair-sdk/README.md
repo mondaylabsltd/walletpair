@@ -284,6 +284,9 @@ Implement this to create custom transports:
 ```ts
 interface Transport {
   readonly state: 'disconnected' | 'connecting' | 'connected'
+  // Relay URL. Required on the dApp side: DAppSession.createPairing() reads
+  // it to embed the `relay` parameter in the pairing URI.
+  readonly url?: string
   send(msg: ProtocolMessage): void
   connect(): Promise<void>
   disconnect(): void

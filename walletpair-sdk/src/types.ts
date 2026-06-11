@@ -26,6 +26,13 @@ export interface TransportCloseInfo {
 
 export interface Transport {
   readonly state: TransportState
+  /**
+   * The relay URL this transport connects to. `DAppSession.createPairing()`
+   * reads it to embed the `relay` parameter in the pairing URI, so a transport
+   * used on the dApp side MUST expose a non-empty URL. `WebSocketTransport`
+   * sets this from its constructor argument.
+   */
+  readonly url?: string
   send(msg: ProtocolMessage): void
   connect(): Promise<void>
   disconnect(): void

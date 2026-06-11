@@ -177,13 +177,12 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     this.reqCounter = 0
     this.paired = false
     // Build pairing URI first (before transport connect, so the QR can be shown first)
-    const transportWithUrl = this.transport as Transport & { url?: unknown }
-    if (typeof transportWithUrl.url !== 'string' || !transportWithUrl.url) {
+    const relayUrl = this.transport.url
+    if (!relayUrl) {
       throw new Error(
         'DAppSession requires a relay-backed transport (e.g. WebSocketTransport) exposing a "url"',
       )
     }
-    const relayUrl = transportWithUrl.url
     this.pairingUri = buildPairingUri({
       channelId: this.channelId,
       pubkeyB64: this.pubKeyB64,

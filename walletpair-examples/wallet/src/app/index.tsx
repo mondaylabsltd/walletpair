@@ -444,7 +444,16 @@ export default function WalletScreen() {
       return;
     }
 
-    const parsed = wp.parsePairingUri(pairingUri);
+    let parsed: wp.PairingParams;
+    try {
+      parsed = wp.parsePairingUri(pairingUri);
+    } catch (e) {
+      Alert.alert(
+        'Invalid QR Code',
+        e instanceof Error ? e.message : 'Could not read the WalletPair pairing code.',
+      );
+      return;
+    }
     intentionalClose.current = false;
 
     const kp = wp.generateX25519KeyPair();

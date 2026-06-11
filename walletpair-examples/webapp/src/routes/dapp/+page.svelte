@@ -149,7 +149,7 @@
 	</header>
 
 	<section>
-		<h3>Transport</h3>
+		<h3>Relay</h3>
 		<div class="row">
 			<input bind:value={relayUrl} placeholder="ws://..." />
 			{#if phase === 'idle'}
