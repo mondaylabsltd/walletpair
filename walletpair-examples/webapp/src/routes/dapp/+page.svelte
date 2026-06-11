@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { DAppSession, WebSocketTransport } from 'walletpair-sdk';
-	import { WebBleCentralTransport, isWebBleSupported } from 'walletpair-sdk/ble';
 	import type { DAppPhase } from 'walletpair-sdk';
 	import QRCode from 'qrcode';
 	import MessageLog from '$lib/components/MessageLog.svelte';
@@ -8,24 +7,16 @@
 	// ---------------------------------------------------------------------------
 	// State
 	// ---------------------------------------------------------------------------
-	let transportMode: 'ws' | 'ble' = $state('ws');
 	let relayUrl = $state('ws://localhost:8080/v1');
 	let phase: DAppPhase = $state('idle');
 	let pairingUri = $state('');
 	let sessionFingerprint = $state('------');
 	let session: DAppSession | null = $state(null);
 	let qrDataUrl = $state('');
-	let bleSupported = $state(false);
-	let bleStatus = $state('');
 
 	let method = $state('wallet_getAccounts');
 	let params = $state('{}');
 	let log = $state<{ dir: 'out' | 'in' | 'err'; type: string; detail: string }[]>([]);
-
-	// Check BLE support on mount
-	$effect(() => {
-		bleSupported = isWebBleSupported();
-	});
 
 	// ---------------------------------------------------------------------------
 	// Helpers
@@ -98,43 +89,6 @@
 	}
 
 	// ---------------------------------------------------------------------------
-	// BLE Connect (two-phase: create channel first, scan later)
-	// ---------------------------------------------------------------------------
-	async function connectBleCreate() {
-		const transport = new WebBleCentralTransport();
-		const s = new DAppSession({ transport, meta: { name: 'WalletPair dApp', description: 'WalletPair example dApp', url: location.origin, icon: '' } } as ConstructorParameters<typeof DAppSession>[0]);
-		session = s;
-		setupSessionEvents(s);
-
-		try {
-			// Phase 1: create channel + keys, show QR, but DON'T connect BLE yet
-			await s.createPairing({ deferTransport: true });
-			sessionFingerprint = (s as unknown as { sessionFingerprint: string }).sessionFingerprint ?? '------';
-			addLog('out', 'create', `ch=${s.channelId.slice(0, 12)}... (BLE, deferred)`);
-			bleStatus = 'Channel created. Show QR to wallet, then click Scan.';
-		} catch (e: any) {
-			addLog('err', 'ble_create', e.message);
-			bleStatus = `Error: ${e.message}`;
-		}
-	}
-
-	async function bleScan() {
-		if (!session) return;
-		bleStatus = 'Scanning for wallet...';
-		addLog('out', 'ble', 'Opening BLE device picker...');
-
-		try {
-			// Phase 2: now connect transport (triggers browser BLE device picker)
-			await session.connectTransport();
-			bleStatus = 'BLE connected — waiting for wallet join';
-			addLog('in', 'ble', 'Connected to wallet peripheral');
-		} catch (e: any) {
-			bleStatus = `BLE error: ${e.message}`;
-			addLog('err', 'ble', e.message);
-		}
-	}
-
-	// ---------------------------------------------------------------------------
 	// Actions
 	// ---------------------------------------------------------------------------
 	async function sendRequest() {
@@ -173,7 +127,6 @@
 		pairingUri = '';
 		sessionFingerprint = '------';
 		qrDataUrl = '';
-		bleStatus = '';
 	}
 
 	function copyUri() {
@@ -197,45 +150,12 @@
 
 	<section>
 		<h3>Transport</h3>
-		<div class="row" style="margin-bottom:8px">
-			<button class:primary={transportMode === 'ws'} onclick={() => (transportMode = 'ws')}>
-				WebSocket
-			</button>
-			<button class:primary={transportMode === 'ble'} onclick={() => (transportMode = 'ble')}>
-				Bluetooth
-			</button>
-		</div>
-
-		{#if transportMode === 'ws'}
-			<div class="row">
-				<input bind:value={relayUrl} placeholder="ws://..." />
-				{#if phase === 'idle'}
-					<button class="primary" onclick={connectWs}>Connect</button>
-				{/if}
-			</div>
-		{:else}
-			{#if !bleSupported}
-				<div style="color:var(--muted);font-size:12px">
-					Web Bluetooth not supported in this browser (use Chrome)
-				</div>
-			{:else}
-				<div class="row">
-					<button class="primary" onclick={connectBleCreate} disabled={phase !== 'idle'}>
-						Create Channel
-					</button>
-					<button
-						class="primary"
-						onclick={bleScan}
-						disabled={phase === 'idle' || phase === 'connected'}
-					>
-						Scan for Wallet
-					</button>
-				</div>
-				{#if bleStatus}
-					<div style="color:var(--muted);font-size:12px;margin-top:6px">{bleStatus}</div>
-				{/if}
+		<div class="row">
+			<input bind:value={relayUrl} placeholder="ws://..." />
+			{#if phase === 'idle'}
+				<button class="primary" onclick={connectWs}>Connect</button>
 			{/if}
-		{/if}
+		</div>
 
 		{#if phase !== 'idle'}
 			<button class="danger mt" onclick={reset}>Reset</button>

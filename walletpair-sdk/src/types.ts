@@ -277,8 +277,8 @@ export interface WalletSessionEvents {
 export interface PairingParams {
   ch: string
   pubkey: string
-  /** Relay URL. Undefined when using direct transport (BLE). */
-  relay?: string | undefined
+  /** WebSocket relay URL. The relay is the WalletPair transport, so this is always present. */
+  relay: string
   name: string
   /** DApp website URL. */
   url: string

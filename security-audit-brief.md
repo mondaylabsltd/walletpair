@@ -13,7 +13,7 @@ Audit: First (no prior audits)
 | Component | Language | LOC (approx) | Key Files |
 |-----------|----------|-------------|-----------|
 | **Protocol spec** | Markdown | 2,700 | `walletpair-protocol-v1.md`, `walletpair-evm-subprotocol-v1.md`, `walletpair-protocol-v1-rationale.md`, `walletpair-protocol-v1-guide.md` |
-| **SDK** | TypeScript | ~20,000 (incl. tests) | `walletpair-sdk/src/crypto.ts`, `dapp-session.ts`, `wallet-session.ts`, `types.ts`, `ws-transport.ts`, `evm/eip1193.ts`, `evm/wagmi.ts`, `ble/framing.ts`, `ble/web-ble-transport.ts` |
+| **SDK** | TypeScript | ~20,000 (incl. tests) | `walletpair-sdk/src/crypto.ts`, `dapp-session.ts`, `wallet-session.ts`, `types.ts`, `ws-transport.ts`, `evm/eip1193.ts`, `evm/wagmi.ts` |
 | **Relay** | Rust | ~4,700 (src) + ~2,350 (tests) | `walletpair-websocket-relay/src/{relay,session,protocol,state,store,ratelimit,config,http,persist,metrics,shutdown}.rs` |
 | **Browser extension** | TypeScript + Svelte | ~7,500 | `walletpair-extension/src/entrypoints/background.ts`, `provider.content.ts`, `content.ts`, `src/lib/{messaging,storage,rpc-proxy,provider-factory,confirm-utils}.ts`, `src/entrypoints/confirm/App.svelte` |
 | **Formal verification** | ProVerif | 279 | `formal-verification/walletpair.pv` |
@@ -59,8 +59,6 @@ Audit: First (no prior audits)
        |                     |  - message sizes     |
        |                     |  - timing            |
        +---------------------+---------------------+
-
-  Alternative transport: BLE (no relay, direct peer-to-peer)
 ```
 
 ### Trust Boundaries
@@ -86,7 +84,7 @@ Audit: First (no prior audits)
                  Both derive: root_key -> transcript_hash -> traffic keys
 3. SESSION:    Encrypted req/res/evt via ChaCha20-Poly1305
                Directional keys: dapp_to_wallet_key, wallet_to_dapp_key
-4. CLOSE:      Either peer sends close, or adapter sends terminate
+4. CLOSE:      Either peer sends close, or relay sends terminate
                All key material zeroed on close
 ```
 
@@ -205,11 +203,9 @@ Ranked by protocol author's risk assessment (highest first):
 
 ### P2 -- Medium
 
-7. **BLE connection hijacking.** A nearby attacker can connect to the BLE GATT service before the legitimate wallet. Protocol limits damage to DoS (one-wallet-per-channel rule), but the user experience may be confusing. Verify the BLE adapter enforces this.
+7. **`_adapter` impersonation.** Any message with `from: "_adapter"` is treated as relay-originated. Peers must reject peer-sent messages claiming `from: "_adapter"`. Verify enforcement in SDK and extension.
 
-8. **`_adapter` impersonation.** Any message with `from: "_adapter"` is treated as relay-originated. Peers must reject peer-sent messages claiming `from: "_adapter"`. Verify enforcement in SDK and extension.
-
-9. **Reconnect race conditions.** Two documented races (wallet arrives before dApp creates; stale connected state blocks create). Verify backoff and retry logic handles both correctly without leaking state or creating duplicate sessions.
+8. **Reconnect race conditions.** Two documented races (wallet arrives before dApp creates; stale connected state blocks create). Verify backoff and retry logic handles both correctly without leaking state or creating duplicate sessions.
 
 ---
 
@@ -251,7 +247,6 @@ Ranked by protocol author's risk assessment (highest first):
 | Scenario | Expected Outcome |
 |----------|-----------------|
 | **Deep link URI substitution:** Replace pairing URI with attacker-controlled key. | Session fingerprint mismatch. User must notice the mismatch to abort. |
-| **BLE connection race:** Attacker connects to BLE GATT service before legitimate wallet. | One-wallet-per-channel rule blocks the legitimate wallet (DoS). Attacker cannot sign transactions. |
 | **WebSocket downgrade:** Attempt to connect via `ws://` instead of `wss://`. | Relay should only accept `wss://`. Verify relay TLS enforcement. |
 
 ---

@@ -8,7 +8,6 @@
  *   - walletpair-sdk/evm        EVM: EIP-1193 provider + wagmi connector
  *   - walletpair-sdk/evm/eip1193  EIP-1193 provider only
  *   - walletpair-sdk/evm/wagmi    Wagmi connector only
- *   - walletpair-sdk/ble        BLE transport + framing utilities
  */
 
 export type { DirectionalSessionKeys, SessionCryptoContext, X25519KeyPair } from './crypto.js'

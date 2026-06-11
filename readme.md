@@ -9,7 +9,7 @@ WalletPair replaces centralized pairing services with a zero-registration, relay
 - **No registration** - No API keys, project IDs, or signup. Deploy a relay and start pairing.
 - **Self-sovereign** - Peers exchange keys directly. No central authority holds your session.
 - **Relay-blind** - All payloads are end-to-end encrypted. The relay routes opaque bytes.
-- **Transport agnostic** - WebSocket, Bluetooth, local TCP - same protocol.
+- **One transport** - A single WebSocket relay. Any relay works; switch by re-pairing.
 - **Chain-agnostic** - CAIP-2 chain IDs, protocol handler abstraction. EVM fully supported; extensible to Solana, Cosmos, etc.
 
 ## How It Works

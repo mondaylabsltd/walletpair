@@ -228,7 +228,7 @@ export function unsealPayload(
 export interface PairingParams {
   ch: string;
   pubkey: string;
-  /** Empty string = BLE mode (no relay). */
+  /** WebSocket relay URL. Required — the relay is the WalletPair transport. */
   relay: string;
   name?: string;
   url?: string;
@@ -245,12 +245,16 @@ export function parsePairingUri(uri: string): PairingParams {
   if (!ch || !pubkey) {
     throw new Error('Invalid pairing URI: missing ch or pubkey');
   }
+  const relay = params.get('relay');
+  if (!relay) {
+    throw new Error('Invalid pairing URI: missing required param "relay"');
+  }
   const methodsStr = params.get('methods');
   const chainsStr = params.get('chains');
   return {
     ch,
     pubkey,
-    relay: params.get('relay') ?? '',
+    relay,
     name: params.get('name') ?? undefined,
     url: params.get('url') ?? undefined,
     icon: params.get('icon') ?? undefined,

@@ -79,26 +79,22 @@
 	Reflection attacks are impossible by design.
 </p>
 
-<h2 id="transports">Transports</h2>
+<h2 id="transports">Transport</h2>
 
 <p>
-	The protocol is transport-agnostic. The SDK ships with two built-in transports:
+	WalletPair runs over a WebSocket relay. The SDK ships with one built-in transport:
 </p>
 
 <ul>
 	<li>
 		<strong>WebSocket</strong> (<code>WebSocketTransport</code>) — connect through a relay server.
-		Best for cross-device pairing over the internet.
-	</li>
-	<li>
-		<strong>Bluetooth LE</strong> (<code>WebBleCentralTransport</code>) — direct device-to-device
-		connection. No relay needed. Currently Chrome-only via WebBluetooth API.
+		Works for cross-device pairing over the internet and same-device pairing alike.
 	</li>
 </ul>
 
 <p>
-	Both transports use identical session APIs. You can switch transports without changing application
-	code.
+	Need something custom? Implement the <code>Transport</code> interface and pass it to a session —
+	the session APIs are identical regardless of how bytes are carried.
 </p>
 
 <h2 id="channels">Channel Lifecycle</h2>

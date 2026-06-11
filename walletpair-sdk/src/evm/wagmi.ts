@@ -105,13 +105,6 @@ export interface WalletPairConnectorOptions {
   onPairingUri?: ((uri: string) => void) | undefined
   /** Called when the session fingerprint is ready (display alongside QR). */
   onSessionFingerprint?: ((fingerprint: string) => void) | undefined
-  /**
-   * Called after QR is shown but before transport connects (BLE mode).
-   * The returned Promise must resolve when the user is ready to scan.
-   * This gives the wallet time to scan the QR before the BLE device picker opens.
-   * Only relevant when using a custom transport (e.g. WebBleCentralTransport).
-   */
-  onBeforeTransportConnect?: (() => Promise<void>) | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -259,16 +252,8 @@ export function walletPair(options: WalletPairConnectorOptions): CreateConnector
         }
 
         // Start pairing flow
-        // If onBeforeTransportConnect is set (BLE mode), defer transport connection
-        // so the wallet can scan the QR before the BLE device picker opens.
-        const deferTransport = !!options.onBeforeTransportConnect
-        const uri = await s.createPairing({ deferTransport })
+        const uri = await s.createPairing()
         options.onPairingUri?.(uri)
-
-        if (deferTransport && options.onBeforeTransportConnect) {
-          await options.onBeforeTransportConnect()
-          await s.connectTransport()
-        }
 
         // Emit session fingerprint for display alongside QR
         options.onSessionFingerprint?.(s.sessionFingerprint)

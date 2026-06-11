@@ -9,10 +9,6 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "infoPlist": {
-        "NSBluetoothAlwaysUsageDescription": "WalletPair uses Bluetooth to connect directly with dApps",
-        "NSBluetoothPeripheralUsageDescription": "WalletPair uses Bluetooth to advertise as a wallet"
-      },
       "bundleIdentifier": "com.shelchin.wallet"
     },
     "android": {
@@ -25,10 +21,6 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.shelchin.wallet",
       "permissions": [
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.BLUETOOTH_ADVERTISE",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.BLUETOOTH_SCAN",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]

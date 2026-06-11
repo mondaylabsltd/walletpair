@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  PermissionsAndroid,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,13 +14,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as wp from '@/lib/walletpair';
 import * as eth from '@/lib/eth';
 import * as store from '@/lib/store';
-// BLE Peripheral is lazy-loaded only when entering BLE mode.
-// This avoids crashing in Expo Go where the native module isn't available.
-type BlePeripheralTransport = import('@/lib/ble-peripheral').BlePeripheralTransport;
-async function loadBlePeripheral() {
-  const mod = await import('@/lib/ble-peripheral');
-  return new mod.BlePeripheralTransport();
-}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,11 +76,9 @@ export default function WalletScreen() {
   const [requests, setRequests] = useState<PendingReq[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
-  // Mutable refs (session state + transports)
+  // Mutable refs (session state + WebSocket transport)
   const session = useRef<Session | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const bleRef = useRef<BlePeripheralTransport | null>(null);
-  const transportRef = useRef<'ws' | 'ble'>('ws');
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalClose = useRef(false);
   const phaseRef = useRef<Phase>('idle'); // mirror for callbacks
@@ -159,17 +148,13 @@ export default function WalletScreen() {
   }, []);
 
   // ---------------------------------------------------------------------------
-  // Send (dispatches to WS or BLE based on transport)
+  // Send (over the WebSocket relay)
   // ---------------------------------------------------------------------------
 
   const sendRaw = useCallback((msg: Record<string, unknown>) => {
-    if (transportRef.current === 'ble') {
-      bleRef.current?.sendMessage(msg);
-    } else {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify(msg));
-    }
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify(msg));
     const t = msg.t as string;
     const detail = t === 'res' ? `id=${(msg.body as any)?.id}` : t === 'evt' ? `id=${(msg.body as any)?.id}` : '';
     addLog('out', t, detail);
@@ -450,108 +435,7 @@ export default function WalletScreen() {
   }, [addLog, buildJoinMessage, handleMessage, sendRaw, stopReconnect, updatePhase]);
 
   // ---------------------------------------------------------------------------
-  // BLE: start Peripheral and wait for dApp to connect
-  // ---------------------------------------------------------------------------
-
-  const freshJoinBle = useCallback(async (parsed: wp.PairingParams) => {
-    const kp = wp.generateX25519KeyPair();
-    const derived = deriveSessionKeys(kp, parsed);
-    setPairingCode(wp.computeSessionFingerprint(parsed.ch, parsed.pubkey));
-
-    session.current = {
-      channelId: parsed.ch,
-      privKey: kp.privateKey,
-      pubKeyB64: kp.publicKeyB64,
-      remotePubKey: derived.remotePub,
-      remotePubKeyB64: parsed.pubkey,
-      sendKey: derived.sendKey,
-      recvKey: derived.recvKey,
-      joinEncKey: derived.joinEncKey,
-      sendSeq: 0,
-      recvSeq: -1,
-      relayUrl: '',
-      ethKeyHex: ethKeyInput,
-      ethAddr,
-      dappName: parsed.name ?? '',
-      evtCounter: 0,
-    };
-    transportRef.current = 'ble';
-    setRequests([]);
-
-    const ble = await loadBlePeripheral();
-    bleRef.current = ble;
-
-    ble.onMessage((msg) => {
-      try {
-        handleMessage(JSON.stringify(msg));
-      } catch (e: any) {
-        addLog('err', 'ble', `message handler error: ${e?.message || String(e)}`);
-      }
-    });
-
-    let bleHasJoined = false;
-
-    ble.onConnected(() => {
-      if (bleHasJoined) {
-        addLog('in', 'ble', 'dApp reconnected');
-        updatePhase('connected');
-        return;
-      }
-      bleHasJoined = true;
-      addLog('in', 'ble', 'dApp connected');
-      const s = session.current!;
-      sendRaw(buildJoinMessage(s, false));
-    });
-
-    ble.onDisconnected(() => {
-      if (intentionalClose.current || phaseRef.current === 'closed') return;
-      addLog('err', 'ble', 'dApp disconnected — still advertising, waiting for reconnect...');
-      updatePhase('waiting');
-    });
-
-    try {
-      if (Platform.OS === 'android') {
-        const perms = [
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        ].filter(Boolean);
-
-        for (const p of perms) {
-          const has = await PermissionsAndroid.check(p);
-          addLog('in', 'ble', `${p.split('.').pop()}: ${has ? 'granted' : 'not granted'}`);
-        }
-
-        const results = await PermissionsAndroid.requestMultiple(perms);
-        const denied = Object.entries(results).filter(([, v]) => v !== 'granted');
-        if (denied.length > 0) {
-          const names = denied.map(([k, v]) => `${k.split('.').pop()}=${v}`).join(', ');
-          addLog('err', 'ble', `denied: ${names}`);
-          Alert.alert(
-            'Bluetooth Permissions Required',
-            `Denied: ${names}\n\nIf "never_ask_again", go to Settings > Apps > WalletPair > Permissions and grant Bluetooth + Location manually.\n\nAlso make sure you ran:\nnpx expo prebuild --clean\nnpx expo run:android`,
-          );
-          updatePhase('closed');
-          return;
-        }
-        addLog('in', 'ble', 'all permissions granted');
-      }
-
-      const Device = require('expo-device') as typeof import('expo-device');
-      const phoneName = Device.deviceName || Device.modelName || 'Phone';
-      await ble.start(`WalletPair ${phoneName}`);
-      updatePhase('waiting');
-      addLog('in', 'ble', 'advertising... waiting for dApp');
-    } catch (err: any) {
-      const msg = err?.message || String(err);
-      addLog('err', 'ble', `failed to start: ${msg}`);
-      Alert.alert('BLE Error', msg);
-      updatePhase('closed');
-    }
-  }, [ethKeyInput, ethAddr, addLog, buildJoinMessage, deriveSessionKeys, handleMessage, sendRaw, updatePhase]);
-
-  // ---------------------------------------------------------------------------
-  // Fresh join (from scanned URI — detects WS vs BLE)
+  // Fresh join (from scanned URI)
   // ---------------------------------------------------------------------------
 
   const freshJoin = useCallback((pairingUri: string) => {
@@ -563,14 +447,6 @@ export default function WalletScreen() {
     const parsed = wp.parsePairingUri(pairingUri);
     intentionalClose.current = false;
 
-    // Detect BLE mode: no relay URL in the pairing URI
-    if (!parsed.relay) {
-      freshJoinBle(parsed);
-      return;
-    }
-
-    // WebSocket mode
-    transportRef.current = 'ws';
     const kp = wp.generateX25519KeyPair();
     const derived = deriveSessionKeys(kp, parsed);
     setPairingCode(wp.computeSessionFingerprint(parsed.ch, parsed.pubkey));
@@ -595,7 +471,7 @@ export default function WalletScreen() {
 
     setRequests([]);
     connectAndJoin();
-  }, [ethAddr, ethKeyInput, connectAndJoin, deriveSessionKeys, freshJoinBle]);
+  }, [ethAddr, ethKeyInput, connectAndJoin, deriveSessionKeys]);
 
   // ---------------------------------------------------------------------------
   // Handle scanned URI from scan screen
@@ -712,8 +588,6 @@ export default function WalletScreen() {
       });
     }
     wsRef.current?.close();
-    bleRef.current?.stop();
-    bleRef.current = null;
     updatePhase('closed');
     store.clearSession();
   }, [sendRaw, stopReconnect, updatePhase]);
@@ -721,7 +595,6 @@ export default function WalletScreen() {
   const doReset = useCallback(() => {
     doClose();
     session.current = null;
-    transportRef.current = 'ws';
     setRequests([]);
     setPairingCode('------');
     updatePhase('idle');

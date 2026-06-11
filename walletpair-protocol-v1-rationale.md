@@ -12,8 +12,9 @@ For the normative specification, see `walletpair-protocol-v1.md`.
    ephemeral in-memory state. A single binary or container is sufficient.
 3. **Relay-blind.** All request parameters, response results, and event
    data are end-to-end encrypted. The relay sees only routing metadata.
-4. **Transport independent.** The protocol works over any ordered
-   bidirectional transport.
+4. **One transport.** The protocol runs over a single WebSocket relay —
+   one ordered, bidirectional message router shared by both peers. No
+   transport negotiation, no fallbacks.
 5. **Simple.** The full protocol fits in one document. Implementation
    should take days, not weeks.
 
@@ -309,38 +310,16 @@ traffic keys are compromised. It also limits relay resource consumption.
 Unlimited sessions would allow abandoned channels to persist
 indefinitely.
 
-## 9. Bluetooth Security Considerations
+## 9. Capability Negotiation Design
 
-### 9.1 Proximity
-
-BLE range can extend beyond visual range (especially with directional
-antennas). Bluetooth proximity is NOT a security property — the QR code
-is the trust anchor, not physical distance. Implementations MUST NOT
-rely on Bluetooth proximity as a security property. The wallet SHOULD
-display the dApp name prominently and require explicit user confirmation.
-
-### 9.2 Connection Hijacking
-
-A nearby attacker could connect to the BLE service before the legitimate
-wallet. The one-wallet-per-channel rule prevents security compromise
-(only DoS). The attacker cannot sign transactions without the user's
-blockchain private keys.
-
-### 9.3 Denial of Service
-
-BLE frequency jamming and GATT connection flooding are inherent to
-wireless protocols and outside the scope of this specification.
-
-## 10. Capability Negotiation Design
-
-### 10.1 Why the Wallet Declares Scope (Not the DApp)
+### 9.1 Why the Wallet Declares Scope (Not the DApp)
 
 The dApp declares its requirements in the pairing URI. The wallet
 independently decides what to grant. This gives the user (via their
 wallet) final authority over what is shared, consistent with the
 principle that wallets are the user's security agent.
 
-### 10.2 Sign-Only Wallets
+### 9.2 Sign-Only Wallets
 
 Hardware wallets and air-gapped signers cannot broadcast transactions.
 They grant `wallet_signTransaction` but not `wallet_sendTransaction`.
@@ -369,32 +348,32 @@ from a sign-only wallet, the dApp handles its own broadcast idempotency
 (e.g., deduplicating by tx hash). The wallet's idempotency cache ensures
 retried `wallet_signTransaction` requests return the same signature.
 
-### 10.3 Why Account Authorization Is Not in join
+### 9.3 Why Account Authorization Is Not in join
 
 Accounts are revealed only through encrypted methods
 (`wallet_getAccounts`), not in the plaintext-adjacent `join` message.
 This prevents the relay from observing which blockchain addresses the
 user has.
 
-## 11. Multiple Relay Design
+## 10. Multiple Relay Design
 
-### 11.1 Channel Cleanup
+### 10.1 Channel Cleanup
 
 Once pairing completes on one relay, the dApp must close channels on all
 other relays to prevent orphaned channels consuming resources until TTL.
 If the dApp cannot reach an unused relay, the relay's TTL will clean up
 automatically.
 
-### 11.2 Why Encryption Is Relay-Independent
+### 10.2 Why Encryption Is Relay-Independent
 
 Traffic keys derive from peer keys and the handshake transcript, not
 from relay identity. This allows the wallet to connect to any relay
 without affecting encryption — the same keys work regardless of which
 relay routes the messages.
 
-## 12. Comparison with Existing Protocols
+## 11. Comparison with Existing Protocols
 
-### 12.1 vs. CAIP-25 / CAIP-27
+### 11.1 vs. CAIP-25 / CAIP-27
 
 WalletPair does not adopt CAIP-25 (`wallet_createSession`) or CAIP-27
 (`wallet_invokeMethod`). CAIP-25 targets in-browser providers with scope
@@ -411,13 +390,13 @@ CAIP-27 wraps methods in a routing envelope. WalletPair achieves
 routing via the `chain` parameter in each method's params, without
 nesting.
 
-### 12.2 Shared Standards
+### 11.2 Shared Standards
 
 - Chain identification: CAIP-2 throughout.
 - Capabilities structure: compatible with CAIP-217 `scopeObject`.
 - Account data: convertible to/from CAIP-10.
 
-### 12.3 vs. WalletConnect v2
+### 11.3 vs. WalletConnect v2
 
 Key differences:
 

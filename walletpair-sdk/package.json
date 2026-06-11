@@ -46,11 +46,6 @@
       "src": "./src/evm/wagmi.ts",
       "types": "./dist/evm/wagmi.d.ts",
       "default": "./dist/evm/wagmi.js"
-    },
-    "./ble": {
-      "src": "./src/ble/index.ts",
-      "types": "./dist/ble/index.d.ts",
-      "default": "./dist/ble/index.js"
     }
   },
   "dependencies": {

@@ -4,11 +4,11 @@ Status: Release Candidate
 
 WalletPair is a minimal, permissionless two-party channel protocol for
 connecting dApps and wallets. All payloads are end-to-end encrypted. The
-relay is a stateless message router that cannot read, forge, or replay
-application data.
+relay is a stateless WebSocket message router that cannot read, forge, or
+replay application data.
 
-The protocol is transport-independent. The same messages run over
-WebSocket relay, Bluetooth, or any ordered bidirectional transport.
+Messages are carried over a WebSocket relay — a single ordered,
+bidirectional transport shared by both peers (Section 17).
 
 See `walletpair-protocol-v1-rationale.md` for design decisions and
 security analysis. See `walletpair-protocol-v1-guide.md` for
@@ -33,7 +33,7 @@ WalletPair does not define:
 
 ## 2. Roles
 
-Each channel has exactly two peer roles and one adapter.
+Each channel has exactly two peer roles and one relay.
 
 ### DApp
 
@@ -46,12 +46,12 @@ reject message.
 
 Joins an existing channel, handles requests, pushes events.
 
-### Transport Adapter
+### Relay
 
-The adapter (relay, BLE stack, etc.) manages channel state. It is not a
-peer. Adapter messages use `from` = `"_adapter"` (reserved identifier,
-not a key). Peers MUST reject any peer-sent message where `from` equals
-`"_adapter"`.
+The relay manages channel state and routes messages between the two
+peers. It is not a peer. Relay-originated messages use `from` =
+`"_adapter"` (a reserved identifier, not a key). Peers MUST reject any
+peer-sent message where `from` equals `"_adapter"`.
 
 See Section 5 for which message types each role may send.
 
@@ -67,7 +67,7 @@ cryptographically random 32-byte value encoded as hex (64 characters).
 Present in every message:
 
 - **Peer messages:** sender's X25519 public key, base64url, no padding.
-- **Adapter messages:** the string `"_adapter"`.
+- **Relay messages:** the string `"_adapter"`.
 
 ### Message ID (`id`)
 
@@ -189,7 +189,7 @@ Peer-sent:
 
 | Type | Direction | Purpose |
 |------|-----------|---------|
-| `create` | dApp -> adapter | Create channel |
+| `create` | dApp -> relay | Create channel |
 | `join` | wallet -> dApp | Join channel |
 | `accept` | dApp -> wallet | Accept wallet |
 | `req` | dApp -> wallet | Encrypted request |
@@ -199,15 +199,15 @@ Peer-sent:
 | `pong` | either -> peer | Heartbeat reply |
 | `close` | either -> peer | Close or reject |
 
-Adapter-sent:
+Relay-sent:
 
 | Type | Direction | Purpose |
 |------|-----------|---------|
-| `ready` | adapter -> peer | Channel state notification |
-| `terminate` | adapter -> peer | Forced termination |
+| `ready` | relay -> peer | Channel state notification |
+| `terminate` | relay -> peer | Forced termination |
 
 There is no separate `error` message. Request errors use `_ok: false`
-inside encrypted `res`. Channel errors use `close`. Adapter shutdown
+inside encrypted `res`. Channel errors use `close`. Relay shutdown
 uses `terminate`.
 
 ## 6. Key Exchange and Encryption
@@ -623,7 +623,7 @@ walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-perc
 |-------|----------|-------------|
 | `ch` | yes | Channel ID (hex, 64 chars). |
 | `pubkey` | yes | DApp X25519 public key (base64url, no padding). |
-| `relay` | conditional | WebSocket relay URL (percent-encoded). MUST be present when the relay transport is used. MUST be omitted when using a direct transport (e.g., BLE). |
+| `relay` | yes | WebSocket relay URL (percent-encoded). The relay is the WalletPair transport, so this is always present. |
 | `name` | yes | DApp display name. |
 | `url` | yes | DApp website URL (percent-encoded). |
 | `icon` | yes | DApp icon URL (percent-encoded). MUST be `https:`. |
@@ -681,7 +681,7 @@ If the relay becomes unavailable, peers reconnect to the same relay
 DApp `meta` fields are defined in Section 4.2. This metadata is
 plaintext and visible to the relay.
 
-Adapter replies with `ready`:
+Relay replies with `ready`:
 `{ "state": "waiting", "role": "dapp", "self": "<dapp-pubkey>", "remote": null, "reconnect": false }`
 
 **Step 2: Wallet joins.**
@@ -700,7 +700,7 @@ for user confirmation. After user confirms, wallet sends:
 }
 ```
 
-Adapter forwards `join` to dApp and replies to wallet with
+Relay forwards `join` to dApp and replies to wallet with
 `ready.waiting`.
 
 **Step 3: DApp accepts.**
@@ -721,7 +721,7 @@ session connects.
 
 **Step 4: Connected.**
 
-Adapter sends `ready.connected` to both peers:
+Relay sends `ready.connected` to both peers:
 `{ "state": "connected", "role": "<role>", "self": "<own-pubkey>", "remote": "<peer-pubkey>", "reconnect": false }`
 
 Both peers initialize send and receive sequence counters to 0. All
@@ -798,14 +798,14 @@ pong. On timeout, treat connection as dead and begin reconnect
   "from": "<pubkey>", "body": { "reason": "normal" } }
 ```
 
-### 12.2 Terminate (adapter-initiated)
+### 12.2 Terminate (relay-initiated)
 
 ```json
 { "v": 1, "t": "terminate", "ch": "...", "ts": ...,
   "from": "_adapter", "body": { "reason": "timeout" } }
 ```
 
-Only the adapter sends `terminate`. Peers MUST NOT send it.
+Only the relay sends `terminate`. Peers MUST NOT send it.
 
 ### 12.3 Reasons
 
@@ -826,7 +826,7 @@ Only the adapter sends `terminate`. Peers MUST NOT send it.
 | `payload_too_large` | P, A | Message exceeds 64 KB. |
 | `protocol_error` | P, A | Malformed or unsupported message. |
 
-P = peer, A = adapter.
+P = peer, A = relay.
 
 ## 13. Reconnect
 
@@ -963,7 +963,7 @@ pending_accept
   -> user rejects -> send close -----------------> closed
   -> receive terminate --------------------------> closed
   -> timeout ------------------------------------> closed
-  (A second `join` in this state MUST be rejected by the adapter
+  (A second `join` in this state MUST be rejected by the relay
    with `already_connected` per Section 15 rule 4.)
 connected
   -> send req
@@ -1036,7 +1036,7 @@ closed
     MUST wait for at least one pending response before sending another
     request.
 12. If a peer receives a message with an unsupported `v` value, it MUST
-    reply with `close` reason `unsupported_version`. If the adapter
+    reply with `close` reason `unsupported_version`. If the relay
     detects an unsupported version, it sends `terminate` with the same
     reason.
 13. Encryption sequence counters MUST NEVER be reset. They persist across
@@ -1052,9 +1052,9 @@ closed
     expiry independently via `terminate`. Implementations MUST NOT allow
     unlimited sessions.
 
-## 16. Transport Requirements
+## 16. Relay Requirements
 
-A transport adapter MUST provide:
+A relay MUST provide:
 
 1. Bidirectional delivery.
 2. Ordered delivery while connected.
@@ -1065,8 +1065,6 @@ A transport adapter MUST provide:
 6. State enforcement per Section 14.
 7. Role enforcement per Section 2.
 8. Heartbeat timeout handling.
-
-The adapter may be centralized or peer-to-peer.
 
 ## 17. WebSocket Relay Binding
 
@@ -1106,96 +1104,17 @@ When a rate limit is exceeded, the relay MUST respond with `terminate`
 using reason `rate_limited`. Peers that receive `rate_limited` SHOULD
 back off before retrying.
 
-## 18. Bluetooth Binding
+## 18. Security
 
-### 18.1 Overview
+### 18.1 Threat Model
 
-In Bluetooth mode, there is no relay. The BLE stack acts as the
-transport adapter. The dApp still owns the channel. Protocol messages
-are identical; only the transport changes.
-
-### 18.2 Discovery
-
-DApp creates channel and exposes pairing URI via QR code (without
-`relay` parameter). Wallet scans QR.
-
-### 18.3 BLE GATT Service
-
-```text
-Service UUID: 0000FE70-0000-1000-8000-00805F9B34FB
-  Channel (read):   0000FE71-0000-1000-8000-00805F9B34FB
-  Message (write):  0000FE72-0000-1000-8000-00805F9B34FB
-  Message (notify): 0000FE73-0000-1000-8000-00805F9B34FB
-```
-
-Production deployments SHOULD register with Bluetooth SIG or use
-fully random 128-bit UUIDs.
-
-### 18.4 Flow
-
-1. DApp creates `ch`. BLE adapter returns `ready.waiting`.
-2. DApp exposes pairing URI via QR code.
-3. Wallet scans, computes fingerprint, user verifies and confirms.
-4. Wallet sends `join` with `sealed_join`.
-5. BLE adapter forwards `join` to dApp, sends `ready.waiting` to
-   wallet.
-6. DApp verifies `sealed_join`, sends `accept`.
-7. BLE adapter sends `ready.connected` to both.
-8. Encrypted `req`/`res`/`evt` flow begins.
-
-### 18.5 Message Framing
-
-```text
-[1 byte flags] [2 bytes total_length big-endian] [payload fragment]
-
-flags:
-  bit 0: 1 = first fragment
-  bit 1: 1 = last fragment
-  bits 2-7: reserved
-```
-
-`total_length` is meaningful only in the first fragment (max 65535).
-Subsequent fragments set it to 0.
-
-Limits:
-
-| Constraint | Value |
-|-----------|-------|
-| Fragment timeout | 5 seconds from first fragment |
-| Max fragments per message | 256 |
-| Max total length | 65535 bytes |
-| Fragment payload size | negotiated_MTU - 3 (default: 20 bytes) |
-
-Out-of-order fragments -> discard all buffered fragments.
-Implementations MUST use indications (not notifications) or add
-fragment-level sequencing.
-
-### 18.6 Bluetooth Security
-
-1. **Proximity.** Implementations MUST NOT rely on Bluetooth proximity
-   as a security property — the QR code is the trust anchor for public
-   key delivery, not physical distance. The wallet SHOULD display the
-   dApp name prominently and require explicit user confirmation.
-2. **Connection hijacking.** A nearby attacker could connect to the
-   dApp's BLE service before the legitimate wallet. The dApp MUST
-   enforce the one-wallet-per-channel rule (Section 15 rule 4). If a
-   second device attempts to `join`, the BLE adapter MUST reject it
-   with `already_connected`.
-3. **Denial of service.** A nearby attacker can jam BLE frequencies or
-   flood the GATT service with connections. This is inherent to any
-   wireless protocol.
-
-## 19. Security
-
-### 19.1 Threat Model
-
-The relay or transport may be compromised. It MUST NOT be able to:
+The relay may be compromised. It MUST NOT be able to:
 
 - read request parameters, response results, or event data
 - impersonate a peer
 - replay messages to cause duplicate signing
 
-### 19.2 Protections
+### 18.2 Protections
 
 | Threat | Protection |
 |--------|-----------|
@@ -1206,7 +1125,7 @@ The relay or transport may be compromised. It MUST NOT be able to:
 | Channel hijack | Channel ID = 256-bit random. |
 | Relay compromise | Relay sees only encrypted blobs and routing metadata. `_ok` status is encrypted. |
 
-### 19.3 Rules
+### 18.3 Rules
 
 1. `ch` MUST be 256-bit cryptographically random.
 2. `from` MUST match sender's X25519 public key.
@@ -1218,7 +1137,7 @@ The relay or transport may be compromised. It MUST NOT be able to:
 See also: sequence number rules (Section 6.6), relay storage
 restrictions (Section 17.2), and protocol rules (Section 15).
 
-### 19.4 Privacy
+### 18.4 Privacy
 
 Visible to relay: `ch`, `from`, `t`, `ts`.
 
@@ -1228,7 +1147,7 @@ Encrypted and invisible to relay:
 - Method and event names (inside `sealed`).
 - Response success/failure (`_ok` inside `sealed`).
 
-### 19.5 Terminate Message Trust
+### 18.5 Terminate Message Trust
 
 A malicious relay can terminate any session at will (by sending
 `terminate` with `from` = `"_adapter"`). The relay cannot forge encrypted

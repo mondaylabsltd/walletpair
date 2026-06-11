@@ -1,12 +1,12 @@
 # walletpair-sdk
 
-TypeScript SDK for the [WalletPair Protocol](https://github.com/atshelchin/walletpair/blob/main/walletpair-protocol-v1.md) -- connect dApps and wallets with end-to-end encrypted, relay-based or BLE communication.
+TypeScript SDK for the [WalletPair Protocol](https://github.com/atshelchin/walletpair/blob/main/walletpair-protocol-v1.md) -- connect dApps and wallets with end-to-end encrypted, relay-based communication.
 
 ## Features
 
 - **Chain-agnostic core** -- uses [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md) chain IDs (`eip155:1`, `solana:mainnet`), ready for multi-chain
 - **EVM support** -- EIP-1193 provider + wagmi connector (under `walletpair-sdk/evm`)
-- **Transport-agnostic** -- WebSocket relay and Web Bluetooth (BLE) transports included, pluggable `Transport` interface for custom transports
+- **WebSocket relay transport** -- batteries-included `WebSocketTransport`, with a pluggable `Transport` interface for custom transports
 - **End-to-end encrypted** -- X25519 key exchange + ChaCha20-Poly1305 AEAD, relay never sees payload content
 - **Session snapshots** -- `serialize()` / `restore()` for controlled reconnect flows; production crash recovery requires write-ahead counter persistence
 - **Zero native dependencies** -- pure JS crypto via [noble](https://github.com/paulmillr/noble-curves) libraries
@@ -22,9 +22,6 @@ walletpair-sdk
 │   ├── ws-transport.ts    WebSocket transport (browser/Node/Deno/Bun)
 │   ├── dapp-session.ts    DApp-side session state machine
 │   └── wallet-session.ts  Wallet-side session state machine
-├── BLE (walletpair-sdk/ble)
-│   ├── framing.ts         BLE message fragmentation/reassembly (Section 19.5)
-│   └── web-ble-transport.ts  Web Bluetooth Central transport (runtime detection)
 └── EVM (walletpair-sdk/evm)
     ├── eip1193.ts         EIP-1193 provider (maps eth_ methods to WalletPair)
     └── wagmi.ts           wagmi connector factory
@@ -39,7 +36,7 @@ walletpair-sdk
 │ DAppSession                        WalletSession  │
 │     │    │                              │    │     │
 │     ▼    │     ┌──────────────┐         │    ▼     │
-│ Transport├────►│ Relay / BLE  │◄────────┤Transport │
+│ Transport├────►│ WS  Relay    │◄────────┤Transport │
 │          │     └──────────────┘         │          │
 └──────────┘     (sees only routing       └──────────┘
                   metadata -- payloads
@@ -181,25 +178,6 @@ const config = createConfig({
 })
 ```
 
-### BLE Transport (Web Bluetooth)
-
-```ts
-import { DAppSession } from 'walletpair-sdk'
-import { WebBleCentralTransport, isWebBleSupported } from 'walletpair-sdk/ble'
-
-if (isWebBleSupported()) {
-  const transport = new WebBleCentralTransport()
-  const session = new DAppSession({
-    transport,
-    meta: { name: 'My dApp', description: 'Example dApp', url: 'https://example.com', icon: 'https://example.com/icon.png' },
-  })
-
-  // BLE pairing URI has no relay parameter
-  const uri = await session.createPairing()
-  // uri = "walletpair:?ch=...&pubkey=..."
-}
-```
-
 ## Session Snapshots
 
 `serialize()` and `restore()` can be used in controlled reconnect flows,
@@ -301,7 +279,7 @@ new WebSocketTransport({ url: string, protocols?: string[] })
 
 #### Transport Interface
 
-Implement this to create custom transports (e.g., for React Native BLE peripheral):
+Implement this to create custom transports:
 
 ```ts
 interface Transport {
@@ -366,20 +344,6 @@ walletPair({
   onPairingUri?: (uri) => void,            // QR code display callback
   onSessionFingerprint?: (fingerprint) => void, // Session fingerprint display callback
 })
-```
-
-### BLE
-
-```ts
-import {
-  WebBleCentralTransport,  // Web Bluetooth Central (dApp side)
-  isWebBleSupported,        // Runtime availability check
-  frameMessage,             // Low-level: split JSON into BLE frames
-  Defragmenter,             // Low-level: reassemble BLE frames
-  BLE_SERVICE_UUID,         // WalletPair BLE service UUID
-  BLE_WRITE_CHAR_UUID,      // DApp -> Wallet characteristic
-  BLE_NOTIFY_CHAR_UUID,     // Wallet -> DApp characteristic
-} from 'walletpair-sdk/ble'
 ```
 
 ## Extending for New Chains

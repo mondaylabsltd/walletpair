@@ -51,12 +51,6 @@ test.describe('Playground page load', () => {
 // ─── Protocol Mode: dApp Panel ──────────────────────────────────────
 
 test.describe('Protocol dApp panel', () => {
-	test('shows transport selector with WebSocket active by default', async ({ page }) => {
-		await waitForPlayground(page);
-		const d = dapp(page);
-		await expect(d.locator('.transport-btn.active')).toHaveText('WebSocket');
-	});
-
 	test('shows relay URL input', async ({ page }) => {
 		await waitForPlayground(page);
 		const d = dapp(page);
@@ -168,12 +162,6 @@ test.describe('EVM dApp panel', () => {
 		await expect(dapp(page).locator('.badge')).toContainText('EVM');
 	});
 
-	test('shows transport selector', async ({ page }) => {
-		await waitForPlayground(page);
-		await page.locator('.mode-btn', { hasText: 'EVM' }).click();
-		await expect(dapp(page).locator('.transport-btn')).toHaveCount(2);
-	});
-
 	test('shows metadata with EVM defaults', async ({ page }) => {
 		await waitForPlayground(page);
 		await page.locator('.mode-btn', { hasText: 'EVM' }).click();
@@ -216,45 +204,6 @@ test.describe('EVM Wallet panel', () => {
 		await page.locator('.mode-btn', { hasText: 'EVM' }).click();
 		const w = wallet(page);
 		await expect(w.locator('button', { hasText: 'Prepare Join' })).toBeDisabled();
-	});
-});
-
-// ─── Bluetooth Transport ────────────────────────────────────────────
-
-test.describe('Bluetooth transport', () => {
-	test('BLE option exists in transport selector', async ({ page }) => {
-		await waitForPlayground(page);
-		const d = dapp(page);
-		const bleBtn = d.locator('.transport-btn', { hasText: /Bluetooth/ });
-		await expect(bleBtn).toBeVisible();
-	});
-
-	test('switching to BLE hides wallet panel', async ({ page }) => {
-		await waitForPlayground(page);
-		const d = dapp(page);
-		// Click BLE (may be disabled, but we can test the UI if supported)
-		const bleBtn = d.locator('.transport-btn', { hasText: /Bluetooth/ });
-		const isDisabled = await bleBtn.isDisabled();
-		if (!isDisabled) {
-			await bleBtn.click();
-			// Wallet panel should be replaced with hint
-			await expect(page.locator('.ble-wallet-hint')).toBeVisible();
-			await expect(page.locator('.ble-wallet-hint h3')).toHaveText('Wallet on your device');
-		}
-	});
-
-	test('switching back to WS shows wallet panel', async ({ page }) => {
-		await waitForPlayground(page);
-		const d = dapp(page);
-		const bleBtn = d.locator('.transport-btn', { hasText: /Bluetooth/ });
-		const isDisabled = await bleBtn.isDisabled();
-		if (!isDisabled) {
-			await bleBtn.click();
-			await expect(page.locator('.ble-wallet-hint')).toBeVisible();
-			// Switch back
-			await d.locator('.transport-btn', { hasText: 'WebSocket' }).click();
-			await expect(page.locator('.ble-wallet-hint')).not.toBeVisible();
-		}
 	});
 });
 

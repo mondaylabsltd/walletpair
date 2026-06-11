@@ -6,13 +6,6 @@
 	import { playground, type LogEntry } from './state.svelte';
 	import { Zap, RadioTower, Link } from 'lucide-svelte';
 
-	let bleSupported = $state(false);
-	let bleStatus = $state('');
-
-	$effect(() => {
-		import('walletpair-sdk/ble').then(m => { bleSupported = m.isWebBleSupported(); }).catch(() => {});
-	});
-
 	const STORAGE_KEY = 'walletpair.playground.evm.dapp';
 
 	let phase: DAppPhase = $state('idle');
@@ -116,11 +109,6 @@
 	async function connect() {
 		showReconnectPrompt = false;
 
-		if (playground.transport === 'ble') {
-			await connectBle();
-			return;
-		}
-
 		const transport = new WebSocketTransport(playground.relayUrl);
 		const s = new DAppSession({
 			transport,
@@ -138,46 +126,6 @@
 			addLog('out', 'create', `ch=${s.channelId.slice(0, 12)}...`);
 		} catch (e: any) {
 			addLog('err', 'connect', e.message);
-		}
-	}
-
-	async function connectBle() {
-		bleStatus = 'Creating channel...';
-		try {
-			const { WebBleCentralTransport } = await import('walletpair-sdk/ble');
-			const transport = new WebBleCentralTransport();
-			const s = new DAppSession({
-				transport,
-				meta: createEvmDAppMeta(),
-				methods: evmMethods,
-				chains: ['eip155:1'],
-				persistence
-			} as ConstructorParameters<typeof DAppSession>[0]);
-			session = s;
-			setupSessionEvents(s);
-
-			await s.createPairing({ deferTransport: true });
-			sessionFingerprint = (s as any).sessionFingerprint ?? '------';
-			bleStatus = 'Channel created. Show QR to wallet, then click "Scan for Wallet".';
-			addLog('out', 'create', `ch=${s.channelId.slice(0, 12)}... (BLE, deferred)`);
-		} catch (e: any) {
-			addLog('err', 'ble', e.message);
-			bleStatus = `Error: ${e.message}`;
-		}
-	}
-
-	async function bleScan() {
-		if (!session) return;
-		bleStatus = 'Scanning for wallet...';
-		addLog('out', 'ble', 'Opening BLE device picker...');
-
-		try {
-			await session.connectTransport();
-			bleStatus = 'BLE connected — waiting for wallet join';
-			addLog('in', 'ble', 'Connected to wallet peripheral');
-		} catch (e: any) {
-			bleStatus = `BLE error: ${e.message}`;
-			addLog('err', 'ble', e.message);
 		}
 	}
 
@@ -308,46 +256,17 @@
 		</div>
 	{/if}
 
-	<!-- Transport selector -->
-	{#if phase === 'idle'}
-		<div class="field">
-			<label>Transport</label>
-			<div class="row">
-				<button class="transport-btn" class:active={playground.transport === 'ws'} onclick={() => (playground.transport = 'ws')}>WebSocket</button>
-				<button class="transport-btn" class:active={playground.transport === 'ble'} onclick={() => (playground.transport = 'ble')} disabled={!bleSupported}>
-					Bluetooth {!bleSupported ? '(unsupported)' : ''}
-				</button>
-			</div>
-		</div>
-	{/if}
-
-	{#if playground.transport === 'ws'}
-		<div class="field">
-			<label>Relay URL</label>
-			<div class="row">
-				<input bind:value={playground.relayUrl} placeholder="wss://..." />
-				{#if phase === 'idle'}
-					<button class="btn-primary" onclick={connect}>Connect</button>
-				{:else}
-					<button class="btn-danger" onclick={reset}>Reset</button>
-				{/if}
-			</div>
-		</div>
-	{:else}
-		<div class="field">
-			<div class="row">
-				{#if phase === 'idle'}
-					<button class="btn-primary" onclick={connect}>Create Channel</button>
-				{:else}
-					<button class="btn-primary" onclick={bleScan} disabled={phase === 'connected'}>Scan for Wallet</button>
-					<button class="btn-danger" onclick={reset}>Reset</button>
-				{/if}
-			</div>
-			{#if bleStatus}
-				<div class="ble-status">{bleStatus}</div>
+	<div class="field">
+		<label>Relay URL</label>
+		<div class="row">
+			<input bind:value={playground.relayUrl} placeholder="wss://..." />
+			{#if phase === 'idle'}
+				<button class="btn-primary" onclick={connect}>Connect</button>
+			{:else}
+				<button class="btn-danger" onclick={reset}>Reset</button>
 			{/if}
 		</div>
-	{/if}
+	</div>
 
 	<!-- Metadata (collapsible) -->
 	<div class="field">
@@ -670,12 +589,6 @@
 	.cap-tag.active { border-color: var(--color-accent); background: rgba(59, 130, 246, 0.15); color: var(--color-accent); }
 	.cap-tag.readonly { cursor: default; }
 	.cap-tag.readonly:hover { border-color: var(--color-border); color: var(--color-text-muted); }
-
-	.transport-btn { flex: 1; text-align: center; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-2); color: var(--color-text-muted); font-size: 0.8rem; font-family: var(--font-mono); transition: border-color 0.15s, background 0.15s; }
-	.transport-btn:hover { border-color: var(--color-text-subtle); }
-	.transport-btn.active { border-color: var(--color-accent); background: rgba(59, 130, 246, 0.1); color: var(--color-accent); }
-	.transport-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-	.ble-status { font-size: 0.75rem; color: var(--color-text-muted); font-family: var(--font-mono); }
 
 	.peer-info { display: flex; flex-direction: column; gap: 2px; padding: var(--space-3); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
 	.peer-label { font-size: 0.65rem; color: var(--color-text-subtle); text-transform: uppercase; letter-spacing: 0.05em; }

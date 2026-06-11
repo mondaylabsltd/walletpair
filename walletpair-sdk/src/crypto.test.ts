@@ -343,15 +343,16 @@ describe('buildPairingUri', () => {
     expect(uri).toContain('&name=My%20dApp')
   })
 
-  it('omits relay when not provided', () => {
+  it('always includes the relay (relay is the WalletPair transport)', () => {
     const uri = buildPairingUri({
       channelId: 'abcd',
       pubkeyB64: 'XY',
+      relayUrl: 'wss://relay.example.com/v1',
       name: 'Test',
       url: 'https://test.com',
       icon: 'https://test.com/icon.png',
     })
-    expect(uri).not.toContain('relay')
+    expect(uri).toContain('&relay=wss%3A%2F%2Frelay.example.com%2Fv1')
   })
 })
 
@@ -371,13 +372,9 @@ describe('parsePairingUri', () => {
     expect(params.icon).toBe('https://test.com/icon.png')
   })
 
-  it('parses BLE URI (no relay)', () => {
-    const uri = `walletpair:?ch=${TEST_CH}&pubkey=${TEST_PUBKEY}&name=BLE%20Wallet&url=https%3A%2F%2Fble.example.com&icon=https%3A%2F%2Fble.example.com%2Ficon.png`
-    const params = parsePairingUri(uri)
-    expect(params.ch).toBe(TEST_CH)
-    expect(params.pubkey).toBe(TEST_PUBKEY)
-    expect(params.relay).toBeUndefined()
-    expect(params.name).toBe('BLE Wallet')
+  it('throws on missing relay (relay is required §8.1)', () => {
+    const uri = `walletpair:?ch=${TEST_CH}&pubkey=${TEST_PUBKEY}&name=Test&url=https%3A%2F%2Ftest.com&icon=https%3A%2F%2Ftest.com%2Ficon.png`
+    expect(() => parsePairingUri(uri)).toThrow(/missing required param "relay"/)
   })
 
   it('throws on missing ch', () => {
@@ -451,6 +448,7 @@ describe('buildPairingUri / parsePairingUri with url and icon', () => {
     const original = {
       channelId: generateChannelId(),
       pubkeyB64: b64urlEncode(generateX25519KeyPair().publicKey),
+      relayUrl: 'wss://relay.example.com/v1',
       name: 'Test',
       url: 'https://example.com/path?q=1&b=2',
       icon: 'https://cdn.example.com/icons/logo.png?size=64&format=webp',

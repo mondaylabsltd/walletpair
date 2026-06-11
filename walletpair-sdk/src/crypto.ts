@@ -360,7 +360,8 @@ export function generateChannelId(): string {
 export function buildPairingUri(params: {
   channelId: string
   pubkeyB64: string
-  relayUrl?: string | undefined
+  /** WebSocket relay URL. Required — the relay is the WalletPair transport (§8.1). */
+  relayUrl: string
   name: string
   url: string
   icon: string
@@ -370,7 +371,7 @@ export function buildPairingUri(params: {
   chains?: string[] | undefined
 }): string {
   let uri = `walletpair:?ch=${params.channelId}&pubkey=${params.pubkeyB64}`
-  if (params.relayUrl) uri += `&relay=${encodeURIComponent(params.relayUrl)}`
+  uri += `&relay=${encodeURIComponent(params.relayUrl)}`
   uri += `&name=${encodeURIComponent(params.name)}`
   uri += `&url=${encodeURIComponent(params.url)}`
   uri += `&icon=${encodeURIComponent(params.icon)}`
@@ -400,12 +401,15 @@ export function parsePairingUri(uri: string): PairingParams {
   if (!icon) throw new Error('Invalid pairing URI: missing required param "icon"')
   // §8.1: icon MUST be https:
   if (!icon.startsWith('https:')) throw new Error('Invalid pairing URI: icon must use https:')
+  // §8.1: relay is required — the WebSocket relay is the WalletPair transport
+  const relay = params.get('relay')
+  if (!relay) throw new Error('Invalid pairing URI: missing required param "relay"')
   const methodsStr = params.get('methods')
   const chainsStr = params.get('chains')
   return {
     ch,
     pubkey,
-    relay: params.get('relay') || undefined,
+    relay,
     name,
     url,
     icon,

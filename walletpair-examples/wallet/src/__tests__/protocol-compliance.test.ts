@@ -298,52 +298,7 @@ describe('EVM Sub-Protocol Section 7: Error Codes', () => {
 });
 
 // ============================================================
-// 10. BLE Framing (Protocol Section 19.5)
-// ============================================================
-
-describe('Protocol Section 19.5: BLE Framing', () => {
-  const FLAG_FIRST = 0x01;
-  const FLAG_LAST = 0x02;
-
-  it('single frame has flags 0x03 (first + last)', () => {
-    const flags = FLAG_FIRST | FLAG_LAST;
-    expect(flags).toBe(0x03);
-  });
-
-  it('first frame of multi has flags 0x01', () => {
-    expect(FLAG_FIRST).toBe(0x01);
-  });
-
-  it('last frame of multi has flags 0x02', () => {
-    expect(FLAG_LAST).toBe(0x02);
-  });
-
-  it('middle frame has flags 0x00', () => {
-    expect(0x00 & FLAG_FIRST).toBe(0);
-    expect(0x00 & FLAG_LAST).toBe(0);
-  });
-
-  it('total_length is big-endian uint16 in first frame', () => {
-    const totalLength = 500;
-    const header = new Uint8Array(3);
-    header[0] = FLAG_FIRST;
-    header[1] = (totalLength >> 8) & 0xff;
-    header[2] = totalLength & 0xff;
-    const parsed = (header[1] << 8) | header[2];
-    expect(parsed).toBe(500);
-  });
-
-  it('max total_length is 65535 (uint16)', () => {
-    const max = 65535;
-    const header = new Uint8Array(3);
-    header[1] = (max >> 8) & 0xff;
-    header[2] = max & 0xff;
-    expect((header[1] << 8) | header[2]).toBe(65535);
-  });
-});
-
-// ============================================================
-// 11. Pairing URI format (Protocol Section 9.1)
+// 10. Pairing URI format (Protocol Section 9.1)
 // ============================================================
 
 describe('Protocol Section 9.1: Pairing URI', () => {
@@ -356,10 +311,10 @@ describe('Protocol Section 9.1: Pairing URI', () => {
     expect(params.get('relay')).toBe('wss://relay.example.com/v1');
   });
 
-  it('BLE mode: no relay parameter', () => {
-    const uri = 'walletpair:?ch=aabb&pubkey=dGVzdA';
+  it('relay is required (WebSocket relay is the transport)', () => {
+    const uri = 'walletpair:?ch=aabb&pubkey=dGVzdA&relay=wss%3A%2F%2Frelay.example.com%2Fv1';
     const params = new URLSearchParams(uri.replace('walletpair:?', ''));
-    expect(params.get('relay')).toBeNull();
+    expect(params.get('relay')).not.toBeNull();
   });
 
   it('relay URL must be percent-encoded', () => {
@@ -371,7 +326,7 @@ describe('Protocol Section 9.1: Pairing URI', () => {
 });
 
 // ============================================================
-// 12. Capabilities format (Protocol Section 8)
+// 11. Capabilities format (Protocol Section 8)
 // ============================================================
 
 describe('Protocol Section 8: Capabilities', () => {

@@ -325,7 +325,7 @@ async function connectPair(
 }
 
 // ---------------------------------------------------------------------------
-// Scenario suite (transport-agnostic)
+// Scenario suite (over the WebSocket relay)
 // ---------------------------------------------------------------------------
 
 const READ_METHODS = ['eth_blockNumber', 'eth_call', 'eth_getBalance', 'eth_getLogs', 'eth_gasPrice', 'eth_call']

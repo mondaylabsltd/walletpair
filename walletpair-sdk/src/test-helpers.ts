@@ -78,6 +78,8 @@ export function makeJoinBody(
 export class MockTransport implements Transport {
   state: TransportState = 'disconnected'
   sent: ProtocolMessage[] = []
+  /** Relay URL surfaced to DAppSession for the pairing URI (mirrors WebSocketTransport.url). */
+  url = 'wss://relay.test/v1'
 
   private messageHandler: ((msg: ProtocolMessage) => void) | null = null
   private closeHandler: ((info?: TransportCloseInfo) => void) | null = null

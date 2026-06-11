@@ -154,7 +154,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
    * Create a new pairing channel and return the pairing URI for QR display.
    *
    * @param options.deferTransport - If true, don't connect the transport yet.
-   *   Call `connectTransport()` later (e.g. after user scans QR in BLE mode).
+   *   Call `connectTransport()` later (e.g. after the QR code is shown).
    */
   async createPairing(options?: { deferTransport?: boolean | undefined }): Promise<string> {
     this.intentionalClose = false
@@ -176,12 +176,14 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
     this.approvedScopeRecorded = false
     this.reqCounter = 0
     this.paired = false
-    // Build pairing URI first (before transport connect, so BLE can show QR first)
-    let relayUrl: string | undefined
+    // Build pairing URI first (before transport connect, so the QR can be shown first)
     const transportWithUrl = this.transport as Transport & { url?: unknown }
-    if (typeof transportWithUrl.url === 'string') {
-      relayUrl = transportWithUrl.url
+    if (typeof transportWithUrl.url !== 'string' || !transportWithUrl.url) {
+      throw new Error(
+        'DAppSession requires a relay-backed transport (e.g. WebSocketTransport) exposing a "url"',
+      )
     }
+    const relayUrl = transportWithUrl.url
     this.pairingUri = buildPairingUri({
       channelId: this.channelId,
       pubkeyB64: this.pubKeyB64,
@@ -208,7 +210,7 @@ export class DAppSession extends Emitter<DAppSessionEvents> {
   /**
    * Connect the transport and send the `create` message.
    * Call this after `createPairing({ deferTransport: true })` when the user
-   * is ready (e.g. after showing QR and before BLE scan).
+   * is ready (e.g. after the QR code has been shown).
    */
   async connectTransport(): Promise<void> {
     this.setTransportChannelHint()

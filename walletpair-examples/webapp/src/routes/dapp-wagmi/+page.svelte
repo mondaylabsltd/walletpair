@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import {
 		createConfig,
 		http,
@@ -13,7 +12,6 @@
 	} from '@wagmi/core';
 	import { mainnet, sepolia, polygon } from 'viem/chains';
 	import { walletPair } from 'walletpair-sdk/evm/wagmi';
-	import { WebBleCentralTransport, isWebBleSupported } from 'walletpair-sdk/ble';
 	import type { WalletPairProvider } from 'walletpair-sdk/evm';
 	import QRCode from 'qrcode';
 	import MessageLog from '$lib/components/MessageLog.svelte';
@@ -21,15 +19,11 @@
 	// ---------------------------------------------------------------------------
 	// State
 	// ---------------------------------------------------------------------------
-	let transportMode: 'ws' | 'ble' = $state('ws');
 	let relayUrl = $state('ws://localhost:8080/v1');
-	let bleSupported = $state(false);
-	let bleStatus = $state('');
 
 	let config: Config | null = $state(null);
 	let eip1193Provider: WalletPairProvider | null = $state(null);
-	let status: 'idle' | 'pairing' | 'ble_scan' | 'connected' | 'error' =
-		$state('idle');
+	let status: 'idle' | 'pairing' | 'connected' | 'error' = $state('idle');
 
 	let pairingUri = $state('');
 	let sessionFingerprint = $state('');
@@ -50,9 +44,6 @@
 	let targetChainId = $state(11155111);
 
 	let log = $state<{ dir: 'out' | 'in' | 'err'; type: string; detail: string }[]>([]);
-
-	// Promise resolver for bridging BLE scan click → connector flow
-	let bleScanResolve: (() => void) | null = $state(null);
 
 	// ---------------------------------------------------------------------------
 	// Helpers
@@ -77,10 +68,6 @@
 		navigator.clipboard.writeText(pairingUri);
 	}
 
-	onMount(() => {
-		bleSupported = isWebBleSupported();
-	});
-
 	// ---------------------------------------------------------------------------
 	// Connect with wagmi
 	// ---------------------------------------------------------------------------
@@ -90,15 +77,9 @@
 		sessionFingerprint = '';
 		qrDataUrl = '';
 		signResult = '';
-		bleStatus = '';
-		bleScanResolve = null;
-
-		const isBle = transportMode === 'ble';
-		const transport = isBle ? new WebBleCentralTransport() : undefined;
 
 		const wpConnector = walletPair({
-			relayUrl: !isBle ? relayUrl : undefined,
-			transport,
+			relayUrl: relayUrl,
 			meta: { name: 'WalletPair wagmi dApp', description: 'WalletPair wagmi example', url: location.origin, icon: '' },
 
 			// 1) QR generated
@@ -106,26 +87,13 @@
 				pairingUri = uri;
 				renderQR(uri);
 				addLog('in', 'pairing_uri', uri.slice(0, 60) + '...');
-
-				if (isBle) {
-					status = 'ble_scan';
-					bleStatus = 'Channel created. Show QR to wallet, then click Scan.';
-				}
 			},
 
 			// 2) Session fingerprint available
 			onSessionFingerprint: (fingerprint: string) => {
 				sessionFingerprint = fingerprint;
 				addLog('in', 'session_fingerprint', fingerprint);
-			},
-
-			// 3) BLE only: wait for user to click "Scan for Wallet"
-			onBeforeTransportConnect: isBle
-				? () =>
-						new Promise<void>((resolve) => {
-							bleScanResolve = resolve;
-						})
-				: undefined
+			}
 		} as Parameters<typeof walletPair>[0]);
 
 		const cfg = createConfig({
@@ -161,7 +129,7 @@
 
 		// Connect
 		try {
-			addLog('out', 'connect', `mode=${transportMode}`);
+			addLog('out', 'connect', 'mode=ws');
 			const result = await connect(cfg, { connector: cfg.connectors[0]! });
 
 			account = { address: result.accounts[0] ?? '', chainId: result.chainId };
@@ -188,18 +156,6 @@
 		} catch (e: any) {
 			status = 'error';
 			addLog('err', 'connect', e.message);
-		}
-	}
-
-	// ---------------------------------------------------------------------------
-	// UI button handlers — bridge clicks into the connector's Promise flow
-	// ---------------------------------------------------------------------------
-	function triggerBleScan() {
-		if (bleScanResolve) {
-			addLog('out', 'ble_scan', 'Opening BLE device picker...');
-			bleStatus = 'Scanning...';
-			bleScanResolve();
-			bleScanResolve = null;
 		}
 	}
 
@@ -287,10 +243,8 @@
 		sessionFingerprint = '';
 		qrDataUrl = '';
 		signResult = '';
-		bleStatus = '';
 		config = null;
 		eip1193Provider = null;
-		bleScanResolve = null;
 	}
 
 	function onMethodChange() {
@@ -313,46 +267,27 @@
 			<span
 				class="dot"
 				class:connected={status === 'connected'}
-				class:waiting={status === 'pairing' || status === 'ble_scan'}
+				class:waiting={status === 'pairing'}
 				class:closed={status === 'error'}
 			></span>
-			<span>{status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ')}</span>
+			<span>{status.charAt(0).toUpperCase() + status.slice(1)}</span>
 		</span>
 	</header>
 
-	<!-- Step 1: Transport + Connect -->
+	<!-- Step 1: Relay + Connect -->
 	{#if status === 'idle'}
 		<section>
-			<h3>Transport</h3>
-			<div class="row" style="margin-bottom:8px">
-				<button class:primary={transportMode === 'ws'} onclick={() => (transportMode = 'ws')}>
-					WebSocket
-				</button>
-				<button
-					class:primary={transportMode === 'ble'}
-					onclick={() => (transportMode = 'ble')}
-					disabled={!bleSupported}
-				>
-					Bluetooth
-				</button>
+			<h3>Relay</h3>
+			<div class="row">
+				<input bind:value={relayUrl} placeholder="ws://..." />
 			</div>
-
-			{#if transportMode === 'ws'}
-				<div class="row">
-					<input bind:value={relayUrl} placeholder="ws://..." />
-				</div>
-			{:else if !bleSupported}
-				<div style="color:var(--muted);font-size:12px">
-					Web Bluetooth not supported (use Chrome)
-				</div>
-			{/if}
 
 			<button class="primary mt" onclick={doConnect}>Connect Wallet</button>
 		</section>
 	{/if}
 
 	<!-- Step 2: Pairing -->
-	{#if status === 'pairing' || status === 'ble_scan'}
+	{#if status === 'pairing'}
 		<section>
 			<h3>Pairing</h3>
 			{#if qrDataUrl}
@@ -363,12 +298,6 @@
 			{#if pairingUri}
 				<div class="uri-box">{pairingUri}</div>
 				<button onclick={copyUri}>Copy URI</button>
-			{/if}
-
-			<!-- BLE: wallet scans QR first, then user clicks Scan -->
-			{#if status === 'ble_scan'}
-				<div style="color:var(--muted);font-size:12px;margin-top:6px">{bleStatus}</div>
-				<button class="primary mt" onclick={triggerBleScan}>Scan for Wallet</button>
 			{/if}
 
 			<!-- WS: waiting for wallet to join -->

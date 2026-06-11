@@ -16,8 +16,8 @@
 		},
 		{
 			icon: ArrowLeftRight,
-			title: 'Transport Agnostic',
-			description: 'WebSocket, Bluetooth, local TCP — same protocol, same code.'
+			title: 'One Simple Transport',
+			description: 'A single WebSocket relay. Any stateless relay works — switch by re-pairing.'
 		},
 		{
 			icon: Diamond,
