@@ -1,0 +1,132 @@
+name: CI
+
+# Runs the test / typecheck / lint gates for every package on each push and PR.
+# Root-level so it actually executes (the per-package workflows under
+# walletpair-websocket-relay/.github are ignored by GitHub, which only reads
+# workflows from the repository root).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sdk:
+    name: SDK (typecheck + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: walletpair-sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: walletpair-sdk/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm exec tsc
+      - name: Test
+        run: pnpm exec vitest run
+      - name: Build
+        run: pnpm build
+
+  extension:
+    name: Extension (svelte-check + tests + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: walletpair-extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: walletpair-extension/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Type / Svelte check
+        run: pnpm check
+      - name: Test
+        run: pnpm exec vitest run
+      - name: Build
+        run: pnpm build
+
+  relay-cf-worker:
+    name: Relay CF Worker (typecheck + bundle + tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: walletpair-websocket-relay-cf-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci || npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Bundle (dry-run deploy)
+        run: npx wrangler deploy --dry-run --outdir dist
+      - name: Test
+        run: npm test
+
+  relay-rust:
+    name: Relay Rust (test + clippy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: walletpair-websocket-relay
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            walletpair-websocket-relay/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('walletpair-websocket-relay/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
+        env:
+          RUST_LOG: warn
+
+  website:
+    name: Website (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: walletpair.org
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: walletpair.org/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Build (wrangler types + vite build)
+        run: pnpm build

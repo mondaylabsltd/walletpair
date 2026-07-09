@@ -5,21 +5,23 @@
   import ConnectedView from '@/components/ConnectedView.svelte';
   import PendingAccept from '@/components/PendingAccept.svelte';
   import SettingsView from '@/components/SettingsView.svelte';
-  import { Settings, Link, Info } from 'lucide-svelte';
+  import { Settings, Info } from 'lucide-svelte';
 
-  let state = $state<ExtensionState>({ phase: 'idle' });
+  // Named `extState` (not `state`) to avoid colliding with the `$state` rune,
+  // which Svelte would otherwise read as a store subscription (`$state`).
+  let extState = $state<ExtensionState>({ phase: 'idle' });
   let loading = $state(false);
   let page = $state<'main' | 'settings'>('main');
 
   // Fetch initial state
   $effect(() => {
     getExtensionState().then((s) => {
-      state = s;
+      extState = s;
     });
     const unsub = onStateUpdate((s) => {
       // Don't interrupt loading transition — startPairing handles its own state
       if (!loading) {
-        state = s;
+        extState = s;
       }
     });
     return unsub;
@@ -31,13 +33,13 @@
       sendToBackground<ExtensionState>({ action: 'start-pairing' }),
       new Promise((r) => setTimeout(r, 800)), // smooth transition before showing QR
     ]);
-    state = s;
+    extState = s;
     loading = false;
   }
 
   async function disconnect() {
     await sendToBackground({ action: 'disconnect' });
-    state = { phase: 'idle' };
+    extState = { phase: 'idle' };
   }
 
   async function acceptWallet() {
@@ -65,21 +67,21 @@
   <main class="content">
     {#if page === 'settings'}
       <SettingsView onBack={() => (page = 'main')} />
-    {:else if state.phase === 'idle' || state.phase === 'error'}
+    {:else if extState.phase === 'idle' || extState.phase === 'error'}
       <div class="idle-view animate-in">
         <!-- Decorative glow -->
         <div class="hero-glow"></div>
-      
+
         <div class="hero-text">
           <h2 class="title">Connect Your Wallet</h2>
           <p class="subtitle">
             Pair with your mobile wallet to use dApps on this browser
           </p>
         </div>
-        {#if state.error}
+        {#if extState.error}
           <div class="error-banner">
             <Info size={14} strokeWidth={2} />
-            <span>{state.error}</span>
+            <span>{extState.error}</span>
           </div>
         {/if}
         <button class="btn-primary" onclick={startPairing} disabled={loading}>
@@ -90,22 +92,22 @@
           {/if}
         </button>
       </div>
-    {:else if state.phase === 'pairing'}
+    {:else if extState.phase === 'pairing'}
       <div class="animate-slide">
-        <QrPairing uri={state.pairingUri ?? ''} fingerprint={state.sessionFingerprint} onCancel={disconnect} />
+        <QrPairing uri={extState.pairingUri ?? ''} fingerprint={extState.sessionFingerprint} onCancel={disconnect} />
       </div>
-    {:else if state.phase === 'pending_accept'}
+    {:else if extState.phase === 'pending_accept'}
       <PendingAccept
-        code={state.sessionFingerprint ?? ''}
-        walletName={state.walletMeta?.name}
+        code={extState.sessionFingerprint ?? ''}
+        walletName={extState.walletMeta?.name}
         onAccept={acceptWallet}
         onReject={rejectWallet}
       />
-    {:else if state.phase === 'connected'}
+    {:else if extState.phase === 'connected'}
       <div class="animate-scale">
-        <ConnectedView wallet={state.wallet} onDisconnect={disconnect} signingInProgress={state.signingInProgress} />
+        <ConnectedView wallet={extState.wallet} onDisconnect={disconnect} signingInProgress={extState.signingInProgress} />
       </div>
-    {:else if state.phase === 'disconnected'}
+    {:else if extState.phase === 'disconnected'}
       <div class="disconnected-view">
         <div class="status-badge orange">
           <span class="status-dot orange"></span>
@@ -194,12 +196,6 @@
     height: 200px;
     background: radial-gradient(circle, rgba(37, 99, 235, 0.08) 0%, transparent 70%);
     pointer-events: none;
-  }
-
-  .hero-icon {
-    margin-bottom: 4px;
-    position: relative;
-    z-index: 1;
   }
 
   .hero-text {

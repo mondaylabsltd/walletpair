@@ -21,6 +21,11 @@ pub enum ProcessResult {
     Ok,
     /// A new channel was created — caller should increment the global counter.
     OkCreated,
+    /// An existing channel at the same id was replaced (spec §13 re-create, or a
+    /// dead/closed channel cleaned up on re-create). One channel was removed and
+    /// one created, so the net change to the channel count is zero — the caller
+    /// must NOT touch the global counter.
+    OkReplaced,
     /// A channel was removed — caller should decrement the global counter.
     OkRemoved,
     /// Reject the sender: send this close JSON, then disconnect.
@@ -60,9 +65,21 @@ pub fn process_message(
             handle_create(store, conn_id, sender, &ch, &from, metrics, at_capacity)
         }
 
-        ClientMessage::Join { ch, from, sealed_join_null, .. } => {
-            handle_join(store, conn_id, sender, raw_text, &ch, &from, sealed_join_null, metrics)
-        }
+        ClientMessage::Join {
+            ch,
+            from,
+            sealed_join_null,
+            ..
+        } => handle_join(
+            store,
+            conn_id,
+            sender,
+            raw_text,
+            &ch,
+            &from,
+            sealed_join_null,
+            metrics,
+        ),
 
         ClientMessage::Accept {
             ch, from, target, ..
@@ -88,9 +105,9 @@ pub fn process_message(
             handle_data(store, raw_text, &ch, &from, "pong", None, metrics)
         }
 
-        ClientMessage::Close {
-            ch, from, reason,
-        } => handle_close(store, raw_text, &ch, &from, &reason, metrics),
+        ClientMessage::Close { ch, from, reason } => {
+            handle_close(store, raw_text, &ch, &from, &reason, metrics)
+        }
     }
 }
 
@@ -103,6 +120,12 @@ fn handle_create(
     metrics: &Metrics,
     at_capacity: bool,
 ) -> ProcessResult {
+    // Whether this create replaced an existing channel at the same id. When set,
+    // remove_channel already decremented active_channels (-1) and the create
+    // below increments it (+1), netting zero; the global counter is likewise
+    // left untouched via ProcessResult::OkReplaced.
+    let mut replaced = false;
+
     // Channel already exists?
     if let Some(existing) = store.get(ch) {
         match existing.state {
@@ -110,22 +133,19 @@ fn handle_create(
             ChannelState::WaitingForWallet => {
                 tracing::info!(ch = %ch, "replacing waiting channel on re-create");
                 store.remove_channel(ch, metrics, CloseReason::Normal);
+                replaced = true;
                 // Fall through to create a new channel below.
-                // Note: we don't return OkRemoved+OkCreated — the net effect is
-                // a replacement, so we skip decrementing the global counter here
-                // and let the OkCreated at the bottom handle the count.
-                metrics.active_channels.inc(); // compensate for the dec in remove_channel
             }
             // Connected state: reject unless the dApp connection is dead
             ChannelState::Connected => {
                 let dapp_dead = existing
                     .dapp_conn
                     .as_ref()
-                    .map_or(true, |c| c.sender.is_closed());
+                    .is_none_or(|c| c.sender.is_closed());
                 if dapp_dead {
                     tracing::info!(ch = %ch, "cleaning up stale connected channel on re-create");
                     store.remove_channel(ch, metrics, CloseReason::Normal);
-                    metrics.active_channels.inc(); // compensate for the dec in remove_channel
+                    replaced = true;
                 } else {
                     metrics
                         .messages_rejected_total
@@ -145,7 +165,7 @@ fn handle_create(
             // Closed: shouldn't normally be in the store, but treat as gone
             ChannelState::Closed => {
                 store.remove_channel(ch, metrics, CloseReason::Normal);
-                metrics.active_channels.inc(); // compensate for the dec in remove_channel
+                replaced = true;
             }
         }
     }
@@ -177,7 +197,11 @@ fn handle_create(
     let _ = try_send(sender, ready, metrics);
 
     tracing::info!(ch = %ch, peer = %from, "channel created");
-    ProcessResult::OkCreated
+    if replaced {
+        ProcessResult::OkReplaced
+    } else {
+        ProcessResult::OkCreated
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -670,7 +694,9 @@ mod tests {
         let (raw, msg) = make_create_msg(&ch, &dapp);
         let result = process_message(&mut store, 2, &tx2, &raw, msg, &metrics, false);
 
-        assert!(matches!(result, ProcessResult::OkCreated));
+        // A replacement is net-zero for the channel count, so it must report
+        // OkReplaced (not OkCreated) so the caller does not inflate the counter.
+        assert!(matches!(result, ProcessResult::OkReplaced));
         assert!(store.contains(&ch));
         assert_eq!(store.channel_count(), 1);
 
@@ -679,6 +705,47 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&ready).unwrap();
         assert_eq!(v["t"], "ready");
         assert_eq!(v["body"]["state"], "waiting");
+    }
+
+    #[test]
+    fn repeated_recreate_does_not_drift_capacity_counters() {
+        // Regression: a re-create replacement used to leave the active_channels
+        // gauge drifting +1 each time (a compensating inc on top of the create's
+        // inc) and reported OkCreated, so the session loop also inflated the
+        // global total_channels counter with no matching dec — eventually
+        // tripping at_capacity()/`/readyz` 503 despite ample real capacity.
+        // The fix nets both counters to zero on replacement; here we pin the
+        // gauge and the result variant (the latter drives the global counter via
+        // the `OkReplaced => {}` arm in the session loop).
+        let config = test_config();
+        let metrics = test_metrics();
+        let mut store = ChannelStore::new(&config);
+        let ch = make_channel_id();
+        let dapp = make_peer_id(1);
+
+        // Initial create.
+        let (tx, _rx) = mpsc::channel(64);
+        let (raw, msg) = make_create_msg(&ch, &dapp);
+        let result = process_message(&mut store, 1, &tx, &raw, msg, &metrics, false);
+        assert!(matches!(result, ProcessResult::OkCreated));
+        assert_eq!(metrics.active_channels.get(), 1);
+        assert_eq!(store.channel_count(), 1);
+
+        // Re-create the same waiting channel many times — the spec §13 reconnect
+        // flow. The gauge and the physical channel count must not drift, and each
+        // replacement must report OkReplaced (net-zero for the global counter).
+        for i in 0..50 {
+            let (txn, _rxn) = mpsc::channel(64);
+            let (raw, msg) = make_create_msg(&ch, &dapp);
+            let result = process_message(&mut store, 100 + i, &txn, &raw, msg, &metrics, false);
+            assert!(matches!(result, ProcessResult::OkReplaced), "iteration {i}");
+            assert_eq!(
+                metrics.active_channels.get(),
+                1,
+                "active_channels drifted at {i}"
+            );
+            assert_eq!(store.channel_count(), 1, "channel_count drifted at {i}");
+        }
     }
 
     #[test]
@@ -751,7 +818,9 @@ mod tests {
         let (raw, msg) = make_create_msg(&ch, &dapp);
         let result = process_message(&mut store, 3, &tx2, &raw, msg, &metrics, false);
 
-        assert!(matches!(result, ProcessResult::OkCreated));
+        // Cleaning up a stale connected channel and creating in its place is a
+        // net-zero replacement.
+        assert!(matches!(result, ProcessResult::OkReplaced));
         assert!(store.contains(&ch));
 
         // Should receive ready.waiting for the new channel

@@ -6,6 +6,7 @@
  * (background.ts, test files) continue to work without changes.
  */
 import { getHandler } from './protocols/registry';
+import { isSafeRpcUrl } from './protocols/ethereum/rpc-proxy';
 import { getSettings } from './storage';
 
 // Re-export constants for backward compatibility
@@ -28,6 +29,12 @@ export async function proxyRpcCall(
   const merged: Record<string, string> = {};
   if (walletRpcUrls) {
     for (const [caip2, url] of Object.entries(walletRpcUrls)) {
+      // Wallet-provided URLs are untrusted — guard against SSRF before the
+      // service worker fetches them. User settings (below) are trusted.
+      if (!isSafeRpcUrl(url)) {
+        console.warn(`[RPC] Ignoring unsafe wallet-provided RPC URL for ${caip2}`);
+        continue;
+      }
       // "eip155:1" → "1"
       const parts = caip2.split(':');
       const numericId = parts[1] ?? parts[0];

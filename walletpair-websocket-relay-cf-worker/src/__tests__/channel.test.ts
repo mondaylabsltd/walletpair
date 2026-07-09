@@ -39,7 +39,10 @@ function collectMessages(ws: WebSocket): string[] {
 }
 
 // Parse a collected message
-function parse(raw: string): Record<string, unknown> {
+// Test helper: parsed protocol messages are accessed by nested fields
+// (e.g. .body.reconnect), so `any` matches the other suites' convention.
+// biome-ignore lint/suspicious/noExplicitAny: test JSON helper
+function parse(raw: string): any {
   return JSON.parse(raw);
 }
 

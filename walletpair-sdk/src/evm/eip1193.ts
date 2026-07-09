@@ -78,22 +78,34 @@ const defaultMapper: MethodMapper = {
       case 'eth_accounts':
         return { method: 'wallet_getAccounts' }
       case 'personal_sign': {
-        // personal_sign params: [message, address] where message is hex-encoded bytes
+        // personal_sign params: [message, address] where message is hex-encoded bytes.
         const p = params as [string, string] | undefined
         const msg = p?.[0]
-        // EIP-1193 personal_sign: message is always hex-encoded bytes.
-        // Decode hex to UTF-8 text and route to wallet_signMessage.
+        // The EVM sub-protocol (§6.4) transports the message as UTF-8 text via
+        // wallet_signMessage. A hex payload that is not well-formed or not valid
+        // UTF-8 (raw digests, binary blobs) cannot be represented faithfully, so
+        // reject it rather than silently signing different bytes than the dApp
+        // submitted (which would yield a signature that fails verification).
         let text = msg ?? ''
         if (msg?.startsWith('0x')) {
+          const hex = msg.slice(2)
+          if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
+            throw new ProviderRpcError(
+              RpcErrorCode.INVALID_PARAMS,
+              'personal_sign message is not valid hex',
+            )
+          }
+          const bytes = new Uint8Array(hex.length / 2)
+          for (let i = 0; i < bytes.length; i++) {
+            bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+          }
           try {
-            const hex = msg.slice(2)
-            const bytes = new Uint8Array(hex.length / 2)
-            for (let i = 0; i < bytes.length; i++) {
-              bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
-            }
-            text = new TextDecoder().decode(bytes)
+            text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
           } catch {
-            text = msg
+            throw new ProviderRpcError(
+              RpcErrorCode.INVALID_PARAMS,
+              'personal_sign message is not valid UTF-8; binary payloads are not supported over this transport',
+            )
           }
         }
         return { method: 'wallet_signMessage', params: { message: text, address: p?.[1] } }
@@ -318,6 +330,12 @@ async function jsonRpcFetch(url: string, method: string, params: unknown): Promi
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: params ?? [] }),
       signal: controller.signal,
     })
+    // An HTTP error is a transport failure, not a JSON-RPC answer — throwing an
+    // Error with no numeric `code` lets the failover advance to the next
+    // endpoint rather than parsing an error page as a node response.
+    if (!res.ok) {
+      throw new Error(`RPC HTTP ${res.status}`)
+    }
     const contentLength = res.headers.get('content-length')
     if (contentLength && Number.parseInt(contentLength, 10) > RPC_MAX_RESPONSE_BYTES) {
       throw new Error('RPC response too large')

@@ -144,8 +144,10 @@ pub async fn handle_ws(
         // Enforce single-channel binding
         if let Some(ref b) = binding {
             if msg.channel_id() != b.channel_id {
-                let close =
-                    protocol::build_terminate(msg.channel_id(), protocol::CloseReason::ProtocolError);
+                let close = protocol::build_terminate(
+                    msg.channel_id(),
+                    protocol::CloseReason::ProtocolError,
+                );
                 let _ = tx.try_send(close);
                 metrics
                     .messages_rejected_total
@@ -200,12 +202,22 @@ pub async fn handle_ws(
         let at_capacity = store.at_capacity();
         let result = {
             let mut shard = store.lock_shard(msg.channel_id());
-            relay::process_message(&mut shard, conn_id, &tx, &raw_text, msg, &metrics, at_capacity)
+            relay::process_message(
+                &mut shard,
+                conn_id,
+                &tx,
+                &raw_text,
+                msg,
+                &metrics,
+                at_capacity,
+            )
         };
 
         match result {
             ProcessResult::Ok => {}
             ProcessResult::OkCreated => store.inc_total(),
+            // Replacement is net-zero: one channel removed, one created.
+            ProcessResult::OkReplaced => {}
             ProcessResult::OkRemoved => store.dec_total(),
             ProcessResult::Reject(close_json) => {
                 let _ = tx.try_send(close_json);

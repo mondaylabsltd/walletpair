@@ -1,11 +1,14 @@
 <script lang="ts">
-	import type { Component } from 'svelte';
+	import type { ComponentType } from 'svelte';
 
+	// lucide-svelte v1 icons are legacy class components (SvelteComponentTyped),
+	// so the prop is typed as the legacy `ComponentType`, not the new functional
+	// `Component` type (which `typeof Braces` is not assignable to).
 	let {
 		title,
 		description,
 		icon: Icon
-	}: { title: string; description: string; icon: Component } = $props();
+	}: { title: string; description: string; icon: ComponentType } = $props();
 </script>
 
 <div class="card">

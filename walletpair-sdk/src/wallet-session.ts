@@ -58,6 +58,9 @@ function isPromiseLike<T = unknown>(value: unknown): value is Promise<T> {
   return !!value && typeof (value as Promise<T>).then === 'function'
 }
 
+/** No-op used to attach handlers that keep the persistence save-chain alive. */
+const NOOP = (): void => {}
+
 interface PendingRequestRecord {
   paramsHash: string
   method: string
@@ -119,6 +122,12 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
   private maxReconnectDurationMs: number
   private pendingRequestRecords = new Map<string, PendingRequestRecord>()
   private idempotencyCache = new Map<string, CachedRequestResponse>()
+  /**
+   * Tail of the FIFO chain that serializes async persistence writes. Undefined
+   * until the first async `save()` is observed (synchronous backends never set
+   * it, keeping their fast path). See {@link persistSnapshot}.
+   */
+  private saveChain: Promise<void> | undefined
   private broadcastResponseCache = new Map<string, CachedRequestResponse>()
   private persistence: SessionPersistence | undefined
 
@@ -367,6 +376,12 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
       dappName: this.dappName ?? null,
       sessionStartTime: this.sessionStartTime,
     })
+    // HMAC-tag the snapshot to catch accidental corruption and partial/torn
+    // writes on restore. NOTE: this is NOT a defense against an attacker who can
+    // write storage — the MAC key (sendKey) lives in the signed plaintext, so
+    // such an attacker can forge a valid tag, and restore() also accepts
+    // unsigned JSON for backward compatibility. Confidentiality of the key
+    // material at rest is out of scope (see security-audit-brief.md).
     return this.sendKey ? signSnapshot(this.sendKey, json) : json
   }
 
@@ -856,7 +871,28 @@ export class WalletSession extends Emitter<WalletSessionEvents> {
 
   private persistSnapshot(): void | Promise<void> {
     if (!this.persistence) return
-    return this.persistence.save(this.serialize())
+    // Capture the snapshot synchronously so it reflects the seq counters at
+    // THIS call site (nextSendSeq has already advanced sendSeq before calling).
+    const snapshot = this.serialize()
+    const prior = this.saveChain
+    if (prior === undefined) {
+      // No async save in flight — try the synchronous fast path. A backend
+      // whose save() returns void has already persisted durably, so there is
+      // nothing to reorder and no chain is needed.
+      const result = this.persistence.save(snapshot)
+      if (!isPromiseLike(result)) return
+      this.saveChain = result.then(NOOP, NOOP)
+      return result
+    }
+    // An async backend is in use. Serialize this save behind the previous one
+    // so a snapshot carrying a lower sendSeq can never be durably written after
+    // one carrying a higher sendSeq — which, under a backend that completes
+    // concurrent save() calls out of order, would let a crash+restore regress
+    // sendSeq and reuse a ChaCha20-Poly1305 nonce (catastrophic keystream/tag
+    // reuse). Every send is write-ahead gated on the returned promise.
+    const save = prior.then(() => this.persistence!.save(snapshot))
+    this.saveChain = save.then(NOOP, NOOP)
+    return save
   }
 
   private persistSnapshotAsync(): void {

@@ -8,6 +8,7 @@ import {
   sealPayload,
 } from '../crypto.js'
 import { DAppSession } from '../dapp-session.js'
+import { RpcErrorCode } from '../errors.js'
 import { MockTransport, makeJoinBody } from '../test-helpers.js'
 import type { ProtocolMessage } from '../types.js'
 import { WalletPairProvider } from './eip1193.js'
@@ -203,6 +204,26 @@ describe('WalletPairProvider', () => {
       respondToLatestReq({ signature: '0xsig...' })
       const result = await promise
       expect(result).toBe('0xsig...')
+    })
+
+    it('rejects non-UTF-8 hex payloads instead of silently corrupting them', async () => {
+      await setupConnectedSession()
+
+      // 0xff80 is not valid UTF-8. Signing its lossy TextDecoder output would
+      // produce a signature over different bytes than the dApp submitted.
+      await expect(
+        provider.request({ method: 'personal_sign', params: ['0xff80', '0xabc'] }),
+      ).rejects.toMatchObject({ code: RpcErrorCode.INVALID_PARAMS })
+
+      expect(transport.sent.find((m) => m.t === 'req')).toBeUndefined()
+    })
+
+    it('rejects malformed hex payloads', async () => {
+      await setupConnectedSession()
+
+      await expect(
+        provider.request({ method: 'personal_sign', params: ['0xzz', '0xabc'] }),
+      ).rejects.toMatchObject({ code: RpcErrorCode.INVALID_PARAMS })
     })
   })
 

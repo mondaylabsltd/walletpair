@@ -165,7 +165,7 @@ describe('RPC Routing Logic', () => {
     it('uses correct RPC URL per chain from DEFAULT_RPC', async () => {
       const chains = [
         { id: 1, url: 'https://eth.llamarpc.com' },
-        { id: 137, url: 'https://polygon-rpc.com' },
+        { id: 137, url: 'https://polygon.drpc.org' },
         { id: 42161, url: 'https://arb1.arbitrum.io/rpc' },
         { id: 8453, url: 'https://mainnet.base.org' },
       ];
@@ -669,7 +669,7 @@ describe('Method Mapping', () => {
 
     it('eth_accounts returns empty when permitted but no wallet', () => {
       const permitted = true;
-      const connectedWallet: { address: string } | null = null;
+      const connectedWallet = null as { address: string } | null;
       const result = !permitted ? [] : connectedWallet ? [connectedWallet.address] : [];
       expect(result).toEqual([]);
     });

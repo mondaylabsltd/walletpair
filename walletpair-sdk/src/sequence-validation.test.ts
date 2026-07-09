@@ -886,6 +886,77 @@ describe('Sequence validation', () => {
       expect(await result).toBe('ok')
     })
 
+    it('serializes async persistence writes so sendSeq cannot regress under out-of-order completion', async () => {
+      // Models a remote/KV persistence backend that may complete concurrent
+      // save() calls out of order. `hold` mirrors ControlledPersistence so the
+      // connect handshake persists synchronously; only the writes under test
+      // are made async and reorderable.
+      class ReorderingPersistence implements SessionPersistence {
+        durable = '{}'
+        hold = false
+        maxConcurrent = 0
+        private inflight: Array<{ snap: string; resolve: () => void }> = []
+
+        save(snapshot: string): void | Promise<void> {
+          if (!this.hold) {
+            this.durable = snapshot
+            return
+          }
+          return new Promise<void>((resolve) => {
+            this.inflight.push({ snap: snapshot, resolve })
+            this.maxConcurrent = Math.max(this.maxConcurrent, this.inflight.length)
+          })
+        }
+
+        load(): string | null {
+          return this.durable
+        }
+
+        get pendingCount(): number {
+          return this.inflight.length
+        }
+
+        /** Resolve all in-flight saves in REVERSE dispatch order, applying each
+         *  to `durable` as it completes (i.e. the lower-seq write lands last). */
+        flushReverse(): void {
+          const batch = this.inflight.splice(0).reverse()
+          for (const { snap, resolve } of batch) {
+            this.durable = snap
+            resolve()
+          }
+        }
+      }
+
+      const persistence = new ReorderingPersistence()
+      const ctx = setupDAppWithManualWallet(persistence)
+      const { session } = ctx
+      await connectDAppManually(ctx)
+      await wait(20)
+
+      // Fire two requests concurrently; each advances sendSeq and persists.
+      // They never receive a response, so swallow the eventual close rejection.
+      persistence.hold = true
+      session.request('wallet_getAccounts').catch(() => {})
+      session.request('wallet_getAccounts').catch(() => {})
+      await wait(20)
+
+      // The FIFO save-chain must keep at most one save() in flight, so a
+      // reordering backend has nothing to reorder.
+      expect(persistence.maxConcurrent).toBeLessThanOrEqual(1)
+
+      // Drain the chain: resolving one save lets the next dispatch. Even though
+      // each batch is applied in reverse, serialization means the highest
+      // sendSeq is always written last.
+      for (let i = 0; i < 6 && persistence.pendingCount > 0; i++) {
+        persistence.flushReverse()
+        await wait(10)
+      }
+
+      expect((parseSnapshot(persistence.durable) as Record<string, unknown>).sendSeq).toBe(2)
+      persistence.hold = false
+      session.close()
+    })
+
     it('WalletSession persists recvSeq before emitting decrypted requests', async () => {
       const persistence = new ControlledPersistence()
       const ctx = setupWalletWithManualDApp(persistence)

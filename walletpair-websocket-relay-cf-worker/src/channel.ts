@@ -32,6 +32,17 @@ const UNPAIRED_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const CONNECTED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
+ * Max concurrent WebSockets a single channel DO will accept. A channel needs
+ * exactly two (dApp + wallet); the extra slack absorbs reconnects whose stale
+ * socket has not yet been GC'd. Beyond this we reject with 429 so a client
+ * scripting one channel id cannot pile up sockets (and blow up the O(n)
+ * peer lookups). This is a per-DO backstop only — global connection/channel
+ * caps and per-IP create-rate limiting still require Cloudflare WAF / Rate
+ * Limiting rules on the zone (see README / deployment runbook).
+ */
+const MAX_SOCKETS_PER_CHANNEL = 8;
+
+/**
  * ChannelDO: One Durable Object per channel. Both peers (dApp and wallet)
  * connect their WebSockets to this DO. Uses the Hibernation API for
  * cost-effective idle connections.
@@ -60,6 +71,13 @@ export class ChannelDO extends DurableObject<Env> {
     const ch = url.searchParams.get("ch");
     if (!ch || !validateChannelId(ch)) {
       return new Response("Invalid channel ID", { status: 400 });
+    }
+
+    // Per-DO connection cap: a channel only ever needs two sockets. Reject
+    // beyond a small slack so a client scripting one channel id cannot pile up
+    // sockets against this DO.
+    if (this.ctx.getWebSockets().length >= MAX_SOCKETS_PER_CHANNEL) {
+      return new Response("Too many connections for this channel", { status: 429 });
     }
 
     // Negotiate subprotocol

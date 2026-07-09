@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   createProvider,
   ProviderRpcError,
@@ -170,7 +170,7 @@ describe('handleMessage wp-response', () => {
     provider.on('accountsChanged', accountsHandler);
 
     // Create a fake pending entry (simulating provider.request)
-    pending.set('test-id', { resolve: vi.fn(), reject: vi.fn() });
+    pending.set('test-id', { resolve: vi.fn(), reject: vi.fn(), timer: setTimeout(() => {}, 0) });
 
     handleMessage({
       channel: 'walletpair-ext',
@@ -187,7 +187,7 @@ describe('handleMessage wp-response', () => {
 
   it('ignores messages with wrong channel', () => {
     const { handleMessage, pending } = setup();
-    pending.set('x', { resolve: vi.fn(), reject: vi.fn() });
+    pending.set('x', { resolve: vi.fn(), reject: vi.fn(), timer: setTimeout(() => {}, 0) });
     handleMessage({ channel: 'other', type: 'wp-response', id: 'x', result: 'ok' });
     expect(pending.has('x')).toBe(true); // not consumed
   });

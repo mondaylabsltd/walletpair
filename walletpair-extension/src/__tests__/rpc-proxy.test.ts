@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { READ_ONLY_METHODS, proxyRpcCall, DEFAULT_RPC } from '../lib/rpc-proxy';
+import { isSafeRpcUrl } from '../lib/protocols/ethereum/rpc-proxy';
 
 // ── Mock chrome.storage.local (needed by getSettings) ──────────────────
 
@@ -70,6 +71,46 @@ describe('READ_ONLY_METHODS', () => {
 
   it('includes eth_sendRawTransaction (pre-signed, no wallet needed)', () => {
     expect(READ_ONLY_METHODS.has('eth_sendRawTransaction')).toBe(true);
+  });
+});
+
+describe('isSafeRpcUrl (SSRF guard for untrusted RPC URLs)', () => {
+  it('accepts public HTTPS endpoints', () => {
+    for (const url of Object.values(DEFAULT_RPC)) {
+      expect(isSafeRpcUrl(url)).toBe(true);
+    }
+    expect(isSafeRpcUrl('https://rpc.example.com/v1')).toBe(true);
+  });
+
+  it('rejects non-HTTPS schemes', () => {
+    expect(isSafeRpcUrl('http://eth.llamarpc.com')).toBe(false);
+    expect(isSafeRpcUrl('ws://eth.llamarpc.com')).toBe(false);
+    expect(isSafeRpcUrl('file:///etc/passwd')).toBe(false);
+    expect(isSafeRpcUrl('not a url')).toBe(false);
+  });
+
+  it('rejects loopback, localhost, and cloud metadata', () => {
+    expect(isSafeRpcUrl('https://localhost/rpc')).toBe(false);
+    expect(isSafeRpcUrl('https://app.localhost/rpc')).toBe(false);
+    expect(isSafeRpcUrl('https://127.0.0.1:8545')).toBe(false);
+    expect(isSafeRpcUrl('https://169.254.169.254/latest/meta-data')).toBe(false);
+    expect(isSafeRpcUrl('https://[::1]/rpc')).toBe(false);
+  });
+
+  it('rejects private and CGNAT IPv4 ranges', () => {
+    expect(isSafeRpcUrl('https://10.0.0.5')).toBe(false);
+    expect(isSafeRpcUrl('https://172.16.3.4')).toBe(false);
+    expect(isSafeRpcUrl('https://172.31.255.1')).toBe(false);
+    expect(isSafeRpcUrl('https://192.168.1.1')).toBe(false);
+    expect(isSafeRpcUrl('https://100.64.0.1')).toBe(false);
+    // Public IPs adjacent to private ranges remain allowed.
+    expect(isSafeRpcUrl('https://172.32.0.1')).toBe(true);
+    expect(isSafeRpcUrl('https://8.8.8.8')).toBe(true);
+  });
+
+  it('rejects unique-local and link-local IPv6', () => {
+    expect(isSafeRpcUrl('https://[fd00::1]/rpc')).toBe(false);
+    expect(isSafeRpcUrl('https://[fe80::1]/rpc')).toBe(false);
   });
 });
 
