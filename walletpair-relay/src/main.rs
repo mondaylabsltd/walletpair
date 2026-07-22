@@ -27,9 +27,7 @@ struct ChannelQuery {
 
 #[tokio::main]
 async fn main() {
-    let app = Router::new()
-        .route("/v1", get(websocket_handler))
-        .with_state(RelayState::default());
+    let app = app();
     let listener = TcpListener::bind("0.0.0.0:3000")
         .await
         .expect("failed to bind relay listener");
@@ -38,6 +36,12 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("relay server failed");
+}
+
+fn app() -> Router {
+    Router::new()
+        .route("/v1", get(websocket_handler))
+        .with_state(RelayState::default())
 }
 
 async fn websocket_handler(
@@ -115,4 +119,67 @@ impl RelayState {
 
 fn is_valid_channel_id(channel_id: &str) -> bool {
     channel_id.len() == 64 && channel_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::time::{Duration, timeout};
+    use tokio_tungstenite::{connect_async, tungstenite::Message as ClientMessage};
+
+    const CHANNEL_A: &str = "0140446dc1742a90025fcd068df3a7338314e1da1649d520798c8581a0937d0c";
+    const CHANNEL_B: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn validates_64_character_hex_channel_ids() {
+        assert!(is_valid_channel_id(CHANNEL_A));
+        assert!(is_valid_channel_id(CHANNEL_B));
+        assert!(!is_valid_channel_id("short"));
+        assert!(!is_valid_channel_id(&"z".repeat(64)));
+    }
+
+    #[tokio::test]
+    async fn relays_messages_only_to_clients_in_the_same_channel() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app()).await.unwrap();
+        });
+
+        let channel_a_url = format!("ws://{address}/v1?ch={CHANNEL_A}");
+        let channel_b_url = format!("ws://{address}/v1?ch={CHANNEL_B}");
+        let (mut sender, _) = connect_async(&channel_a_url).await.unwrap();
+        let (mut same_channel_peer, _) = connect_async(&channel_a_url).await.unwrap();
+        let (mut other_channel_peer, _) = connect_async(&channel_b_url).await.unwrap();
+
+        // Let every upgraded connection register its channel receiver before
+        // publishing the test frame.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let payload = "channel broadcast";
+        sender
+            .send(ClientMessage::Text(payload.into()))
+            .await
+            .unwrap();
+
+        let sender_message = timeout(Duration::from_secs(1), sender.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let peer_message = timeout(Duration::from_secs(1), same_channel_peer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(sender_message.into_text().unwrap(), payload);
+        assert_eq!(peer_message.into_text().unwrap(), payload);
+
+        assert!(
+            timeout(Duration::from_millis(100), other_channel_peer.next())
+                .await
+                .is_err()
+        );
+    }
 }
