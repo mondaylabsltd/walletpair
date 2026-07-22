@@ -1,4 +1,0 @@
-onlyBuiltDependencies:
-  - workerd
-  - sharp
-  - esbuild

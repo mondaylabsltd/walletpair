@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "WebFetch(domain:wagmi.sh)",
-      "Bash(cargo clippy:*)",
-      "Bash(ps -p 44147 -o comm=)"
-    ]
-  }
-}
