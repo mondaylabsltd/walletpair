@@ -13,3 +13,9 @@ ws://127.0.0.1:3000/v1?ch=0140446dc1742a90025fcd068df3a7338314e1da1649d520798c85
 ```
 
 Text and binary frames are broadcast to every active connection on the same channel (including the sender). Connections on other channels receive nothing. A channel is removed automatically when its last client disconnects.
+
+When a connection joins, every client in that channel receives this text frame:
+
+```json
+{"type":"channel_joined","channel":"<channel-id>"}
+```

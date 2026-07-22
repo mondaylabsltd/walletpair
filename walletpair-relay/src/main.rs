@@ -59,6 +59,7 @@ async fn websocket_handler(
 async fn relay_socket(mut socket: WebSocket, state: RelayState, channel_id: String) {
     let sender = state.channel_sender(&channel_id).await;
     let mut receiver = sender.subscribe();
+    let _ = sender.send(channel_joined_event(&channel_id));
 
     loop {
         tokio::select! {
@@ -121,6 +122,14 @@ fn is_valid_channel_id(channel_id: &str) -> bool {
     channel_id.len() == 64 && channel_id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn channel_joined_event(channel_id: &str) -> Message {
+    Message::Text(channel_joined_event_text(channel_id).into())
+}
+
+fn channel_joined_event_text(channel_id: &str) -> String {
+    format!(r#"{{"type":"channel_joined","channel":"{channel_id}"}}"#)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,12 +159,24 @@ mod tests {
         let channel_a_url = format!("ws://{address}/v1?ch={CHANNEL_A}");
         let channel_b_url = format!("ws://{address}/v1?ch={CHANNEL_B}");
         let (mut sender, _) = connect_async(&channel_a_url).await.unwrap();
-        let (mut same_channel_peer, _) = connect_async(&channel_a_url).await.unwrap();
-        let (mut other_channel_peer, _) = connect_async(&channel_b_url).await.unwrap();
+        assert_eq!(
+            next_text(&mut sender).await,
+            channel_joined_event_text(CHANNEL_A)
+        );
 
-        // Let every upgraded connection register its channel receiver before
-        // publishing the test frame.
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        let (mut same_channel_peer, _) = connect_async(&channel_a_url).await.unwrap();
+        let expected_channel_a_event = channel_joined_event_text(CHANNEL_A);
+        assert_eq!(next_text(&mut sender).await, expected_channel_a_event);
+        assert_eq!(
+            next_text(&mut same_channel_peer).await,
+            channel_joined_event_text(CHANNEL_A)
+        );
+
+        let (mut other_channel_peer, _) = connect_async(&channel_b_url).await.unwrap();
+        assert_eq!(
+            next_text(&mut other_channel_peer).await,
+            channel_joined_event_text(CHANNEL_B)
+        );
 
         let payload = "channel broadcast";
         sender
@@ -163,23 +184,29 @@ mod tests {
             .await
             .unwrap();
 
-        let sender_message = timeout(Duration::from_secs(1), sender.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        let peer_message = timeout(Duration::from_secs(1), same_channel_peer.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert_eq!(sender_message.into_text().unwrap(), payload);
-        assert_eq!(peer_message.into_text().unwrap(), payload);
+        assert_eq!(next_text(&mut sender).await, payload);
+        assert_eq!(next_text(&mut same_channel_peer).await, payload);
 
         assert!(
             timeout(Duration::from_millis(100), other_channel_peer.next())
                 .await
                 .is_err()
         );
+    }
+
+    async fn next_text<S>(socket: &mut S) -> String
+    where
+        S: futures_util::Stream<
+                Item = Result<ClientMessage, tokio_tungstenite::tungstenite::Error>,
+            > + Unpin,
+    {
+        timeout(Duration::from_secs(1), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .into_text()
+            .unwrap()
+            .to_string()
     }
 }
