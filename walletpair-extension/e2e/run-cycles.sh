@@ -6,7 +6,6 @@ set -o pipefail
 CYCLES=${1:-30}
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 EXT_DIR="$(dirname "$SCRIPT_DIR")"
-SDK_DIR="$(dirname "$EXT_DIR")/walletpair-sdk"
 LOG_FILE="$SCRIPT_DIR/cycle-results.log"
 
 echo "============================================" | tee "$LOG_FILE"
@@ -32,19 +31,7 @@ for i in $(seq 1 "$CYCLES"); do
     continue
   fi
 
-  # Step 2: Unit tests (SDK)
-  SDK_OUT=$(cd "$SDK_DIR" && npm test 2>&1)
-  SDK_TESTS=$(echo "$SDK_OUT" | grep "Tests" | tail -1)
-  if echo "$SDK_OUT" | grep -q "passed"; then
-    echo "  SDK tests: ✅ $SDK_TESTS" | tee -a "$LOG_FILE"
-  else
-    echo "  SDK tests: ❌" | tee -a "$LOG_FILE"
-    echo "$SDK_OUT" | tail -5 >> "$LOG_FILE"
-    TOTAL_FAIL=$((TOTAL_FAIL + 1))
-    continue
-  fi
-
-  # Step 3: Unit tests (Extension)
+  # Step 2: Unit and protocol tests
   EXT_UT_OUT=$(cd "$EXT_DIR" && pnpm exec vitest run 2>&1)
   EXT_TESTS=$(echo "$EXT_UT_OUT" | grep "Tests" | tail -1)
   if echo "$EXT_UT_OUT" | grep -q "passed"; then
@@ -56,7 +43,7 @@ for i in $(seq 1 "$CYCLES"); do
     continue
   fi
 
-  # Step 4: E2E tests
+  # Step 3: E2E tests
   rm -rf /tmp/walletpair-e2e-profile 2>/dev/null
   E2E_OUT=$(cd "$EXT_DIR" && pnpm test:e2e 2>&1)
   E2E_RESULT=$(echo "$E2E_OUT" | grep "Results:")

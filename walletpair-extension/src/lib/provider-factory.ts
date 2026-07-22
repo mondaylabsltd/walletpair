@@ -4,6 +4,7 @@
  * Extracted from provider.content.ts so the core logic can be tested
  * without requiring the browser extension content script environment.
  */
+import { UNSUPPORTED_METHODS as ETHEREUM_UNSUPPORTED_METHODS } from './protocols/ethereum/methods';
 
 const MSG_CHANNEL = 'walletpair-ext';
 const PROVIDER_UUID = 'e3a10000-7770-4270-8000-000077700001';
@@ -19,12 +20,7 @@ export class ProviderRpcError extends Error {
   }
 }
 
-export const UNSUPPORTED_METHODS = new Set([
-  'eth_getEncryptionPublicKey',
-  'eth_decrypt',
-  'eth_sign',
-  'wallet_addEthereumChain',
-]);
+export const UNSUPPORTED_METHODS = new Set(ETHEREUM_UNSUPPORTED_METHODS);
 
 export interface PostMessageFn {
   (message: any, targetOrigin: string): void;
@@ -74,7 +70,7 @@ export function createProvider(postMessage: PostMessageFn, onGesture?: GestureFn
 
   const provider: Record<string, any> = {
     isWalletPair: true,
-    isMetaMask: true,
+    isMetaMask: false,
 
     async request(args: { method: string; params?: unknown }): Promise<unknown> {
       const { method, params } = args;
@@ -266,8 +262,18 @@ export function createProvider(postMessage: PostMessageFn, onGesture?: GestureFn
         state.isConnected = false;
         state.accounts = [];
         provider.selectedAddress = null;
-        emit('disconnect', new ProviderRpcError(4900, 'Disconnected'));
+        const error = data && typeof data === 'object' ? data as Record<string, unknown> : {};
+        emit('disconnect', new ProviderRpcError(
+          typeof error.code === 'number' ? error.code : 4900,
+          typeof error.message === 'string' ? error.message : 'Disconnected',
+          error.data,
+        ));
       } else if (evtName === 'connect') {
+        if (data && typeof data === 'object' && typeof data.chainId === 'string') {
+          state.chainId = data.chainId;
+          provider.chainId = state.chainId;
+          provider.networkVersion = String(parseInt(state.chainId, 16));
+        }
         if (!state.isConnected) {
           state.isConnected = true;
           emit('connect', { chainId: state.chainId });

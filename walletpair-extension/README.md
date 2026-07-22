@@ -1,6 +1,6 @@
 # WalletPair Browser Extension
 
-A Chrome/Firefox browser extension that bridges any dApp to your mobile wallet via the [WalletPair protocol](../walletpair-protocol-v1.md). Acts as an EIP-1193 injected provider that routes signing requests through a relay to your wallet app.
+A Chrome/Firefox browser extension that bridges any dApp to a mobile wallet via the [WalletPair protocols](../protocols/). It is an EIP-1193 injected provider with a self-contained relay, encryption, and Ethereum implementation.
 
 ## How It Works
 
@@ -10,8 +10,8 @@ A Chrome/Firefox browser extension that bridges any dApp to your mobile wallet v
 │  (page)  │ <─── response/events ─── │  (MAIN)     │ <───── port ────────── │  (SW)      │
 └─────────┘                           └────────────┘                         └────────────┘
                                                                                     │
-                                                                          WalletPair SDK
-                                                                          (DAppSession)
+                                                                    X25519 + MessagePack
+                                                                  + ChaCha20-Poly1305
                                                                                     │
                                                                               WebSocket
                                                                                     │
@@ -33,7 +33,7 @@ A Chrome/Firefox browser extension that bridges any dApp to your mobile wallet v
 
 2. **Content Bridge** (`content.ts`, ISOLATED world) — Bridges between page and background via `chrome.runtime.Port` with `sendMessage` fallback.
 
-3. **Background Service Worker** (`background.ts`) — Manages the WalletPair SDK session, routes requests to the wallet via relay, handles permissions and confirmations.
+3. **Background Service Worker** (`background.ts`) — Owns the encrypted WalletPair session, routes protocol requests and events, and enforces per-origin permissions.
 
 ## Supported Standards
 
@@ -42,11 +42,12 @@ A Chrome/Firefox browser extension that bridges any dApp to your mobile wallet v
 | EIP-1193 | Full | `request()`, events, error codes |
 | EIP-6963 | Full | Multi-wallet discovery (`eip6963:announceProvider`) |
 | EIP-1102 | Full | `eth_requestAccounts` authorization flow |
-| EIP-3085 | Not Supported | `wallet_addEthereumChain` — WalletPair proxies to the mobile wallet; chain management is the wallet's responsibility |
+| EIP-3085 | Full | `wallet_addEthereumChain` is forwarded to the mobile wallet |
 | EIP-3326 | Full | `wallet_switchEthereumChain` |
 | personal_sign | Full | Hex and text messages |
-| eth_signTypedData_v4 | Full | EIP-712 structured data |
+| eth_signTypedData / v1 / v3 / v4 | Full | Exact requested typed-data version is preserved |
 | eth_sendTransaction | Full | Forwarded to wallet for confirmation |
+| EIP-5792 | Full | `wallet_sendCalls`, `wallet_getCallsStatus`, capability discovery |
 | Legacy (`send`, `sendAsync`, `enable`) | Full | MetaMask compatibility |
 
 ## Build
@@ -103,10 +104,11 @@ The popup displays a request activity log showing method names, origins, timesta
 
 ### Service Worker Lifecycle
 
-- Session state persisted to `chrome.storage.local`
+- Session keys and monotonic directional counters persisted to `chrome.storage.local`
 - Restored on service worker restart
-- Keepalive alarm (every 20s) sends ping to maintain relay connection
-- Automatic reconnect with exponential backoff + jitter
+- A protocol-valid encrypted `eth_chainId` request keeps an active MV3 WebSocket warm
+- A persistent alarm detects service-worker/socket loss
+- Automatic reconnect with bounded exponential backoff
 
 ### Sidepanel
 
@@ -114,10 +116,10 @@ The sidepanel reuses the popup's `App.svelte` component with its own container s
 
 ## Security
 
-- End-to-end encryption (ChaCha20-Poly1305) between extension and wallet
-- Directional session keys prevent cross-direction forgery
-- All messages require authenticated encryption (no plaintext messages accepted)
-- Pairing code verification prevents MITM attacks
+- Per-channel ephemeral X25519 and HKDF-SHA256 directional keys
+- JSON-only MessagePack inside ChaCha20-Poly1305 authenticated encryption
+- CAIP-2 chain context and monotonic sequence number bound into AEAD additional data
+- Four-digit DApp fingerprint for the Wallet-side human comparison
 - Content script isolation (ISOLATED + MAIN world separation)
 - Per-origin permission checks
 - RPC proxy has 30s timeout and 2MB response limit
@@ -133,6 +135,6 @@ Configurable in extension settings:
 ## Tests
 
 ```bash
-npm run test       # 236 unit tests
-npm run test:e2e   # Full-stack E2E tests (extension + SDK + relay)
+npm run test       # Unit and protocol interoperability tests
+npm run test:e2e   # Browser provider integration tests
 ```

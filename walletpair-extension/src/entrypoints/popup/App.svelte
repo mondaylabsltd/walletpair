@@ -3,7 +3,6 @@
   import type { ExtensionState } from '@/lib/types';
   import QrPairing from '@/components/QrPairing.svelte';
   import ConnectedView from '@/components/ConnectedView.svelte';
-  import PendingAccept from '@/components/PendingAccept.svelte';
   import SettingsView from '@/components/SettingsView.svelte';
   import { Settings, Info } from 'lucide-svelte';
 
@@ -42,13 +41,6 @@
     extState = { phase: 'idle' };
   }
 
-  async function acceptWallet() {
-    await sendToBackground({ action: 'accept-wallet' });
-  }
-
-  async function rejectWallet() {
-    await sendToBackground({ action: 'reject-wallet' });
-  }
 </script>
 
 <div class="popup">
@@ -96,13 +88,6 @@
       <div class="animate-slide">
         <QrPairing uri={extState.pairingUri ?? ''} fingerprint={extState.sessionFingerprint} onCancel={disconnect} />
       </div>
-    {:else if extState.phase === 'pending_accept'}
-      <PendingAccept
-        code={extState.sessionFingerprint ?? ''}
-        walletName={extState.walletMeta?.name}
-        onAccept={acceptWallet}
-        onReject={rejectWallet}
-      />
     {:else if extState.phase === 'connected'}
       <div class="animate-scale">
         <ConnectedView wallet={extState.wallet} onDisconnect={disconnect} signingInProgress={extState.signingInProgress} />

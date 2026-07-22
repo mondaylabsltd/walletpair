@@ -4,6 +4,12 @@ export interface EIP1193Request {
   params?: unknown[] | Record<string, unknown>;
 }
 
+export interface RpcErrorInfo {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
 /** Wallet connection info stored in extension */
 export interface ConnectedWallet {
   address: string;
@@ -36,7 +42,7 @@ export interface ExtensionSettings {
 /** Message types between injected script <-> content script */
 export type InjectMessage =
   | { type: 'wp-request'; id: string; payload: EIP1193Request }
-  | { type: 'wp-response'; id: string; result?: unknown; error?: { code: number; message: string } }
+  | { type: 'wp-response'; id: string; result?: unknown; error?: RpcErrorInfo }
   | { type: 'wp-event'; event: string; data: unknown }
   | { type: 'wp-provider-ready' };
 
@@ -51,11 +57,9 @@ export interface PendingConfirmationInfo {
 /** Message types between content script <-> background */
 export type BackgroundMessage =
   | { action: 'rpc-request'; id: string; payload: EIP1193Request; origin: string }
-  | { action: 'rpc-response'; id: string; result?: unknown; error?: { code: number; message: string } }
+  | { action: 'rpc-response'; id: string; result?: unknown; error?: RpcErrorInfo }
   | { action: 'get-state' }
   | { action: 'start-pairing' }
-  | { action: 'reject-wallet' }
-  | { action: 'accept-wallet' }
   | { action: 'disconnect' }
   | { action: 'get-pairing-uri' }
   | { action: 'get-permissions' }
@@ -67,7 +71,7 @@ export type BackgroundMessage =
 
 /** State shared from background to popup/content */
 export interface ExtensionState {
-  phase: 'idle' | 'pairing' | 'pending_accept' | 'connected' | 'disconnected' | 'error';
+  phase: 'idle' | 'pairing' | 'connected' | 'disconnected' | 'error';
   pairingUri?: string;
   sessionFingerprint?: string;
   wallet?: ConnectedWallet;
@@ -86,5 +90,5 @@ export interface ActivityEntry {
   status: 'pending' | 'success' | 'rejected' | 'error';
   params?: unknown;
   result?: unknown;
-  error?: { code: number; message: string };
+  error?: RpcErrorInfo;
 }
