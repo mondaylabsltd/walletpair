@@ -22,7 +22,9 @@ const store: Record<string, unknown> = {};
 const chromeStorageLocal = {
   get: vi.fn(async (key: string) => ({ [key]: store[key] })),
   set: vi.fn(async (items: Record<string, unknown>) => Object.assign(store, items)),
-  remove: vi.fn(async (key: string) => { delete store[key]; }),
+  remove: vi.fn(async (keys: string | string[]) => {
+    for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
+  }),
 };
 
 vi.stubGlobal('chrome', {

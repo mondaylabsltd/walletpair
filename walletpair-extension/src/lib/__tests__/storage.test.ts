@@ -10,6 +10,7 @@ import {
   getPermissions,
   addActivityEntry,
   getActivityLog,
+  clearConnectionState,
 } from '../storage';
 
 // ── Mock chrome.storage.local ──────────────────────────────────────────
@@ -23,8 +24,8 @@ const chromeStorageLocal = {
   set: vi.fn(async (items: Record<string, unknown>) => {
     Object.assign(store, items);
   }),
-  remove: vi.fn(async (key: string) => {
-    delete store[key];
+  remove: vi.fn(async (keys: string | string[]) => {
+    for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
   }),
 };
 
@@ -123,6 +124,45 @@ describe('storage', () => {
       expect(chromeStorageLocal.remove).toHaveBeenCalledWith('sessionState');
       const state = await getSessionState();
       expect(state).toBeNull();
+    });
+  });
+
+  describe('clearConnectionState', () => {
+    it('removes all reconnect data but retains settings and permissions', async () => {
+      store['sessionState'] = 'serialized-session-data';
+      store['connectedWallet'] = { address: '0xabc', chainId: 1 };
+      store['connectedAt'] = 123;
+      store['settings'] = { relayUrl: 'wss://custom.relay' };
+      store['permissions'] = { 'https://dapp.example': { granted: true } };
+
+      await clearConnectionState();
+
+      expect(chromeStorageLocal.remove).toHaveBeenCalledWith([
+        'sessionState',
+        'connectedWallet',
+        'connectedAt',
+      ]);
+      expect(store['sessionState']).toBeUndefined();
+      expect(store['connectedWallet']).toBeUndefined();
+      expect(store['connectedAt']).toBeUndefined();
+      expect(store['settings']).toEqual({ relayUrl: 'wss://custom.relay' });
+      expect(store['permissions']).toBeDefined();
+    });
+
+    it('runs after an older in-flight snapshot write', async () => {
+      let releaseWrite!: () => void;
+      const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+      chromeStorageLocal.set.mockImplementationOnce(async (items: Record<string, unknown>) => {
+        await writeGate;
+        Object.assign(store, items);
+      });
+
+      const staleWrite = saveSessionState('stale-session');
+      const clear = clearConnectionState();
+      releaseWrite();
+      await Promise.all([staleWrite, clear]);
+
+      expect(store['sessionState']).toBeUndefined();
     });
   });
 

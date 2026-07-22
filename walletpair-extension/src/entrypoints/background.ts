@@ -12,6 +12,7 @@ import {
   getPermissions,
   saveConnectedAt,
   getConnectedAt,
+  clearConnectionState,
   addActivityEntry,
   updateActivityStatus,
 } from '@/lib/storage';
@@ -48,6 +49,9 @@ const DAPP_META = Object.freeze({
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+/** Explicit close/expiry disables every in-flight and future reconnect until a
+ * new pairing is started. */
+let reconnectAllowed = true;
 /** Guards against overlapping rebuild-and-reconnect attempts (scheduleReconnect,
  * keepalive-alarm backstop, and SW-startup can all fire near-simultaneously). */
 let reconnecting = false;
@@ -55,17 +59,18 @@ const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 
 function scheduleReconnect() {
-  if (reconnectTimer) return; // already scheduled
+  if (!reconnectAllowed || reconnectTimer) return; // stopped or already scheduled
   const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt), RECONNECT_MAX_MS);
   reconnectAttempt++;
   console.warn(`[WalletPair] Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempt})`);
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
+    if (!reconnectAllowed) return;
     const ok = await tryReconnect();
-    if (ok) {
+    if (ok && reconnectAllowed) {
       reconnectAttempt = 0;
       console.log('[WalletPair] Reconnected successfully');
-    } else {
+    } else if (reconnectAllowed && await getSessionState().catch(() => null)) {
       scheduleReconnect();
     }
   }, delay);
@@ -229,7 +234,7 @@ function attachSessionListeners() {
         scheduleReconnect();
         break;
       case 'closed':
-        handleSessionClosed();
+        void handleSessionClosed().catch((e) => console.warn('[WalletPair]', e));
         break;
     }
   };
@@ -302,8 +307,10 @@ function handleEthereumEvent(sessionRef: WalletPairSession, event: EthereumEvent
   broadcastEvent(event.event, event.data);
 }
 
-function handleSessionClosed() {
+async function handleSessionClosed(): Promise<void> {
   pairingInProgress = false;
+  reconnectAllowed = false;
+  resetReconnectBackoff();
   stopKeepalive();
   // Reject all deferred requests since session is gone
   rejectAllDeferred(4001, 'Session closed');
@@ -320,9 +327,7 @@ function handleSessionClosed() {
   });
   connectedWallet = null;
   activeChainId = 1;
-  saveSessionState(null).catch((e) => console.warn('[WalletPair]', e));
-  saveConnectedWallet(null).catch((e) => console.warn('[WalletPair]', e));
-  saveConnectedAt(null).catch((e) => console.warn('[WalletPair]', e));
+  await clearConnectionState();
   broadcastEvent('disconnect', undefined);
 }
 
@@ -333,6 +338,7 @@ async function createSession(): Promise<void> {
   cleanupSessionListeners?.();
   cleanupSessionListeners = null;
   session?.destroy();
+  reconnectAllowed = true;
   pairingInProgress = true;
   session = new WalletPairSession({
     relayUrl,
@@ -348,7 +354,7 @@ async function tryReconnect(): Promise<boolean> {
   // Prevent overlapping rebuilds: the keepalive-alarm backstop, scheduleReconnect,
   // and SW-startup can all call this near-simultaneously, which would otherwise
   // create several competing session instances.
-  if (reconnecting) return false;
+  if (!reconnectAllowed || reconnecting) return false;
   reconnecting = true;
   try {
     return await doTryReconnect();
@@ -359,19 +365,24 @@ async function tryReconnect(): Promise<boolean> {
 
 async function doTryReconnect(): Promise<boolean> {
   const saved = await getSessionState();
-  if (!saved) return false;
+  if (!saved || !reconnectAllowed) return false;
 
   // Check if session has expired (24-hour limit)
   const connectedAt = await getConnectedAt();
+  if (!reconnectAllowed) return false;
   if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
-    saveSessionState(null).catch((e) => console.warn('[WalletPair]', e));
-    saveConnectedWallet(null).catch((e) => console.warn('[WalletPair]', e));
-    saveConnectedAt(null).catch((e) => console.warn('[WalletPair]', e));
+    cleanupSessionListeners?.();
+    cleanupSessionListeners = null;
+    const expiredSession = session;
+    session = null;
+    if (expiredSession) await expiredSession.closeAndDrain();
+    await handleSessionClosed();
     return false;
   }
 
   try {
     const settings = await getSettings();
+    if (!reconnectAllowed) return false;
     cleanupSessionListeners?.();
     cleanupSessionListeners = null;
     session?.destroy();
@@ -382,7 +393,15 @@ async function doTryReconnect(): Promise<boolean> {
       persist: saveSessionState,
     });
     const ok = restored.restore(saved);
-    if (!ok) return false;
+    if (!ok) {
+      reconnectAllowed = false;
+      await clearConnectionState();
+      return false;
+    }
+    if (!reconnectAllowed) {
+      restored.destroy();
+      return false;
+    }
     session = restored;
     attachSessionListeners();
     updateState({
@@ -392,6 +411,7 @@ async function doTryReconnect(): Promise<boolean> {
       walletMeta: restored.walletMeta,
     });
     await session.reconnect();
+    if (!reconnectAllowed || session !== restored) return false;
 
     // Restore connected wallet from storage and broadcast to all tabs
     const savedWallet = await getConnectedWallet();
@@ -788,18 +808,16 @@ export default defineBackground(() => {
             cleanupSessionListeners();
             cleanupSessionListeners = null;
           }
-          resetReconnectBackoff();
           // Reject all pending confirmations
           for (const [cid, pc] of pendingConfirmations) {
             if (pc.timeoutTimer) clearTimeout(pc.timeoutTimer);
             pc.resolve({ error: { code: 4001, message: 'Disconnected' } });
             pendingConfirmations.delete(cid);
           }
-          if (session) {
-            session.close();
-            session = null;
-          }
-          handleSessionClosed();
+          const closingSession = session;
+          session = null;
+          if (closingSession) await closingSession.closeAndDrain();
+          await handleSessionClosed();
           sendResponse({ ok: true });
           break;
 
@@ -896,9 +914,12 @@ export default defineBackground(() => {
       // Check 24-hour session expiry
       const connectedAt = await getConnectedAt();
       if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
-        session.close();
+        cleanupSessionListeners?.();
+        cleanupSessionListeners = null;
+        const expiredSession = session;
         session = null;
-        handleSessionClosed();
+        await expiredSession.closeAndDrain();
+        await handleSessionClosed();
         return;
       }
       // This is a persistent backstop. The in-memory 20s timer normally sends

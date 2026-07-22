@@ -7,6 +7,18 @@ const defaults: ExtensionSettings = {
   rpcUrls: {},
 };
 
+// Keep connection-state mutations ordered. In particular, an explicit
+// disconnect must run after every previously-started snapshot/account write so
+// an older async write cannot recreate a session after it has been cleared.
+let connectionStateMutex: Promise<void> = Promise.resolve();
+
+function withConnectionStateLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = connectionStateMutex;
+  let release: () => void;
+  connectionStateMutex = new Promise<void>((resolve) => { release = resolve; });
+  return previous.then(fn).finally(() => release!());
+}
+
 /** Get extension settings from chrome.storage.local */
 export async function getSettings(): Promise<ExtensionSettings> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
@@ -23,32 +35,38 @@ export async function saveSettings(settings: Partial<ExtensionSettings>): Promis
 
 /** Get saved session state (for reconnection) */
 export async function getSessionState(): Promise<string | null> {
+  await connectionStateMutex;
   const result = await chrome.storage.local.get(STORAGE_KEYS.SESSION_STATE);
   return result[STORAGE_KEYS.SESSION_STATE] ?? null;
 }
 
 /** Save session state */
-export async function saveSessionState(state: string | null): Promise<void> {
-  if (state) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.SESSION_STATE]: state });
-  } else {
-    await chrome.storage.local.remove(STORAGE_KEYS.SESSION_STATE);
-  }
+export function saveSessionState(state: string | null): Promise<void> {
+  return withConnectionStateLock(async () => {
+    if (state) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.SESSION_STATE]: state });
+    } else {
+      await chrome.storage.local.remove(STORAGE_KEYS.SESSION_STATE);
+    }
+  });
 }
 
 /** Get connected wallet info */
 export async function getConnectedWallet(): Promise<ConnectedWallet | null> {
+  await connectionStateMutex;
   const result = await chrome.storage.local.get(STORAGE_KEYS.CONNECTED_WALLET);
   return result[STORAGE_KEYS.CONNECTED_WALLET] ?? null;
 }
 
 /** Save connected wallet info */
-export async function saveConnectedWallet(wallet: ConnectedWallet | null): Promise<void> {
-  if (wallet) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.CONNECTED_WALLET]: wallet });
-  } else {
-    await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_WALLET);
-  }
+export function saveConnectedWallet(wallet: ConnectedWallet | null): Promise<void> {
+  return withConnectionStateLock(async () => {
+    if (wallet) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.CONNECTED_WALLET]: wallet });
+    } else {
+      await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_WALLET);
+    }
+  });
 }
 
 // ── Per-origin permissions ──────────────────────────────────────────────
@@ -96,18 +114,30 @@ export async function isPermitted(origin: string): Promise<boolean> {
 // ── Session timestamp ─────────────────────────────────────────────────
 
 /** Save the timestamp when the session entered connected state */
-export async function saveConnectedAt(ts: number | null): Promise<void> {
-  if (ts) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.CONNECTED_AT]: ts });
-  } else {
-    await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_AT);
-  }
+export function saveConnectedAt(ts: number | null): Promise<void> {
+  return withConnectionStateLock(async () => {
+    if (ts) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.CONNECTED_AT]: ts });
+    } else {
+      await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_AT);
+    }
+  });
 }
 
 /** Get the timestamp when the session entered connected state */
 export async function getConnectedAt(): Promise<number | null> {
+  await connectionStateMutex;
   const result = await chrome.storage.local.get(STORAGE_KEYS.CONNECTED_AT);
   return result[STORAGE_KEYS.CONNECTED_AT] ?? null;
+}
+
+/** Atomically remove every value that can restore the previous connection. */
+export function clearConnectionState(): Promise<void> {
+  return withConnectionStateLock(() => chrome.storage.local.remove([
+    STORAGE_KEYS.SESSION_STATE,
+    STORAGE_KEYS.CONNECTED_WALLET,
+    STORAGE_KEYS.CONNECTED_AT,
+  ]));
 }
 
 // ── Activity Log ─────────────────────────────────────────────────────

@@ -273,7 +273,21 @@ export class WalletPairSession {
     }
     this.rejectPending(new ProviderRpcError(4900, 'WalletPair channel closed'));
     this.releaseSecrets();
+    this.channelId = undefined;
+    this.publicKey = undefined;
+    this.pinnedWallet = null;
+    this.pairingUri = undefined;
+    this.pairingCode = undefined;
+    this.ownJoinReceived = false;
     this.setPhase('closed');
+  }
+
+  /** Close the channel and wait until no queued operation can persist again. */
+  async closeAndDrain(): Promise<void> {
+    this.close();
+    await Promise.all([this.sendTail, this.receiveTail]);
+    // A send/receive task may have appended a persistence write while draining.
+    await this.persistTail;
   }
 
   destroy(): void {
