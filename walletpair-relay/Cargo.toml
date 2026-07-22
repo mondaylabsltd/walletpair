@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync"] }
