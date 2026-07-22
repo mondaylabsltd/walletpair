@@ -50,11 +50,51 @@ The two peers compute the same `shared_secret` and `root_key`, but use different
 
 ## Message protection
 
-1. Encode the JSON application message as MessagePack.
-2. A sends with `peer_A_to_B_key`; B sends with `peer_B_to_A_key`.
-3. Encrypt with AEAD, using the sender's directional key. The receiver decrypts with that same directional key and rejects any failed integrity check.
+After `ready.connected`, every `req`, `res`, and `evt` payload uses the sender's directional traffic key: A uses `peer_A_to_B_key`; B uses `peer_B_to_A_key`.
 
-The AEAD nonce must be unique for every use of a given directional key. The concrete AEAD algorithm, nonce format, and any associated data must be fixed by the enclosing message envelope before independent implementations can interoperate.
+The payload JSON value is encoded as **MessagePack** before encryption. It is never encrypted as JSON UTF-8.
+
+```text
+seq_bytes      = uint32_be(send_sequence)
+nonce          = HMAC-SHA256(traffic_key, seq_bytes)[0:12]
+aad            = channel_id_bytes || aad_header
+plaintext      = MessagePack_encode(payload_json)
+ciphertext_tag = ChaCha20-Poly1305_encrypt(traffic_key, nonce, plaintext, aad)
+sealed         = base64url_no_pad(seq_bytes || ciphertext_tag)
+```
+
+`lp(s)` means `uint16_be(byte_length(utf8(s))) || utf8(s)`. A sender MUST reject a `from` or `id` value longer than 65535 UTF-8 bytes.
+
+```text
+req: aad_header = 0x01 || lp(from) || lp(id)
+res: aad_header = 0x02 || lp(from) || lp(id)
+evt: aad_header = 0x03 || lp(from) || lp(id)
+```
+
+The type byte binds the version-1 message type, `from` and `id` are bound by length-prefixed AAD, and `ch` is bound by the `channel_id_bytes` AAD prefix.
+
+### Decryption
+
+1. Base64url-decode `sealed` and split its first 4 bytes as `seq_bytes`.
+2. Reject a sequence number that is not strictly greater than the last accepted sequence number.
+3. Rebuild `nonce` and `aad`, then decrypt and verify with ChaCha20-Poly1305.
+4. Reject an AEAD failure; otherwise MessagePack-decode the plaintext JSON value and record the accepted sequence number.
+
+### Sequence numbers
+
+Each peer owns a separate unsigned 32-bit send counter, starting at `0` and increasing by one per sealed message. The receiver starts at `-1`; gaps are valid, but replays and out-of-order messages are rejected. Counters persist across reconnects and MUST NOT reset. At `2^31`, the peer closes with reason `normal` and requires fresh pairing.
+
+### AAD example
+
+```text
+ch   = "aa" repeated 32 times
+type = req (0x01)
+from = "dGVzdA"
+id   = "req-1"
+
+aad_header = 01 | 0006 6447567A6441 | 0005 7265712D31
+aad        = channel_id_bytes || aad_header
+```
 
 ## Security property
 
