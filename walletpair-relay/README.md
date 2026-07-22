@@ -20,7 +20,7 @@ ws://127.0.0.1:3000/v1?ch=0140446dc1742a90025fcd068df3a7338314e1da1649d520798c85
 | `icon` | Absolute `https:` URL, at most 2048 UTF-8 bytes. |
 | `pubkey` | Canonical unpadded base64url X25519 public key: exactly 32 decoded bytes and not all zero. |
 
-Text and binary frames are broadcast to every active connection on the same channel (including the sender). Connections on other channels receive nothing. A channel is removed automatically when its last client disconnects.
+Text and binary frames are broadcast to every other active connection on the same channel. The sender does not receive its own frame, and connections on other channels receive nothing. A channel is removed automatically when its last client disconnects.
 
 When a connection joins, every client in that channel receives this text frame:
 

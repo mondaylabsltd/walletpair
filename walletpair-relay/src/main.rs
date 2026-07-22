@@ -10,7 +10,13 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, broadcast};
 use url::Url;
@@ -23,7 +29,8 @@ const MAX_URL_BYTES: usize = 2048;
 
 #[derive(Clone, Default)]
 struct RelayState {
-    channels: Arc<Mutex<HashMap<String, broadcast::Sender<Message>>>>,
+    channels: Arc<Mutex<HashMap<String, broadcast::Sender<ChannelMessage>>>>,
+    next_connection_id: Arc<AtomicU64>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -33,6 +40,12 @@ struct ConnectionParams {
     url: String,
     icon: String,
     pubkey: String,
+}
+
+#[derive(Clone)]
+enum ChannelMessage {
+    Joined(Message),
+    Relay { sender_id: u64, message: Message },
 }
 
 #[tokio::main]
@@ -71,17 +84,24 @@ async fn websocket_handler(
 async fn relay_socket(mut socket: WebSocket, state: RelayState, connection: ConnectionParams) {
     let sender = state.channel_sender(&connection.ch).await;
     let mut receiver = sender.subscribe();
-    let _ = sender.send(channel_joined_event(&connection));
+    let connection_id = state.next_connection_id.fetch_add(1, Ordering::Relaxed);
+    let _ = sender.send(ChannelMessage::Joined(channel_joined_event(&connection)));
 
     loop {
         tokio::select! {
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Text(message))) => {
-                        let _ = sender.send(Message::Text(message));
+                        let _ = sender.send(ChannelMessage::Relay {
+                            sender_id: connection_id,
+                            message: Message::Text(message),
+                        });
                     }
                     Some(Ok(Message::Binary(message))) => {
-                        let _ = sender.send(Message::Binary(message));
+                        let _ = sender.send(ChannelMessage::Relay {
+                            sender_id: connection_id,
+                            message: Message::Binary(message),
+                        });
                     }
                     Some(Ok(Message::Ping(payload))) => {
                         if socket.send(Message::Pong(payload)).await.is_err() {
@@ -94,8 +114,13 @@ async fn relay_socket(mut socket: WebSocket, state: RelayState, connection: Conn
             }
             outgoing = receiver.recv() => {
                 match outgoing {
-                    Ok(message) => {
+                    Ok(ChannelMessage::Joined(message)) => {
                         if socket.send(message).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(ChannelMessage::Relay { sender_id, message }) => {
+                        if sender_id != connection_id && socket.send(message).await.is_err() {
                             break;
                         }
                     }
@@ -111,7 +136,7 @@ async fn relay_socket(mut socket: WebSocket, state: RelayState, connection: Conn
 }
 
 impl RelayState {
-    async fn channel_sender(&self, channel_id: &str) -> broadcast::Sender<Message> {
+    async fn channel_sender(&self, channel_id: &str) -> broadcast::Sender<ChannelMessage> {
         let mut channels = self.channels.lock().await;
         channels
             .entry(channel_id.to_owned())
@@ -238,7 +263,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relays_messages_only_to_clients_in_the_same_channel() {
+    async fn relays_messages_only_to_other_clients_in_the_same_channel() {
         let address = start_test_server().await;
         let sender_connection = connection(CHANNEL_A, "Sender dApp");
         let peer_connection = connection(CHANNEL_A, "Peer Wallet");
@@ -276,9 +301,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(next_text(&mut sender).await, payload);
         assert_eq!(next_text(&mut same_channel_peer).await, payload);
 
+        assert!(
+            timeout(Duration::from_millis(100), sender.next())
+                .await
+                .is_err()
+        );
         assert!(
             timeout(Duration::from_millis(100), other_channel_peer.next())
                 .await
