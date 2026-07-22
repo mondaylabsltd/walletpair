@@ -1,0 +1,169 @@
+(* WalletPair encryption protocol, version 1.
+
+   This is a symbolic Dolev-Yao model of the protocol in
+   protocols/encryption.md. It intentionally models a successful four-digit
+   human comparison as an authentic, collision-free comparison. See README.md
+   for the properties that are outside this abstraction. *)
+
+free network: channel.
+free human_display: channel [private].
+
+type channel_id.
+type app_name.
+type app_url.
+type icon_url.
+type scalar.
+type public_key.
+type shared_key.
+type traffic_key.
+type transcript.
+type pairing_code.
+type direction.
+type sequence.
+type tag.
+
+const pairing_tag: tag [data].
+const joined_tag: tag [data].
+const sealed_tag: tag [data].
+const dapp_to_wallet: direction [data].
+const wallet_to_dapp: direction [data].
+const sequence_zero: sequence [data].
+
+(* A public attacker-owned scalar makes the first-joiner race explicit. *)
+free attacker_private: scalar.
+
+(* X25519 is represented by an ideal Diffie-Hellman equation. *)
+fun public(scalar): public_key.
+fun x25519(scalar, public_key): shared_key.
+equation forall a: scalar, b: scalar;
+  x25519(a, public(b)) = x25519(b, public(a)).
+
+(* The five fingerprint fields are bound explicitly. *)
+fun fingerprint(
+  channel_id, app_name, app_url, icon_url, public_key): pairing_code.
+
+(* HKDF and transcript hashing are ideal, domain-separated constructors. *)
+fun derive_root(shared_key, channel_id): shared_key.
+fun make_transcript(channel_id, public_key, public_key): transcript.
+fun derive_dapp_to_wallet(shared_key, transcript): traffic_key.
+fun derive_wallet_to_dapp(shared_key, transcript): traffic_key.
+fun make_aad(channel_id, transcript, direction, sequence): bitstring.
+
+(* MessagePack is an injective codec for the modeled JSON payload. *)
+fun msgpack_encode(bitstring): bitstring.
+reduc forall value: bitstring;
+  msgpack_decode(msgpack_encode(value)) = value.
+
+(* ChaCha20-Poly1305 is modeled as ideal authenticated encryption. *)
+fun aead_encrypt(bitstring, traffic_key, bitstring): bitstring.
+reduc forall plaintext: bitstring, key: traffic_key, aad: bitstring;
+  aead_decrypt(aead_encrypt(plaintext, key, aad), key, aad) = plaintext.
+
+free wallet_secret: bitstring [private].
+
+event DappCreated(
+  channel_id, app_name, app_url, icon_url, public_key, pairing_code).
+event DappPinnedFirstJoiner(channel_id, public_key, public_key).
+event WalletComparedCode(
+  channel_id, app_name, app_url, icon_url, public_key, pairing_code).
+event DappSent(channel_id, public_key, public_key, sequence, bitstring).
+event WalletAccepted(channel_id, public_key, public_key, sequence, bitstring).
+event WalletSentSecret(channel_id, public_key, public_key, sequence).
+
+(* A successful Wallet comparison corresponds to an honest DApp display. *)
+query ch: channel_id, name: app_name, url: app_url, icon: icon_url,
+      dapp_public: public_key, code: pairing_code;
+  event(WalletComparedCode(ch, name, url, icon, dapp_public, code)) ==>
+  event(DappCreated(ch, name, url, icon, dapp_public, code)).
+
+(* Every accepted DApp-to-Wallet plaintext came from a matching DApp send.
+   Injectivity also rules out accepting one modeled frame more than once. *)
+query ch: channel_id, dapp_public: public_key,
+      wallet_public: public_key, seq: sequence, message: bitstring;
+  inj-event(WalletAccepted(ch, dapp_public, wallet_public, seq, message)) ==>
+  inj-event(DappSent(ch, dapp_public, wallet_public, seq, message)).
+
+(* A Wallet secret released only after DApp authentication remains secret. *)
+query attacker(wallet_secret).
+
+let Dapp =
+  new ch: channel_id;
+  new name: app_name;
+  new url: app_url;
+  new icon: icon_url;
+  new dapp_private: scalar;
+  let dapp_public = public(dapp_private) in
+  let code = fingerprint(ch, name, url, icon, dapp_public) in
+  event DappCreated(ch, name, url, icon, dapp_public, code);
+
+  (* The pairing tuple is transported through the QR/URI. The displayed code
+     is observable, while human_display represents the authentic visual
+     comparison performed on the DApp page. *)
+  out(network, (pairing_tag, ch, name, url, icon, dapp_public));
+  out(network, code);
+  out(human_display, (ch, name, url, icon, dapp_public, code));
+
+  (* The DApp deliberately accepts the first join event. An attacker may win
+     this race; that is an accepted denial-of-service/peer-selection risk. *)
+  in(network, (=joined_tag, =ch, wallet_public: public_key));
+  if wallet_public = dapp_public then 0 else
+  event DappPinnedFirstJoiner(ch, dapp_public, wallet_public);
+
+  let shared = x25519(dapp_private, wallet_public) in
+  let root = derive_root(shared, ch) in
+  let transcript_value =
+    make_transcript(ch, dapp_public, wallet_public) in
+  let send_key = derive_dapp_to_wallet(root, transcript_value) in
+  let send_aad = make_aad(
+    ch, transcript_value, dapp_to_wallet, sequence_zero) in
+  new message: bitstring;
+  event DappSent(
+    ch, dapp_public, wallet_public, sequence_zero, message);
+  out(network,
+    (sealed_tag, ch, dapp_to_wallet, sequence_zero,
+     aead_encrypt(msgpack_encode(message), send_key, send_aad))).
+
+let Wallet =
+  (* The network is attacker-controlled, so the scanned tuple may be
+     substituted. The private human_display match abstracts a successful
+     comparison with no four-digit collision. *)
+  in(network,
+    (=pairing_tag, ch: channel_id, name: app_name, url: app_url,
+     icon: icon_url, dapp_public: public_key));
+  let code = fingerprint(ch, name, url, icon, dapp_public) in
+  in(human_display, (=ch, =name, =url, =icon, =dapp_public, =code));
+  event WalletComparedCode(ch, name, url, icon, dapp_public, code);
+
+  new wallet_private: scalar;
+  let wallet_public = public(wallet_private) in
+  out(network, (joined_tag, ch, wallet_public));
+
+  let shared = x25519(wallet_private, dapp_public) in
+  let root = derive_root(shared, ch) in
+  let transcript_value =
+    make_transcript(ch, dapp_public, wallet_public) in
+  (* No explicit DApp confirmation is required. This private value represents
+     Wallet application data sent immediately after the successful human
+     comparison and key derivation. *)
+  let send_key = derive_wallet_to_dapp(root, transcript_value) in
+  let send_aad = make_aad(
+    ch, transcript_value, wallet_to_dapp, sequence_zero) in
+  event WalletSentSecret(
+    ch, dapp_public, wallet_public, sequence_zero);
+  out(network,
+    (sealed_tag, ch, wallet_to_dapp, sequence_zero,
+     aead_encrypt(msgpack_encode(wallet_secret), send_key, send_aad)));
+
+  let receive_key = derive_dapp_to_wallet(root, transcript_value) in
+  let receive_aad = make_aad(
+    ch, transcript_value, dapp_to_wallet, sequence_zero) in
+  in(network,
+    (=sealed_tag, =ch, =dapp_to_wallet, =sequence_zero,
+     ciphertext: bitstring));
+  let packed = aead_decrypt(ciphertext, receive_key, receive_aad) in
+  let message = msgpack_decode(packed) in
+  event WalletAccepted(
+    ch, dapp_public, wallet_public, sequence_zero, message).
+
+process
+  ((!Dapp) | (!Wallet))
