@@ -92,11 +92,6 @@
 </script>
 
 <div class="connected">
-  <div class="status-badge green">
-    <span class="status-dot green"></span>
-    Connected
-  </div>
-
   <div class="wallet-card">
     <div class="wallet-avatar">
       {#if wallet?.icon}
@@ -109,7 +104,13 @@
     </div>
 
     <div class="wallet-info">
-      <span class="wallet-name">{wallet?.name || 'Wallet'}</span>
+      <div class="wallet-heading">
+        <span class="wallet-name">{wallet?.name || 'Wallet'}</span>
+        <span class="status-badge green">
+          <span class="status-dot green"></span>
+          Connected
+        </span>
+      </div>
       <button class="address-btn" onclick={copyAddress} title="Copy address">
         <span class="address">{shortAddress}</span>
         {#if copied}
@@ -137,8 +138,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 20px;
-    padding-top: 16px;
+    gap: 14px;
     animation: fadeInScale 0.3s ease-out;
   }
 
@@ -146,15 +146,14 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
-    font-weight: 500;
-    padding: 6px 12px;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 7px;
     border-radius: 100px;
   }
   .status-badge.green {
     background: var(--green-dim);
     color: var(--green);
-    box-shadow: 0 0 12px rgba(34, 197, 94, 0.2);
   }
 
   .status-dot {
@@ -170,20 +169,21 @@
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 16px;
-    padding: 24px 20px;
+    padding: 16px;
     width: 100%;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     gap: 12px;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+    box-shadow: var(--shadow-card);
   }
 
   .wallet-avatar {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
+    width: 46px;
+    height: 46px;
+    border-radius: 14px;
     overflow: hidden;
+    flex-shrink: 0;
   }
 
   .wallet-icon {
@@ -208,13 +208,25 @@
   .wallet-info {
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-start;
     gap: 4px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .wallet-heading {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
   }
 
   .wallet-name {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 15px;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .address-btn {
@@ -223,10 +235,11 @@
     gap: 4px;
     background: none;
     padding: 2px 0;
+    color: var(--text-dim);
   }
 
   .address {
-    font-size: 13px;
+    font-size: 12px;
     color: var(--text-dim);
     font-family: 'SF Mono', 'Fira Code', monospace;
   }
@@ -238,17 +251,17 @@
     background: var(--accent-dim);
     padding: 4px 10px;
     border-radius: 100px;
+    flex-shrink: 0;
   }
 
   .actions {
     width: 100%;
-    margin-top: auto;
-    padding-top: 16px;
+    padding-top: 2px;
   }
 
   .btn-disconnect {
     width: 100%;
-    background: var(--bg-card);
+    background: transparent;
     color: var(--text-dim);
     font-size: 13px;
     font-weight: 500;
@@ -260,6 +273,10 @@
     color: var(--red);
     border-color: var(--red);
     background: var(--red-dim);
+  }
+
+  .address-btn:hover {
+    color: var(--accent);
   }
 
   @keyframes fadeInScale {
