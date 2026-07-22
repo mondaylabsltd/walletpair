@@ -20,6 +20,7 @@ type transcript.
 type pairing_code.
 type direction.
 type sequence.
+type caip2.
 type tag.
 
 const pairing_tag: tag [data].
@@ -28,6 +29,8 @@ const sealed_tag: tag [data].
 const dapp_to_wallet: direction [data].
 const wallet_to_dapp: direction [data].
 const sequence_zero: sequence [data].
+const eip155_mainnet: caip2 [data].
+const attacker_chain: caip2 [data].
 
 (* A public attacker-owned scalar makes the first-joiner race explicit. *)
 free attacker_private: scalar.
@@ -47,7 +50,8 @@ fun derive_root(shared_key, channel_id): shared_key.
 fun make_transcript(channel_id, public_key, public_key): transcript.
 fun derive_dapp_to_wallet(shared_key, transcript): traffic_key.
 fun derive_wallet_to_dapp(shared_key, transcript): traffic_key.
-fun make_aad(channel_id, transcript, direction, sequence): bitstring.
+fun make_aad(
+  channel_id, transcript, direction, sequence, caip2): bitstring.
 
 (* MessagePack is an injective codec for the modeled JSON payload. *)
 fun msgpack_encode(bitstring): bitstring.
@@ -66,9 +70,12 @@ event DappCreated(
 event DappPinnedFirstJoiner(channel_id, public_key, public_key).
 event WalletComparedCode(
   channel_id, app_name, app_url, icon_url, public_key, pairing_code).
-event DappSent(channel_id, public_key, public_key, sequence, bitstring).
-event WalletAccepted(channel_id, public_key, public_key, sequence, bitstring).
-event WalletSentSecret(channel_id, public_key, public_key, sequence).
+event DappSent(
+  channel_id, public_key, public_key, caip2, sequence, bitstring).
+event WalletAccepted(
+  channel_id, public_key, public_key, caip2, sequence, bitstring).
+event WalletSentSecret(
+  channel_id, public_key, public_key, caip2, sequence).
 
 (* A successful Wallet comparison corresponds to an honest DApp display. *)
 query ch: channel_id, name: app_name, url: app_url, icon: icon_url,
@@ -79,9 +86,12 @@ query ch: channel_id, name: app_name, url: app_url, icon: icon_url,
 (* Every accepted DApp-to-Wallet plaintext came from a matching DApp send.
    Injectivity also rules out accepting one modeled frame more than once. *)
 query ch: channel_id, dapp_public: public_key,
-      wallet_public: public_key, seq: sequence, message: bitstring;
-  inj-event(WalletAccepted(ch, dapp_public, wallet_public, seq, message)) ==>
-  inj-event(DappSent(ch, dapp_public, wallet_public, seq, message)).
+      wallet_public: public_key, chain: caip2, seq: sequence,
+      message: bitstring;
+  inj-event(WalletAccepted(
+    ch, dapp_public, wallet_public, chain, seq, message)) ==>
+  inj-event(DappSent(
+    ch, dapp_public, wallet_public, chain, seq, message)).
 
 (* A Wallet secret released only after DApp authentication remains secret. *)
 query attacker(wallet_secret).
@@ -115,13 +125,15 @@ let Dapp =
     make_transcript(ch, dapp_public, wallet_public) in
   let send_key = derive_dapp_to_wallet(root, transcript_value) in
   let send_aad = make_aad(
-    ch, transcript_value, dapp_to_wallet, sequence_zero) in
+    ch, transcript_value, dapp_to_wallet, sequence_zero, eip155_mainnet) in
   new message: bitstring;
   event DappSent(
-    ch, dapp_public, wallet_public, sequence_zero, message);
+    ch, dapp_public, wallet_public, eip155_mainnet,
+    sequence_zero, message);
   out(network,
     (sealed_tag, ch, dapp_to_wallet, sequence_zero,
-     aead_encrypt(msgpack_encode(message), send_key, send_aad))).
+     aead_encrypt(msgpack_encode(message), send_key, send_aad),
+     eip155_mainnet)).
 
 let Wallet =
   (* The network is attacker-controlled, so the scanned tuple may be
@@ -147,23 +159,26 @@ let Wallet =
      comparison and key derivation. *)
   let send_key = derive_wallet_to_dapp(root, transcript_value) in
   let send_aad = make_aad(
-    ch, transcript_value, wallet_to_dapp, sequence_zero) in
+    ch, transcript_value, wallet_to_dapp, sequence_zero, eip155_mainnet) in
   event WalletSentSecret(
-    ch, dapp_public, wallet_public, sequence_zero);
+    ch, dapp_public, wallet_public, eip155_mainnet, sequence_zero);
   out(network,
     (sealed_tag, ch, wallet_to_dapp, sequence_zero,
-     aead_encrypt(msgpack_encode(wallet_secret), send_key, send_aad)));
+     aead_encrypt(msgpack_encode(wallet_secret), send_key, send_aad),
+     eip155_mainnet));
 
   let receive_key = derive_dapp_to_wallet(root, transcript_value) in
-  let receive_aad = make_aad(
-    ch, transcript_value, dapp_to_wallet, sequence_zero) in
   in(network,
     (=sealed_tag, =ch, =dapp_to_wallet, =sequence_zero,
-     ciphertext: bitstring));
+     ciphertext: bitstring, received_chain: caip2));
+  let receive_aad = make_aad(
+    ch, transcript_value, dapp_to_wallet, sequence_zero,
+    received_chain) in
   let packed = aead_decrypt(ciphertext, receive_key, receive_aad) in
   let message = msgpack_decode(packed) in
   event WalletAccepted(
-    ch, dapp_public, wallet_public, sequence_zero, message).
+    ch, dapp_public, wallet_public, received_chain,
+    sequence_zero, message).
 
 process
   ((!Dapp) | (!Wallet))

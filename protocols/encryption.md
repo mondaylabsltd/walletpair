@@ -112,6 +112,8 @@ The exact MessagePack bytes are opaque to the relay and are not part of key deri
 
 A uses `dapp_to_wallet_key`; B uses `wallet_to_dapp_key`. Each direction owns an independent send counter.
 
+Every application frame carries a canonical [CAIP-2](https://standards.chainagnostic.org/CAIPs/caip-2) chain ID. It is an ASCII `namespace:reference` string of at most 41 bytes, such as `eip155:1`. The CAIP-2 value is public routing metadata, but it is authenticated by AEAD.
+
 ```text
 seq_bytes = uint32_be(send_sequence)
 direction = 0x01 for DApp→Wallet, 0x02 for Wallet→DApp
@@ -120,7 +122,8 @@ aad       = utf8("walletpair-v1/aead") ||
             channel_id_bytes ||
             transcript_hash ||
             direction ||
-            seq_bytes
+            seq_bytes ||
+            lp(caip2_chain_id)
 plaintext = MessagePack_encode(json_message)
 
 ciphertext_tag = ChaCha20-Poly1305_encrypt(
@@ -131,30 +134,32 @@ ciphertext_tag = ChaCha20-Poly1305_encrypt(
 )
 
 sealed = base64url_no_pad(seq_bytes || ciphertext_tag)
+frame  = sealed || "@" || caip2_chain_id
 ```
 
-ChaCha20-Poly1305 uses a 32-byte key, 12-byte nonce, and full 16-byte tag. Tags MUST NOT be truncated.
+ChaCha20-Poly1305 uses a 32-byte key, 12-byte nonce, and full 16-byte tag. Tags MUST NOT be truncated. Canonical base64url and CAIP-2 never contain `@`, so `frame` has exactly one unambiguous separator.
 
 ### Decryption
 
-1. Reject a non-canonical base64url value or decoded `sealed` outside 20–65,556 bytes.
-2. Split the first 4 bytes as `seq_bytes`; reject a sequence number that is not strictly greater than the last accepted value.
-3. Rebuild `nonce` and `aad`, then authenticate and decrypt with the receive-direction key.
-4. Reject an AEAD failure without changing receive state.
-5. Decode the plaintext with the JSON-only MessagePack profile; reject malformed, oversized, excessively nested, or trailing data.
-6. Only after all checks succeed, atomically record the accepted sequence number and deliver the JSON value.
+1. Split `frame` at its single `@`; reject a missing/duplicate separator or a non-canonical CAIP-2 suffix.
+2. Reject a non-canonical base64url `sealed` value or decoded value outside 20–65,556 bytes.
+3. Split the first 4 decoded bytes as `seq_bytes`; reject a sequence number that is not strictly greater than the last accepted value.
+4. Rebuild `nonce` and `aad`, including the received CAIP-2 suffix, then authenticate and decrypt with the receive-direction key.
+5. Reject an AEAD failure without changing receive state.
+6. Decode the plaintext with the JSON-only MessagePack profile; reject malformed, oversized, excessively nested, or trailing data.
+7. Only after all checks succeed, atomically record the accepted sequence number and deliver the JSON value with its authenticated CAIP-2 chain ID.
 
 Frames from later joiners cannot verify under the pinned receive-direction key and are silently discarded without changing the receive sequence number.
 
 ### Sequence persistence
 
-Each send counter starts at `0` and increases once per sealed message. Each receive counter starts at `-1`; gaps are valid, while replayed and out-of-order values are rejected.
+Each send counter starts at `0` and increases once per sealed message. Each receive counter starts at `-1`; gaps are valid, while replayed and out-of-order values are rejected. Counters are per direction and traffic key, not per CAIP-2 chain: all chain suffixes in one channel share the same directional counter.
 
 Before encrypting, the sender MUST atomically reserve and persist the next counter value. Counters persist across reconnects and MUST NOT reset while traffic keys are reused. If counter state cannot be recovered safely, the channel MUST be abandoned and paired again with fresh keys. Valid send values are `0` through `2^31-1`; before using `2^31`, the peer closes the channel and requires fresh pairing.
 
 ## Security properties and limits
 
-- Subject to the pairing assumptions above, a passive observer or relay learns channel metadata, public keys, timing, and ciphertext sizes, but not Wallet plaintexts or traffic keys.
+- Subject to the pairing assumptions above, a passive observer or relay learns channel metadata, public keys, CAIP-2 chain IDs, timing, and ciphertext sizes, but not Wallet plaintexts or traffic keys.
 - The Wallet accepts only messages authenticated with the direction key derived from the DApp public key pinned by QR pairing.
 - The DApp deliberately provides no Wallet identity guarantee; a malicious first joiner may become its peer or cause denial of service.
 - The relay and extra participants can drop, delay, replay, reorder, or inject frames. AEAD and sequence checks detect forgery and replay but cannot prevent denial of service.
@@ -164,7 +169,7 @@ Before encrypting, the sender MUST atomically reserve and persist the next count
 The [ProVerif model](../formal-verification/encryption.pv) represents an active attacker controlling the relay and permits an attacker to become the DApp's first joiner. With ideal X25519, HKDF, hashing, MessagePack, and AEAD primitives, ProVerif 2.05 proves:
 
 - a successful, collision-free Wallet comparison binds all five fingerprint fields to an honest DApp display;
-- every modeled A→B message accepted by the Wallet has injective correspondence with a DApp send; and
+- every modeled A→B message and its public CAIP-2 suffix accepted by the Wallet has injective correspondence with a DApp send; and
 - Wallet data sent immediately after pairing remains secret without `dapp_confirm`.
 
 The proof treats the human comparison as authentic and collision-free. It does not prove the four-digit probability bound, parser and size checks, all-zero X25519 rejection, or persistent sequence-counter behavior. See the [model notes](../formal-verification/README.md) for the exact scope and reproduction command.

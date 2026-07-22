@@ -19,8 +19,9 @@ The model asks ProVerif to prove:
 
 1. a successful Wallet code comparison binds all five fingerprint fields to
    the tuple displayed by an honest DApp;
-2. every DApp message accepted by the Wallet was encrypted by that DApp for
-   that Wallet, with injective correspondence for the modeled frame; and
+2. every DApp message and public CAIP-2 suffix accepted by the Wallet was
+   encrypted by that DApp for that Wallet, with injective correspondence for
+   the modeled frame; and
 3. Wallet application data sent immediately after the code comparison and key
    derivation remains secret; no explicit DApp confirmation is assumed.
 
@@ -35,6 +36,10 @@ The `relay` URI field is not part of the five-field fingerprint and is not
 modeled as authenticated. An attacker may replace the relay and thereby observe
 metadata or deny/redirect transport, but ideal AEAD still prevents it from
 forging a message under the pinned DApp key.
+
+The CAIP-2 suffix is public and attacker-modifiable on the modeled network, but
+is included in AEAD additional data. The correspondence query therefore also
+checks that changing the suffix cannot change the accepted chain context.
 
 ProVerif also does not establish parser limits, rejection of X25519's all-zero
 output, atomic counter persistence across crashes, the `2^31` limit, or correct
