@@ -1,125 +1,77 @@
 <script lang="ts">
 	import CodeBlock from '$lib/components/CodeBlock.svelte';
 
-	const installCode = `# Clone the repo and link locally (SDK not yet published to npm)
-git clone https://github.com/atshelchin/walletpair.git
-cd walletpair/walletpair-sdk
-npm install && npm link`;
+	const relayConnection = `wss://relay.example/v1?ch=<64-lowercase-hex>&name=<rfc3986>&url=<rfc3986>&icon=<rfc3986>&pubkey=<base64url-x25519>`;
+	const pairingUri = `walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey>&relay=<percent-encoded-wss-url>&name=<percent-encoded-name>&url=<percent-encoded-url>&icon=<percent-encoded-icon>`;
+	const request = `// Plaintext before MessagePack encoding and encryption
+{
+  "id": "req-1",
+  "method": "eth_requestAccounts",
+  "params": []
+}
 
-	const dappCode = `import { DAppSession, WebSocketTransport } from 'walletpair-sdk';
-
-const transport = new WebSocketTransport('wss://relay.walletpair.org/v1');
-const session = new DAppSession({
-  transport,
-  meta: {
-    name: 'My dApp',
-    description: 'Example dApp',
-    url: 'https://dapp.example',
-    icon: 'https://dapp.example/icon.png',
-  },
-  methods: ['wallet_getAccounts', 'wallet_sendTransaction', 'wallet_signMessage'],
-  chains: ['eip155:1', 'eip155:137'],
-});
-
-// Create pairing - display the URI as a QR code
-const uri = await session.createPairing();
-
-session.on('sessionFingerprint', (fingerprint) => {
-  console.log('Session fingerprint (verify matches wallet):', fingerprint);
-});
-
-session.on('phase', async (phase) => {
-  if (phase !== 'connected') return;
-  const result = await session.request('wallet_getAccounts');
-  console.log('Accounts:', result);
-});`;
-
-	const walletCode = `import { WalletSession, WebSocketTransport } from 'walletpair-sdk';
-
-const transport = new WebSocketTransport('wss://relay.walletpair.org/v1');
-const session = new WalletSession({
-  transport,
-  capabilities: {
-    methods: ['wallet_getAccounts', 'wallet_sendTransaction', 'wallet_signMessage'],
-    events: ['accountsChanged', 'chainChanged'],
-    chains: ['eip155:1', 'eip155:137'],
-  },
-  meta: {
-    name: 'My Wallet',
-    description: 'Example wallet',
-    url: 'https://wallet.example',
-    icon: 'https://wallet.example/icon.png',
-  },
-});
-
-// Parse the scanned QR code and join
-await session.prepareJoin(pairingUri);
-console.log('Session fingerprint:', session.sessionFingerprint);
-await session.confirmJoin();
-
-session.on('request', async (req) => {
-  // Review and respond to requests
-  await session.approve(req.id, { accounts: ['0x...'] });
-});`;
+// Encrypted relay text frame
+base64url(seq_bytes || ciphertext_tag) + "@eip155:1"`;
 </script>
 
-<svelte:head>
-	<title>Getting Started — WalletPair</title>
-</svelte:head>
+<svelte:head><title>Getting Started — WalletPair</title></svelte:head>
 
 <h1>Getting Started</h1>
 
-<p>Get a dApp-to-wallet connection running in under 5 minutes.</p>
-
-<h2 id="install">Install the SDK</h2>
-
-<CodeBlock code={installCode} lang="bash" />
-
-<p>The SDK is not yet published to npm. Link it locally from the monorepo for now.</p>
-
-<h2 id="start-relay">Start a Relay</h2>
-
 <p>
-	You need a relay server to route messages between peers. Use the public relay at
-	<code>wss://relay.walletpair.org/v1</code> for development, or
-	<a href="/docs/relay">self-host your own</a>.
+	WalletPair is a wire protocol. There is no WalletPair SDK package to install: implement the
+	<a href="/docs/core-concepts">encryption</a>, <a href="/docs/relay">relay</a>, and
+	<a href="/docs/evm-methods">EVM</a> specifications in the dApp or wallet you control.
 </p>
 
-<h2 id="dapp-side">dApp Side</h2>
+<h2>1. Run or choose a relay</h2>
 
 <p>
-	Create a <code>DAppSession</code>, generate a pairing URI, and display it as a QR code for the
-	wallet to scan.
+	Use a WebSocket endpoint at <code>/v1</code>. The connection query has exactly five required
+	fields; values are RFC 3986 percent-encoded.
 </p>
 
-<CodeBlock code={dappCode} lang="typescript" filename="dapp.ts" />
+<CodeBlock code={relayConnection} lang="text" />
 
-<h2 id="wallet-side">Wallet Side</h2>
+<h2>2. Create the dApp pairing</h2>
 
 <p>
-	Create a <code>WalletSession</code>, scan the QR code, verify the session fingerprint, and handle
-	incoming requests.
+	Generate a fresh 32-byte channel ID and X25519 key pair. The dApp metadata must be a name, an
+	absolute HTTP(S) URL, and an absolute HTTPS icon URL. Put those same values in the QR URI and in
+	the dApp's relay connection.
 </p>
 
-<CodeBlock code={walletCode} lang="typescript" filename="wallet.ts" />
+<CodeBlock code={pairingUri} lang="text" />
 
-<h2 id="verify">Verify the Fingerprint</h2>
+<h2>3. Compare the pairing code</h2>
 
 <p>
-	Both the dApp and wallet derive a 4-digit session fingerprint from the handshake transcript.
-	Users should visually confirm these match to prevent man-in-the-middle attacks.
+	Both sides calculate the four-digit code from the dApp channel ID, metadata, and public key. The
+	wallet must compare it with the code shown by the dApp before joining. A mismatch requires a fresh
+	channel and fresh keys.
 </p>
 
-<h2 id="next-steps">Next Steps</h2>
+<h2>4. Encrypt EVM messages</h2>
+
+<p>
+	Derive directional traffic keys with X25519 and HKDF-SHA256. Encode the EIP-1193 envelope as the
+	JSON-only MessagePack profile, then seal it with ChaCha20-Poly1305. The public chain suffix is
+	authenticated additional data, not plaintext routing input.
+</p>
+
+<CodeBlock code={request} lang="text" />
+
+<h2>Next steps</h2>
 
 <ul>
-	<li><a href="/docs/core-concepts">Core Concepts</a> — understand how the protocol works</li>
 	<li>
-		<a href="/docs/dapp-integration">dApp Integration</a> — full DAppSession API and patterns
+		<a href="/docs/core-concepts">Core Concepts</a> — exact pairing, encryption, and counter rules
 	</li>
 	<li>
-		<a href="/docs/wallet-integration">Wallet Integration</a> — handle requests and push events
+		<a href="/docs/dapp-integration">dApp Integration</a> — dApp-side implementation checklist
 	</li>
-	<li><a href="/docs/wagmi">Wagmi Connector</a> — drop-in connector for wagmi apps</li>
-	<li><a href="/playground">Playground</a> — try it interactively in your browser</li>
+	<li>
+		<a href="/docs/wallet-integration">Wallet Integration</a> — wallet-side validation and approval checklist
+	</li>
+	<li><a href="/playground">Playground</a> — inspect an in-browser EVM pairing</li>
 </ul>
