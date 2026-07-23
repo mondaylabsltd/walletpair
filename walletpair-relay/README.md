@@ -58,7 +58,9 @@ Docker health check.
 
 Tags matching `relay-v<version>` publish a Linux x86_64 binary to the GitHub
 release and a multi-platform image to
-`ghcr.io/<repository-owner>/walletpair-relay:<version>`.
+`<dockerhub-username>/walletpair-relay:<version>`. Configure the repository
+variable `DOCKERHUB_USERNAME` and Actions secret `DOCKERHUB_TOKEN` before the
+first release.
 
 ## WebSocket protocol
 
