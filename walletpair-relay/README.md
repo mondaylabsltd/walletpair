@@ -2,6 +2,15 @@
 
 An intentionally minimal WebSocket relay for WalletPair channels.
 
+## Production endpoints
+
+- WebSocket: `wss://relay.walletpair.org/v1`
+- Health check: [https://relay.walletpair.org/healthz](https://relay.walletpair.org/healthz)
+- WalletPair website: [https://walletpair.org](https://walletpair.org)
+
+Clients append the five required participant query parameters to the WebSocket
+endpoint. The public endpoint must always be accessed with `wss://`.
+
 ## Run from source
 
 ```sh
@@ -67,8 +76,11 @@ first release.
 Each WebSocket connection must identify its channel and participant. All query values must be percent-encoded:
 
 ```text
-ws://127.0.0.1:3000/v1?ch=0140446dc1742a90025fcd068df3a7338314e1da1649d520798c8581a0937d0c&name=Example%20Wallet&url=https%3A%2F%2Fexample.test&icon=https%3A%2F%2Fexample.test%2Ficon.png&pubkey=HJ_Yj0VgbZMqgMcYJK4VHRXXPnfeOOjgAIUuYU-ucBk
+wss://relay.walletpair.org/v1?ch=0140446dc1742a90025fcd068df3a7338314e1da1649d520798c8581a0937d0c&name=Example%20Wallet&url=https%3A%2F%2Fexample.test&icon=https%3A%2F%2Fexample.test%2Ficon.png&pubkey=HJ_Yj0VgbZMqgMcYJK4VHRXXPnfeOOjgAIUuYU-ucBk
 ```
+
+For local development, replace the endpoint with
+`ws://127.0.0.1:3000/v1`.
 
 | Parameter | Validation |
 | --- | --- |

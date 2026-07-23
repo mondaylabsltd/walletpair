@@ -10,6 +10,11 @@ on `walletpair-sdk`. The protocol specifications are the source of truth:
 - [Encryption protocol](../protocols/encryption.md)
 - [Ethereum protocol](../protocols/ethereum.md)
 
+Official services:
+
+- Website and documentation: [https://walletpair.org](https://walletpair.org)
+- Default production relay: `wss://relay.walletpair.org/v1`
+
 ## Features
 
 - EIP-1193 provider exposed as `window.walletpair` and, when available,

@@ -7,6 +7,17 @@ DApp and Wallet; the relay only routes channel events and opaque frames.
 This repository contains the protocol specifications, Rust relay, browser
 extension, documentation site/playground, and the ProVerif security model.
 
+## Official Services
+
+| Service | URL |
+| --- | --- |
+| Website, documentation, and playground | [https://walletpair.org](https://walletpair.org) |
+| Production WebSocket relay | `wss://relay.walletpair.org/v1` |
+| Relay health check | [https://relay.walletpair.org/healthz](https://relay.walletpair.org/healthz) |
+
+Clients append the required `ch`, `name`, `url`, `icon`, and `pubkey` query
+parameters to the production relay URL. Use `wss://` for all public clients.
+
 ## System Overview
 
 ```text
@@ -116,8 +127,9 @@ pnpm dev
 ```
 
 Set the relay URL in the extension settings to
-`ws://127.0.0.1:3000/v1` for local development. For production builds and
-unpacked-extension instructions, see the
+`ws://127.0.0.1:3000/v1` for local development. The default production relay is
+`wss://relay.walletpair.org/v1`. For production builds and unpacked-extension
+instructions, see the
 [Extension README](./walletpair-extension/README.md).
 
 ### 3. Run the documentation site and playground
@@ -129,6 +141,7 @@ pnpm dev
 ```
 
 Vite prints the local site URL after startup.
+The deployed site is available at [https://walletpair.org](https://walletpair.org).
 
 ## Verification
 

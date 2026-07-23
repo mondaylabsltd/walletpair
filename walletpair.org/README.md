@@ -1,42 +1,41 @@
-# sv
+# WalletPair Website
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+The WalletPair documentation site and interactive protocol playground.
 
-## Creating a project
+- Production website: [https://walletpair.org](https://walletpair.org)
+- Production WebSocket relay: `wss://relay.walletpair.org/v1`
+- Relay health check: [https://relay.walletpair.org/healthz](https://relay.walletpair.org/healthz)
 
-If you're seeing this, you've probably already done this step. Congrats!
+## Development
 
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
+Requirements: Node.js and pnpm.
 
 ```sh
-# recreate this project
-pnpm dlx sv@0.15.3 create --template minimal --types ts --add prettier eslint vitest="usages:unit,component" playwright sveltekit-adapter="adapter:cloudflare+cfTarget:workers" mcp="ide:claude-code+setup:remote" --install pnpm walletpair.org
+pnpm install
+pnpm dev
 ```
 
-## Developing
+Vite prints the local development URL after startup. The playground defaults
+to the production relay; change it to a local `ws://` endpoint when developing
+the relay locally.
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+## Verification
 
 ```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+pnpm check
+pnpm test:unit -- --run
+pnpm build
 ```
 
-## Building
+The production build uses SvelteKit with the Cloudflare adapter. `pnpm build`
+generates the Cloudflare Worker output and then verifies the committed Wrangler
+environment types.
 
-To create a production version of your app:
+## Deployment
 
 ```sh
-npm run build
+pnpm deploy
 ```
 
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+Deployment requires an authenticated Wrangler session with access to the
+Cloudflare account hosting `walletpair.org`.
