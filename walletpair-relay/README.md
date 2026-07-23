@@ -56,8 +56,8 @@ WALLETPAIR_RELAY_PORT=4000 docker compose up --build -d
 The runtime container uses an unprivileged user, a read-only filesystem, and a
 Docker health check.
 
-Tags matching `relay-v<version>` publish a Linux x86_64 binary to the GitHub
-release and a multi-platform image to
+Tags matching `relay-v<version>` publish Linux, macOS, and Windows binaries for
+x86_64 and arm64 to the GitHub release, plus a multi-platform image to
 `<dockerhub-username>/walletpair-relay:<version>`. Configure the repository
 variable `DOCKERHUB_USERNAME` and Actions secret `DOCKERHUB_TOKEN` before the
 first release.

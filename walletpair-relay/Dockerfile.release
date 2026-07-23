@@ -1,0 +1,23 @@
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && groupadd --gid 10001 walletpair \
+    && useradd --uid 10001 --gid walletpair --no-create-home --shell /usr/sbin/nologin walletpair \
+    && rm -rf /var/lib/apt/lists/*
+
+# The release workflow supplies the matching native Linux executable.
+COPY --chmod=0555 dist/walletpair-relay /usr/local/bin/walletpair-relay
+
+USER walletpair
+
+ENV WALLETPAIR_RELAY_LISTEN_ADDR=0.0.0.0:3000
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl --fail --silent http://127.0.0.1:3000/healthz || exit 1
+
+ENTRYPOINT ["/usr/local/bin/walletpair-relay"]

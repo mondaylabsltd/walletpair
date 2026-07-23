@@ -1,0 +1,5 @@
+# These are standard GitHub-hosted labels introduced after actionlint 1.7.7.
+paths:
+  .github/workflows/release-relay.yml:
+    ignore:
+      - 'label "(macos-15-intel|windows-11-arm)" is unknown'
