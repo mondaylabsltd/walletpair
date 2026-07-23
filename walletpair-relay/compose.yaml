@@ -6,8 +6,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    env_file:
-      - .env
     environment:
       WALLETPAIR_RELAY_LISTEN_ADDR: 0.0.0.0:3000
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
