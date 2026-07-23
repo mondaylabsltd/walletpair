@@ -16,6 +16,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
     && groupadd --gid 10001 walletpair \
     && useradd --uid 10001 --gid walletpair --no-create-home --shell /usr/sbin/nologin walletpair \
+    && install --directory --owner=walletpair --group=walletpair /var/lib/walletpair-relay \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder --chmod=0555 /build/target/release/walletpair-relay /usr/local/bin/walletpair-relay
@@ -23,6 +24,7 @@ COPY --from=builder --chmod=0555 /build/target/release/walletpair-relay /usr/loc
 USER walletpair
 
 ENV WALLETPAIR_RELAY_LISTEN_ADDR=0.0.0.0:3000
+ENV TELEGRAM_ALERT_STATE_FILE=/var/lib/walletpair-relay/telegram-alerts.json
 
 EXPOSE 3000
 

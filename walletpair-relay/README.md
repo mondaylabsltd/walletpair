@@ -16,6 +16,19 @@ WALLETPAIR_RELAY_LISTEN_ADDR=127.0.0.1:4000 cargo run
 
 Health check: `GET /healthz` returns `200 OK` while the process can serve HTTP.
 
+## Telegram alerts
+
+Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to receive alerts for relay
+startup/runtime failures, panics, and messages dropped because a client fell
+behind. The Compose configuration passes these values from its `.env` file (or
+the shell environment) into the container.
+
+Each alert category is sent at most once. Compose persists the sent-alert state
+in its `relay-state` Docker volume, so a restart loop will not flood the chat.
+For direct source runs, set `TELEGRAM_ALERT_STATE_FILE` to a writable persistent
+file to retain this protection across restarts. Failed Telegram sends are logged
+locally and are not retried, which also avoids duplicate messages.
+
 ## Docker
 
 Build and run directly:

@@ -9,14 +9,16 @@ use axum::{
     routing::get,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    env,
+    collections::{HashMap, HashSet},
+    env, fs,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, broadcast};
@@ -29,11 +31,33 @@ const MAX_NAME_BYTES: usize = 128;
 const MAX_URL_BYTES: usize = 2048;
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:3000";
 const LISTEN_ADDR_ENV: &str = "WALLETPAIR_RELAY_LISTEN_ADDR";
+const TELEGRAM_BOT_TOKEN_ENV: &str = "TELEGRAM_BOT_TOKEN";
+const TELEGRAM_CHAT_ID_ENV: &str = "TELEGRAM_CHAT_ID";
+const TELEGRAM_ALERT_STATE_FILE_ENV: &str = "TELEGRAM_ALERT_STATE_FILE";
+const TELEGRAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Default)]
 struct RelayState {
     channels: Arc<Mutex<HashMap<String, broadcast::Sender<ChannelMessage>>>>,
     next_connection_id: Arc<AtomicU64>,
+    notifier: Option<TelegramNotifier>,
+}
+
+#[derive(Clone)]
+struct TelegramNotifier {
+    client: reqwest::Client,
+    bot_token: Arc<str>,
+    chat_id: Arc<str>,
+    alert_state_file: Option<Arc<PathBuf>>,
+    sent_alerts: Arc<Mutex<HashSet<AlertKind>>>,
+}
+
+#[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq, Serialize)]
+enum AlertKind {
+    ListenerBindFailed,
+    ServerStopped,
+    Panic,
+    BroadcastLagged,
 }
 
 #[derive(Clone, Deserialize)]
@@ -53,25 +77,46 @@ enum ChannelMessage {
 
 #[tokio::main]
 async fn main() {
-    let app = app();
+    let notifier = TelegramNotifier::from_env();
+    install_panic_notifier(notifier.clone());
+    let app = app_with_notifier(notifier.clone());
     let listen_addr = env::var(LISTEN_ADDR_ENV).unwrap_or_else(|_| DEFAULT_LISTEN_ADDR.to_owned());
-    let listener = TcpListener::bind(&listen_addr)
-        .await
-        .expect("failed to bind relay listener");
+    let listener = match TcpListener::bind(&listen_addr).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("failed to bind relay listener on {listen_addr}: {error}");
+            notify_once(
+                notifier.as_ref(),
+                AlertKind::ListenerBindFailed,
+                format!("WalletPair relay could not bind to {listen_addr}. Check the relay logs."),
+            )
+            .await;
+            return;
+        }
+    };
 
     println!(
         "WalletPair relay listening on {listen_addr}; WebSocket endpoint: /v1?ch=<channel-id>&name=<name>&url=<url>&icon=<icon>&pubkey=<x25519-public-key>"
     );
-    axum::serve(listener, app)
-        .await
-        .expect("relay server failed");
+    if let Err(error) = axum::serve(listener, app).await {
+        eprintln!("relay server stopped unexpectedly: {error}");
+        notify_once(
+            notifier.as_ref(),
+            AlertKind::ServerStopped,
+            "WalletPair relay stopped unexpectedly. Check the relay logs.".to_owned(),
+        )
+        .await;
+    }
 }
 
-fn app() -> Router {
+fn app_with_notifier(notifier: Option<TelegramNotifier>) -> Router {
     Router::new()
         .route("/healthz", get(health_handler))
         .route("/v1", get(websocket_handler))
-        .with_state(RelayState::default())
+        .with_state(RelayState {
+            notifier,
+            ..RelayState::default()
+        })
 }
 
 async fn health_handler() -> StatusCode {
@@ -133,7 +178,17 @@ async fn relay_socket(mut socket: WebSocket, state: RelayState, connection: Conn
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        state
+                            .notify_once(
+                                AlertKind::BroadcastLagged,
+                                format!(
+                                    "WalletPair relay dropped {skipped} queued message(s) because a client could not keep up. Check the relay logs."
+                                ),
+                            )
+                            .await;
+                        continue;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -162,6 +217,162 @@ impl RelayState {
             channels.remove(channel_id);
         }
     }
+
+    async fn notify_once(&self, kind: AlertKind, message: String) {
+        notify_once(self.notifier.as_ref(), kind, message).await;
+    }
+}
+
+impl TelegramNotifier {
+    fn from_env() -> Option<Self> {
+        match (
+            non_empty_env(TELEGRAM_BOT_TOKEN_ENV),
+            non_empty_env(TELEGRAM_CHAT_ID_ENV),
+        ) {
+            (Some(bot_token), Some(chat_id)) => {
+                let alert_state_file =
+                    non_empty_env(TELEGRAM_ALERT_STATE_FILE_ENV).map(PathBuf::from);
+                let client = match reqwest::Client::builder()
+                    .timeout(TELEGRAM_REQUEST_TIMEOUT)
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(_) => {
+                        eprintln!(
+                            "Telegram alerts are disabled because the HTTP client could not be created"
+                        );
+                        return None;
+                    }
+                };
+                Some(Self {
+                    client,
+                    bot_token: Arc::from(bot_token),
+                    chat_id: Arc::from(chat_id),
+                    sent_alerts: Arc::new(Mutex::new(load_sent_alerts(
+                        alert_state_file.as_deref(),
+                    ))),
+                    alert_state_file: alert_state_file.map(Arc::new),
+                })
+            }
+            (None, None) => None,
+            _ => {
+                eprintln!(
+                    "Telegram alerts are disabled because both {TELEGRAM_BOT_TOKEN_ENV} and {TELEGRAM_CHAT_ID_ENV} must be set"
+                );
+                None
+            }
+        }
+    }
+
+    async fn notify_once(&self, kind: AlertKind, message: String) {
+        if !self.reserve_alert(kind).await {
+            return;
+        }
+
+        if self.send_message(&message).await.is_err() {
+            // Do not print the HTTP error: request URLs include the bot token.
+            eprintln!("failed to deliver Telegram relay alert");
+        }
+    }
+
+    async fn reserve_alert(&self, kind: AlertKind) -> bool {
+        let mut sent_alerts = self.sent_alerts.lock().await;
+        if !sent_alerts.insert(kind) {
+            return false;
+        }
+
+        if self
+            .alert_state_file
+            .as_deref()
+            .is_some_and(|path| !persist_sent_alerts(path, &sent_alerts))
+        {
+            eprintln!(
+                "failed to persist Telegram alert state; duplicate alerts may recur after restart"
+            );
+        }
+        true
+    }
+
+    async fn send_message(&self, message: &str) -> Result<(), reqwest::Error> {
+        self.client
+            .post(format!(
+                "https://api.telegram.org/bot{}/sendMessage",
+                self.bot_token
+            ))
+            .form(&[("chat_id", self.chat_id.as_ref()), ("text", message)])
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn load_sent_alerts(alert_state_file: Option<&std::path::Path>) -> HashSet<AlertKind> {
+    let Some(alert_state_file) = alert_state_file else {
+        return HashSet::new();
+    };
+
+    match fs::read_to_string(alert_state_file) {
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(alerts) => alerts,
+            Err(_) => {
+                eprintln!("Telegram alert state is invalid and will be replaced");
+                HashSet::new()
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashSet::new(),
+        Err(_) => {
+            eprintln!(
+                "failed to load Telegram alert state; alerts will only be deduplicated in memory"
+            );
+            HashSet::new()
+        }
+    }
+}
+
+fn persist_sent_alerts(alert_state_file: &std::path::Path, alerts: &HashSet<AlertKind>) -> bool {
+    let Ok(content) = serde_json::to_vec(alerts) else {
+        return false;
+    };
+    let temporary_file = alert_state_file.with_extension("tmp");
+    fs::write(&temporary_file, content).is_ok()
+        && fs::rename(temporary_file, alert_state_file).is_ok()
+}
+
+async fn notify_once(notifier: Option<&TelegramNotifier>, kind: AlertKind, message: String) {
+    if let Some(notifier) = notifier {
+        notifier.notify_once(kind, message).await;
+    }
+}
+
+fn install_panic_notifier(notifier: Option<TelegramNotifier>) {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        previous_hook(panic_info);
+
+        let Some(notifier) = notifier.clone() else {
+            return;
+        };
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            notifier
+                .notify_once(
+                    AlertKind::Panic,
+                    "WalletPair relay panicked. Check the relay logs.".to_owned(),
+                )
+                .await;
+        });
+    }));
 }
 
 impl ConnectionParams {
@@ -339,6 +550,40 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn telegram_alerts_are_deduplicated_by_category() {
+        let notifier = TelegramNotifier {
+            client: reqwest::Client::new(),
+            bot_token: Arc::from("test-token"),
+            chat_id: Arc::from("test-chat"),
+            alert_state_file: None,
+            sent_alerts: Arc::default(),
+        };
+
+        assert!(notifier.reserve_alert(AlertKind::Panic).await);
+        assert!(!notifier.reserve_alert(AlertKind::Panic).await);
+        assert!(notifier.reserve_alert(AlertKind::BroadcastLagged).await);
+    }
+
+    #[test]
+    fn persists_sent_alerts_across_restarts() {
+        let alert_state_file = std::env::temp_dir().join(format!(
+            "walletpair-relay-alert-state-{}.json",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&alert_state_file);
+
+        let sent_alerts = HashSet::from([AlertKind::ListenerBindFailed, AlertKind::Panic]);
+        assert!(persist_sent_alerts(&alert_state_file, &sent_alerts));
+
+        let reloaded_alerts = load_sent_alerts(Some(&alert_state_file));
+        assert!(reloaded_alerts.contains(&AlertKind::ListenerBindFailed));
+        assert!(reloaded_alerts.contains(&AlertKind::Panic));
+        assert!(!reloaded_alerts.contains(&AlertKind::BroadcastLagged));
+
+        fs::remove_file(alert_state_file).unwrap();
+    }
+
     fn connection(ch: &str, name: &str) -> ConnectionParams {
         ConnectionParams {
             ch: ch.to_owned(),
@@ -364,7 +609,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            axum::serve(listener, app()).await.unwrap();
+            axum::serve(listener, app_with_notifier(None))
+                .await
+                .unwrap();
         });
         address
     }
