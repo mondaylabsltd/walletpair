@@ -1,425 +1,362 @@
 <script lang="ts">
-	import { WalletSession, WebSocketTransport, hexToBytes, bytesToHex } from 'walletpair-sdk';
-	import type { WalletPhase } from 'walletpair-sdk';
+	import { secp256k1 } from '@noble/curves/secp256k1';
+	import { keccak_256 } from '@noble/hashes/sha3';
+	import { concatBytes, utf8ToBytes } from '@noble/hashes/utils';
+	import {
+		WalletSession,
+		isEvmRequest,
+		type EvmRequest,
+		type JsonValue,
+		type ParticipantMeta,
+		type SessionPhase
+	} from '$lib/walletpair/protocol';
+	import { createLocalRelaySocket } from './local-relay';
 	import MessageLog from './MessageLog.svelte';
 	import { playground, type LogEntry } from './state.svelte';
 
-	// ── Ethereum crypto (lazy-loaded) ──
-	async function loadEthCrypto() {
-		const [{ secp256k1 }, { keccak_256 }, { utf8ToBytes, concatBytes }] = await Promise.all([
-			import('@noble/curves/secp256k1.js'),
-			import('@noble/hashes/sha3.js'),
-			import('@noble/hashes/utils.js')
-		]);
-		return { secp256k1, keccak_256, utf8ToBytes, concatBytes, bytesToHex };
+	function hexToBytes(value: string): Uint8Array {
+		if (!/^[0-9a-f]{64}$/i.test(value))
+			throw new TypeError('Expected a 32-byte hexadecimal private key');
+		return Uint8Array.from(value.match(/.{2}/g)!, (byte) => Number.parseInt(byte, 16));
 	}
 
-	function privateKeyToAddress(privKeyHex: string, secp256k1: any, keccak_256: any): string {
-		const pubKey = secp256k1.getPublicKey(hexToBytes(privKeyHex), false);
-		return '0x' + bytesToHex(keccak_256(pubKey.slice(1)).slice(-20));
+	function bytesToHex(value: Uint8Array): string {
+		return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
 	}
 
-	function personalSign(
-		privKeyHex: string,
-		message: string,
-		secp256k1: any,
-		keccak_256: any,
-		utf8ToBytes: any,
-		concatBytes: any
-	): string {
-		const msgBytes = utf8ToBytes(message);
-		const prefix = utf8ToBytes(`\x19Ethereum Signed Message:\n${msgBytes.length}`);
-		const hash = keccak_256(concatBytes(prefix, msgBytes));
-		const privKey = hexToBytes(privKeyHex);
-		const sig = secp256k1.sign(hash, privKey);
-		const r = sig.r.toString(16).padStart(64, '0');
-		const s = sig.s.toString(16).padStart(64, '0');
-		const vHex = ((sig.recovery ?? 0) + 27).toString(16).padStart(2, '0');
-		return '0x' + r + s + vHex;
+	function addressFor(privateKey: string): string {
+		const publicKey = secp256k1.getPublicKey(hexToBytes(privateKey), false);
+		return `0x${bytesToHex(keccak_256(publicKey.slice(1)).slice(-20))}`;
 	}
 
-	// ── State ──
-	const STORAGE_KEY = 'walletpair.playground.evm.wallet';
+	function personalSign(privateKey: string, data: string): string {
+		const payload = /^0x(?:[0-9a-fA-F]{2})*$/.test(data)
+			? Uint8Array.from(data.slice(2).match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16))
+			: utf8ToBytes(data);
+		const prefix = utf8ToBytes(`\x19Ethereum Signed Message:\n${payload.length}`);
+		const signature = secp256k1.sign(
+			keccak_256(concatBytes(prefix, payload)),
+			hexToBytes(privateKey)
+		);
+		return `0x${signature.r.toString(16).padStart(64, '0')}${signature.s.toString(16).padStart(64, '0')}${((signature.recovery ?? 0) + 27).toString(16).padStart(2, '0')}`;
+	}
 
-	let metaName = $state('EVM Wallet');
-	let metaUrl = $state('https://walletpair.org');
-	let metaIcon = $state('https://walletpair.org/favicon.png');
-	let showMeta = $state(true);
-
-	let ethKey = $state('');
-	let ethAddr = $state('--');
-	let pairingUriInput = $state('');
-	let peerMeta = $state<{ name?: string; url?: string; icon?: string } | null>(null);
-	let phase: WalletPhase = $state('idle');
-	let sessionFingerprint = $state('------');
 	let session: WalletSession | null = $state(null);
-
-	let showReconnectPrompt = $state(false);
-
-	const persistence = {
-		save: (snapshot: string) => localStorage.setItem(STORAGE_KEY, snapshot),
-		load: () => localStorage.getItem(STORAGE_KEY),
-		clear: () => localStorage.removeItem(STORAGE_KEY)
-	};
-
-	$effect(() => {
-		const snap = localStorage.getItem(STORAGE_KEY);
-		if (snap && phase === 'idle' && !session) {
-			showReconnectPrompt = true;
-		}
-	});
-	let pendingReqs = $state<{ id: string; method: string; params: unknown }[]>([]);
-	let eventName = $state('accountsChanged');
+	let phase: SessionPhase = $state('idle');
+	let pairingUriInput = $state('');
+	let pairingCode = $state('----');
+	let peerMeta = $state<ParticipantMeta | null>(null);
+	let metaName = $state('WalletPair Playground Wallet');
+	let metaUrl = $state('https://walletpair.org');
+	let metaIcon = $state('https://walletpair.org/icon.png');
+	let showAdvanced = $state(false);
+	let privateKey = $state('');
+	let address = $state('--');
+	let pending = $state<EvmRequest[]>([]);
 	let log = $state<LogEntry[]>([]);
+	let eventName = $state('accountsChanged');
+	let joinError = $state('');
 
-	let ethCrypto: Awaited<ReturnType<typeof loadEthCrypto>> | null = null;
-
-	function addLog(dir: 'out' | 'in' | 'err', type: string, detail = '') {
+	function addLog(dir: LogEntry['dir'], type: string, detail = '') {
 		const now = new Date();
 		const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
 		log = [...log, { dir, type, detail, time }];
 	}
 
-	// ── Key management ──
-	async function ensureCrypto() {
-		if (!ethCrypto) ethCrypto = await loadEthCrypto();
-		return ethCrypto;
+	function walletMeta(): ParticipantMeta {
+		return {
+			name: metaName || 'WalletPair Playground Wallet',
+			url: metaUrl || 'https://walletpair.org',
+			icon: metaIcon || 'https://walletpair.org/icon.png'
+		};
 	}
 
-	async function updateEthKey() {
-		const hex = ethKey.replace(/^0x/, '').trim();
-		if (hex.length !== 64 || !/^[0-9a-fA-F]+$/.test(hex)) {
-			ethAddr = 'Invalid key (need 32 hex bytes)';
-			return;
-		}
-		const crypto = await ensureCrypto();
-		ethKey = hex.toLowerCase();
-		ethAddr = privateKeyToAddress(ethKey, crypto.secp256k1, crypto.keccak_256);
+	function phaseLabel(): string {
+		if (phase === 'idle') return 'Ready';
+		if (phase === 'awaiting_confirmation') return 'Verify code';
+		if (phase === 'joining') return 'Joining';
+		if (phase === 'connected') return 'Paired';
+		return phase;
 	}
 
-	async function generateKey() {
-		ethKey = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-		await updateEthKey();
-	}
-
-	// ── Auto-fill from dApp ──
-	function fillFromDApp() {
+	function useDappUri() {
 		pairingUriInput = playground.pairingUri;
 	}
 
-	function parseRelayFromUri(uri: string): string {
-		return uri.includes('relay=')
-			? decodeURIComponent(
-					uri.replace(/^walletpair:\?/, '').split('&').find((p) => p.startsWith('relay='))?.slice(6) || ''
-				)
-			: playground.relayUrl;
+	function generateKey() {
+		let candidate: Uint8Array;
+		do {
+			candidate = crypto.getRandomValues(new Uint8Array(32));
+		} while (!secp256k1.utils.isValidPrivateKey(candidate));
+		privateKey = bytesToHex(candidate);
+		updateKey();
 	}
 
-	// Safe v1.4.1 SafeProxy runtime bytecode — advertised so dApps get non-empty
-	// eth_getCode for a counterfactual smart account and detect EIP-1271.
-	const SAFE_PROXY_RUNTIME_CODE =
-		'0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033';
-
-	function createWalletSession(transport: WebSocketTransport): WalletSession {
-		const s = new WalletSession({
-			transport,
-			capabilities: {
-				methods: ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain', 'wallet_sendCalls', 'wallet_getCallsStatus'],
-				events: ['accountsChanged', 'chainChanged', 'disconnect'],
-				chains: ['eip155:1'],
-				// Smart contract wallet: advertise the proxy runtime so the dApp's
-				// EIP-1193 provider answers eth_getCode for a counterfactual account.
-				contractBytecode: SAFE_PROXY_RUNTIME_CODE
-			},
-			meta: {
-				name: metaName || 'EVM Wallet',
-				description: 'WalletPair playground wallet',
-				url: metaUrl || 'https://walletpair.org',
-				icon: metaIcon || 'https://walletpair.org/favicon.png'
-			},
-			persistence
-		});
-		s.on('phase', (p) => { phase = p; addLog('in', 'phase', p); });
-		s.on('request', ({ id, method, params }) => {
-			addLog('in', 'req', `id=${id} method=${method}`);
-			pendingReqs = [...pendingReqs, { id, method, params }];
-		});
-		return s;
+	function updateKey() {
+		try {
+			address = addressFor(privateKey.replace(/^0x/, '').trim());
+		} catch {
+			address = 'Invalid key';
+		}
 	}
 
-	// ── Two-step join ──
-	async function prepareJoinChannel() {
-		if (!ethKey || ethAddr === '--') {
-			addLog('err', 'key', 'Generate or enter an ETH key first');
+	function preparePairing() {
+		if (address === '--' || address === 'Invalid key') {
+			addLog('err', 'key', 'Generate or enter a valid private key first');
 			return;
 		}
-		const transport = new WebSocketTransport(parseRelayFromUri(pairingUriInput));
-		const s = createWalletSession(transport);
-		session = s;
-
 		try {
-			const uriParams = new URLSearchParams(pairingUriInput.replace(/^walletpair:\?/, ''));
-			peerMeta = {
-				name: uriParams.get('name') || undefined,
-				url: uriParams.get('url') || undefined,
-				icon: uriParams.get('icon') || undefined
-			};
-			const code = s.prepareJoin(pairingUriInput);
-			sessionFingerprint = code;
-			addLog('in', 'fingerprint', code);
-		} catch (e: any) {
-			addLog('err', 'prepare', e.message);
+			const next = new WalletSession({
+				meta: walletMeta(),
+				webSocketFactory: playground.transport === 'local' ? createLocalRelaySocket : undefined,
+				onPhase: (nextPhase) => {
+					phase = nextPhase;
+					addLog('in', 'phase', nextPhase);
+				},
+				onPeer: (peer) => {
+					peerMeta = peer;
+					addLog('in', 'dapp', peer.name);
+				},
+				onMessage: (message, chainId) => {
+					if (isEvmRequest(message)) {
+						pending = [...pending, message];
+						addLog('in', 'request', `${message.method} @ ${chainId}`);
+					} else {
+						addLog('err', 'message', 'Received an invalid EVM request envelope');
+					}
+				},
+				onError: (error) => addLog('err', 'protocol', error.message)
+			});
+			next.prepare(pairingUriInput);
+			session = next;
+			pairingCode = next.pairingCode;
+			joinError = '';
+			addLog('in', 'pairing_code', pairingCode);
+		} catch (error) {
+			addLog(
+				'err',
+				'prepare',
+				error instanceof Error ? error.message : 'Unable to parse pairing URI'
+			);
 		}
 	}
 
-	async function confirmJoinChannel() {
+	async function confirmPairing() {
+		if (!session) return;
+		joinError = '';
+		try {
+			await session.confirm();
+			addLog('out', 'connect', 'Encrypted channel confirmed');
+		} catch (error) {
+			joinError = error instanceof Error ? error.message : 'Unable to join the encrypted channel';
+			addLog('err', 'connect', joinError);
+		}
+	}
+
+	function sendResponse(id: string, result?: JsonValue, error?: { code: number; message: string }) {
 		if (!session) return;
 		try {
-			await session.confirmJoin();
-			addLog('out', 'join', `ch=${session.channelId.slice(0, 12)}...`);
-		} catch (e: any) {
-			addLog('err', 'join', e.message);
+			session.send(error ? { id, error } : { id, result: result ?? null });
+			addLog('out', 'response', id);
+			pending = pending.filter((request) => request.id !== id);
+		} catch (failure) {
+			addLog(
+				'err',
+				'response',
+				failure instanceof Error ? failure.message : 'Unable to send response'
+			);
 		}
 	}
 
-	// ── Reconnect ──
-	async function reconnectSession() {
-		showReconnectPrompt = false;
-		const transport = new WebSocketTransport(playground.relayUrl);
-		const s = createWalletSession(transport);
-		session = s;
-
-		try {
-			const restored = await s.restoreFromPersistence();
-			if (!restored) {
-				addLog('err', 'reconnect', 'Failed to restore session');
-				persistence.clear();
-				session = null;
-				return;
-			}
-			sessionFingerprint = (s as any).sessionFingerprint || '------';
-			addLog('out', 'reconnect', `ch=${s.channelId.slice(0, 12)}... restoring...`);
-			await s.reconnect();
-		} catch (e: any) {
-			addLog('err', 'reconnect', e.message);
-		}
-	}
-
-	function dismissReconnect() {
-		showReconnectPrompt = false;
-		persistence.clear();
-	}
-
-	// ── Request handling ──
-	async function approveRequest(reqId: string) {
-		if (!session) return;
-		const req = pendingReqs.find((r) => r.id === reqId);
-		if (!req) return;
-
-		const cr = await ensureCrypto();
-		let result: unknown;
-		switch (req.method) {
-			case 'wallet_getAccounts':
-				result = { accounts: [{ address: ethAddr, chains: ['eip155:1'] }] };
+	function approve(request: EvmRequest) {
+		const params = request.params;
+		switch (request.method) {
+			case 'eth_requestAccounts':
+			case 'eth_accounts':
+				sendResponse(request.id, [address]);
 				break;
-			case 'wallet_signMessage': {
-				const message = (req.params as any)?.message || '';
-				result = {
-					signature: personalSign(
-						ethKey,
-						message,
-						cr.secp256k1,
-						cr.keccak_256,
-						cr.utf8ToBytes,
-						cr.concatBytes
-					)
-				};
+			case 'eth_chainId':
+				sendResponse(request.id, '0x1');
 				break;
-			}
-			case 'wallet_sendCalls':
-				// EIP-5792 batched atomic calls → return a batch id
-				result = { id: '0x' + 'ab'.repeat(32) };
+			case 'net_version':
+				sendResponse(request.id, '1');
 				break;
-			case 'wallet_getCallsStatus': {
-				// EIP-5792 batch status poll
-				const id = typeof req.params === 'string' ? req.params : ((req.params as any)?.id ?? '0x');
-				result = { version: '2.0.0', id, chainId: '0x1', status: 200, atomic: true, receipts: [] };
+			case 'personal_sign': {
+				const message = Array.isArray(params) && typeof params[0] === 'string' ? params[0] : null;
+				if (!message)
+					sendResponse(request.id, undefined, {
+						code: -32602,
+						message: 'personal_sign requires [data, address]'
+					});
+				else sendResponse(request.id, personalSign(privateKey, message));
 				break;
 			}
 			default:
-				result = { status: 'approved' };
+				sendResponse(request.id, undefined, {
+					code: 4200,
+					message: 'Method is not supported by the playground wallet'
+				});
 		}
-
-		session.approve(reqId, result);
-		addLog('out', 'res', `id=${reqId} ok=true`);
-		pendingReqs = pendingReqs.filter((r) => r.id !== reqId);
 	}
 
-	function rejectRequest(reqId: string) {
-		if (!session) return;
-		session.reject(reqId);
-		addLog('out', 'res', `id=${reqId} ok=false`);
-		pendingReqs = pendingReqs.filter((r) => r.id !== reqId);
+	function reject(request: EvmRequest) {
+		sendResponse(request.id, undefined, { code: 4001, message: 'User rejected the request' });
 	}
 
-	// ── Events ──
 	function pushEvent() {
-		if (!session) return;
-		const data =
-			eventName === 'accountsChanged'
-				? { accounts: [{ address: ethAddr, chains: ['eip155:1'] }] }
-				: { chain: 'eip155:1' };
-		session.pushEvent(eventName, data);
-		addLog('out', 'evt', `event=${eventName}`);
-	}
-
-	function closeSession() {
-		session?.close();
-		addLog('out', 'close', 'normal');
+		if (!session || phase !== 'connected') return;
+		const data: JsonValue = eventName === 'accountsChanged' ? [address] : '0x1';
+		try {
+			session.send({ event: eventName, data });
+			addLog('out', 'event', eventName);
+		} catch (error) {
+			addLog('err', 'event', error instanceof Error ? error.message : 'Unable to send event');
+		}
 	}
 
 	function reset() {
-		session?.destroy();
+		session?.close();
 		session = null;
 		phase = 'idle';
-		sessionFingerprint = '------';
+		pairingCode = '----';
 		peerMeta = null;
-		pendingReqs = [];
+		pending = [];
 		log = [];
-		showReconnectPrompt = false;
-		persistence.clear();
+		joinError = '';
 	}
 </script>
 
 <div class="panel">
 	<div class="panel-header">
-		<h3>Wallet <span class="badge evm">EVM</span></h3>
-		<span class="status">
-			<span
-				class="dot"
-				class:connected={phase === 'connected'}
-				class:waiting={phase !== 'idle' && phase !== 'connected' && phase !== 'closed' && phase !== 'disconnected'}
-				class:error={phase === 'closed' || phase === 'disconnected'}
-			></span>
-			{phase}
-		</span>
+		<div>
+			<div class="step">Step 2</div>
+			<h3>Verify and join <span class="badge">EVM</span></h3>
+		</div>
+		<span class:connected={phase === 'connected'} class="status">{phaseLabel()}</span>
 	</div>
 
-	<!-- Reconnect prompt -->
-	{#if showReconnectPrompt && phase === 'idle'}
-		<div class="reconnect-prompt">
-			<div class="reconnect-text">Previous EVM wallet session found. Resume or start fresh?</div>
-			<div class="row">
-				<button class="btn-primary" onclick={reconnectSession}>Reconnect</button>
-				<button class="btn-ghost" onclick={dismissReconnect}>New Session</button>
+	{#if phase === 'idle'}
+		{#if address === '--' || address === 'Invalid key'}
+			<div class="field">
+				<p class="intro">
+					Generate a temporary local wallet, then use the pairing created in Step 1.
+				</p>
+				<button class="btn-primary btn-large" onclick={generateKey}>Generate demo wallet</button>
 			</div>
-		</div>
-	{/if}
-
-	<!-- Metadata (collapsible) -->
-	<div class="field">
-		<button class="meta-toggle" onclick={() => (showMeta = !showMeta)}>
-			{showMeta ? '▾' : '▸'} Metadata
-		</button>
-		{#if showMeta}
-			<input bind:value={metaName} placeholder="Wallet name" />
-			<input bind:value={metaUrl} placeholder="Wallet URL" />
-			<input bind:value={metaIcon} placeholder="Icon URL (must be https)" />
+		{:else}
+			<div class="account">
+				<div>
+					<div class="label">Demo account</div>
+					<div class="address">{address}</div>
+				</div>
+				<button class="btn-small" onclick={generateKey}>Generate another</button>
+			</div>
 		{/if}
-	</div>
 
-	<!-- EOA Key -->
-	<div class="field">
-		<label>Private Key (hex)</label>
-		<div class="row">
-			<input
-				bind:value={ethKey}
-				placeholder="paste or generate..."
-				oninput={updateEthKey}
-				type="password"
-			/>
-			<button class="btn-primary" onclick={generateKey}>Generate</button>
+		<div class="field pairing-input">
+			<div class="label">Pairing link</div>
+			{#if playground.pairingUri}
+				<button class="btn-current" onclick={useDappUri}>Use current pairing</button>
+			{:else}
+				<p class="hint">Create a pairing QR in the dApp panel first, or paste a pairing link.</p>
+			{/if}
+			<input bind:value={pairingUriInput} placeholder="Paste a walletpair: link" />
+			<button
+				class="btn-primary"
+				onclick={preparePairing}
+				disabled={!pairingUriInput || !privateKey}>Verify pairing code</button
+			>
 		</div>
-		<div class="addr">{ethAddr}</div>
-	</div>
 
-	<!-- Pairing URI + two-step join -->
-	<div class="field">
-		<label>Pairing URI</label>
-		<div class="row">
-			<input bind:value={pairingUriInput} placeholder="walletpair:?ch=...&pubkey=...&relay=..." />
-		</div>
-		<div class="row">
-			{#if playground.pairingUri && !pairingUriInput}
-				<button class="btn-sm" onclick={fillFromDApp}>Use dApp's URI</button>
-			{/if}
-			{#if phase === 'idle' && sessionFingerprint === '------'}
-				<button class="btn-primary" onclick={prepareJoinChannel} disabled={!pairingUriInput || !ethKey}>
-					Prepare Join
-				</button>
-			{/if}
-			{#if phase !== 'idle'}
-				<button class="btn-danger" onclick={reset}>Reset</button>
-			{/if}
-		</div>
-	</div>
-
-	<!-- Session Fingerprint + Confirm -->
-	{#if sessionFingerprint !== '------'}
-		<div class="field">
-			<label>Session Fingerprint (verify with dApp before confirming)</label>
-			<div class="fingerprint">{sessionFingerprint}</div>
-			{#if phase === 'idle'}
-				<div class="row">
-					<button class="btn-primary" onclick={confirmJoinChannel}>Confirm Join</button>
-					<button class="btn-danger" onclick={reset}>Reject</button>
+		<div class="advanced">
+			<button class="meta-toggle" onclick={() => (showAdvanced = !showAdvanced)}
+				>{showAdvanced ? '▾' : '▸'} Advanced wallet settings</button
+			>
+			{#if showAdvanced}
+				<div class="field">
+					<label class="label" for="wallet-private-key">Demo private key</label>
+					<div class="row">
+						<input
+							id="wallet-private-key"
+							bind:value={privateKey}
+							oninput={updateKey}
+							type="password"
+							placeholder="64 hex characters"
+						/>
+						<button class="btn-small" onclick={generateKey}>Generate</button>
+					</div>
+				</div>
+				<div class="field">
+					<div class="label">Wallet identity</div>
+					<input bind:value={metaName} placeholder="Wallet name" />
+					<input bind:value={metaUrl} placeholder="https://wallet.example" />
+					<input bind:value={metaIcon} placeholder="https://wallet.example/icon.png" />
 				</div>
 			{/if}
 		</div>
+	{:else}
+		{#if phase === 'awaiting_confirmation'}
+			<div class="confirmation">
+				<div class="label">Does this code match the dApp?</div>
+				<div class="pairing-code">{pairingCode}</div>
+				<p>Only join if both panels show the same four digits.</p>
+				<button class="btn-primary btn-large" onclick={confirmPairing}>Code matches — join</button>
+			</div>
+		{:else if phase === 'joining'}
+			<div class="confirmation" aria-live="polite">
+				<div class="label">Joining encrypted channel</div>
+				<p>Waiting for the relay to confirm this wallet connection…</p>
+			</div>
+		{:else if phase === 'error'}
+			<div class="error-state" role="alert">
+				<strong>Could not confirm the pairing.</strong>
+				<span>{joinError || 'Close this pairing and try again with a fresh QR code.'}</span>
+			</div>
+		{/if}
+		<button class="btn-danger close" onclick={reset}>Close pairing</button>
 	{/if}
 
 	{#if phase === 'connected'}
-		{#if peerMeta}
-			<div class="peer-info">
-				<span class="peer-label">Connected to</span>
-				<span class="peer-name">{peerMeta.name || 'Unknown dApp'}</span>
-				{#if peerMeta.url}<span class="peer-url">{peerMeta.url}</span>{/if}
-			</div>
-		{/if}
-
-	<!-- Incoming Requests -->
-		<div class="field">
-			<label>Incoming Requests</label>
-			{#if pendingReqs.length === 0}
-				<div class="empty">No pending requests</div>
-			{:else}
-				{#each pendingReqs as req}
-					<div class="req-card">
-						<div class="req-method">{req.method} <span class="req-id">#{req.id}</span></div>
-						<div class="req-params">{JSON.stringify(req.params)}</div>
+		<div class="connected-banner" aria-live="polite">
+			<span>✓</span> Paired successfully — the dApp can send requests now.
+		</div>
+		{#if peerMeta}<div class="peer">
+				Connected to <strong>{peerMeta.name}</strong> · {peerMeta.url}
+			</div>{/if}
+		<div class="field connected-section">
+			<div class="label">Incoming EIP-1193 requests</div>
+			{#if pending.length === 0}<div class="empty">No pending requests</div>{:else}
+				{#each pending as request (request.id)}
+					<div class="request">
+						<strong>{request.method}</strong><code>{JSON.stringify(request.params ?? [])}</code>
 						<div class="row">
-							<button class="btn-success" onclick={() => approveRequest(req.id)}>Approve</button>
-							<button class="btn-danger" onclick={() => rejectRequest(req.id)}>Reject</button>
+							<button class="btn-primary" onclick={() => approve(request)}>Approve</button><button
+								class="btn-danger"
+								onclick={() => reject(request)}>Reject</button
+							>
 						</div>
 					</div>
 				{/each}
 			{/if}
 		</div>
-
 		<div class="field">
-			<label>Push Event</label>
+			<div class="label">Wallet event on <code>eip155:1</code></div>
 			<div class="row">
-				<select bind:value={eventName}>
-					<option value="accountsChanged">accountsChanged</option>
-					<option value="chainChanged">chainChanged</option>
-				</select>
-				<button class="btn-primary" onclick={pushEvent}>Push</button>
-				<button class="btn-danger" onclick={closeSession}>Close</button>
+				<select bind:value={eventName}
+					><option value="accountsChanged">accountsChanged</option><option value="chainChanged"
+						>chainChanged</option
+					></select
+				><button class="btn-primary" onclick={pushEvent}>Send event</button>
 			</div>
 		</div>
 	{/if}
 
-	<MessageLog entries={log} />
+	{#if log.length > 0}
+		<details class="activity">
+			<summary>Protocol activity <span>{log.length}</span></summary>
+			<MessageLog entries={log} />
+		</details>
+	{/if}
 </div>
 
 <style>
@@ -431,220 +368,225 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-4);
-		overflow: hidden;
 	}
-
-	.panel-header {
+	.panel-header,
+	.row {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
+		gap: var(--space-2);
 	}
-
-	.panel-header h3 {
+	.panel-header {
+		justify-content: space-between;
+		align-items: flex-start;
+	}
+	.step {
+		color: var(--color-accent);
+		font: 600 0.68rem var(--font-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		margin-bottom: 3px;
+	}
+	h3 {
 		font-family: var(--font-mono);
 		font-size: 1rem;
-		font-weight: 600;
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
 	}
-
 	.badge {
-		font-size: 0.65rem;
-		font-weight: 500;
+		color: #a78bfa;
+		border: 1px solid #a78bfa55;
 		border-radius: var(--radius-sm);
+		font-size: 0.65rem;
 		padding: 1px 6px;
 	}
-
-	.badge.evm {
-		color: #a78bfa;
-		background: rgba(167, 139, 250, 0.1);
-		border: 1px solid rgba(167, 139, 250, 0.3);
-	}
-
 	.status {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		font-size: 0.8rem;
 		color: var(--color-text-muted);
-		font-family: var(--font-mono);
+		font: 0.8rem var(--font-mono);
 	}
-
-	.dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--color-text-subtle);
+	.status.connected {
+		color: var(--color-success);
 	}
-	.dot.connected {
-		background: var(--color-success);
-	}
-	.dot.waiting {
-		background: var(--color-warning);
-	}
-	.dot.error {
-		background: var(--color-error);
-	}
-
 	.field {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
 	}
-
-	label {
+	.intro,
+	.hint,
+	.confirmation p {
+		margin: 0;
+		color: var(--color-text-muted);
+		font-size: 0.86rem;
+		line-height: 1.55;
+	}
+	.label {
 		font-size: 0.75rem;
 		color: var(--color-text-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
 	}
-
-	.row {
-		display: flex;
-		gap: var(--space-2);
-	}
-
 	input,
 	select {
+		width: 100%;
 		background: var(--color-bg);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
-		padding: var(--space-2) var(--space-3);
 		color: var(--color-text);
-		font-family: var(--font-mono);
-		font-size: 0.8rem;
-		width: 100%;
+		padding: var(--space-2);
+		font: 0.8rem var(--font-mono);
 	}
-
-	input:focus,
-	select:focus {
-		outline: none;
-		border-color: var(--color-accent);
-	}
-
 	button {
+		cursor: pointer;
+		border-radius: var(--radius-sm);
 		padding: var(--space-2) var(--space-3);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-sm);
-		background: var(--color-surface-2);
-		color: var(--color-text-muted);
 		font-size: 0.8rem;
-		font-family: var(--font-mono);
 		white-space: nowrap;
-		transition:
-			background 0.15s,
-			border-color 0.15s;
 	}
-
-	button:hover {
-		background: var(--color-border);
-	}
-
 	button:disabled {
-		opacity: 0.4;
 		cursor: not-allowed;
+		opacity: 0.5;
 	}
-
 	.btn-primary {
 		background: var(--color-accent);
+		color: white;
 		border-color: var(--color-accent);
-		color: #fff;
 	}
-	.btn-primary:hover {
-		background: var(--color-accent-hover);
+	.btn-large {
+		width: 100%;
+		padding: var(--space-3) var(--space-4);
+		font-size: 0.9rem;
+		font-weight: 600;
 	}
-
 	.btn-danger {
+		background: transparent;
 		color: var(--color-error);
 		border-color: var(--color-error);
+	}
+	.btn-small,
+	.meta-toggle {
+		align-self: flex-start;
 		background: transparent;
+		color: var(--color-text-muted);
 	}
-
-	.btn-success {
-		color: var(--color-success);
-		border-color: var(--color-success);
-		background: transparent;
+	.btn-current {
+		background: var(--color-surface-2);
+		color: var(--color-text);
+		text-align: left;
 	}
-
-	.btn-sm {
-		font-size: 0.7rem;
-		padding: var(--space-1) var(--space-2);
+	.advanced {
+		border-top: 1px solid var(--color-border);
+		padding-top: var(--space-3);
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
 	}
-
-	.addr {
-		font-family: var(--font-mono);
-		font-size: 0.75rem;
-		color: var(--color-success);
-		word-break: break-all;
-	}
-
-	.fingerprint {
-		font-family: var(--font-mono);
-		font-size: 1.5rem;
-		font-weight: 600;
-		text-align: center;
-		color: var(--color-accent);
-		letter-spacing: 0.15em;
-	}
-
-	.empty {
-		font-size: 0.8rem;
-		color: var(--color-text-subtle);
-		font-style: italic;
-	}
-
-	.req-card {
+	.account,
+	.confirmation {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+		padding: var(--space-4);
 		background: var(--color-bg);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
-		padding: var(--space-3);
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-2);
 	}
-
-	.req-method {
-		font-family: var(--font-mono);
-		font-size: 0.85rem;
-		font-weight: 600;
+	.account {
+		flex-direction: row;
+		align-items: center;
+		justify-content: space-between;
 	}
-
-	.req-id {
-		font-weight: 400;
-		color: var(--color-text-subtle);
-	}
-
-	.req-params {
-		font-family: var(--font-mono);
-		font-size: 0.7rem;
-		color: var(--color-text-subtle);
-		word-break: break-all;
-	}
-
-	.meta-toggle {
-		background: none;
-		border: none;
+	.address,
+	.empty {
 		color: var(--color-text-muted);
-		font-family: var(--font-mono);
-		font-size: 0.75rem;
-		padding: 0;
+		font: 0.75rem var(--font-mono);
+		overflow-wrap: anywhere;
+	}
+	.pairing-code {
+		font: 600 1.6rem var(--font-mono);
+		letter-spacing: 0.18em;
+		color: var(--color-accent);
+	}
+	.peer {
+		font-size: 0.8rem;
+		color: var(--color-text-muted);
+		padding: var(--space-2);
+		border-left: 2px solid var(--color-accent);
+	}
+	.connected-banner,
+	.error-state {
+		display: flex;
+		gap: var(--space-2);
+		padding: var(--space-3);
+		border-radius: var(--radius-md);
+		font-size: 0.84rem;
+	}
+	.connected-banner {
+		align-items: center;
+		border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
+		background: color-mix(in srgb, var(--color-success) 10%, transparent);
+		color: var(--color-text);
+	}
+	.connected-banner span {
+		color: var(--color-success);
+		font-weight: 700;
+	}
+	.error-state {
+		flex-direction: column;
+		border: 1px solid color-mix(in srgb, var(--color-error) 45%, transparent);
+		background: color-mix(in srgb, var(--color-error) 10%, transparent);
+		color: var(--color-text-muted);
+	}
+	.error-state strong {
+		color: var(--color-error);
+	}
+	.close {
+		align-self: flex-start;
+	}
+	.connected-section {
+		padding-top: var(--space-2);
+		border-top: 1px solid var(--color-border);
+	}
+	.activity {
+		border-top: 1px solid var(--color-border);
+		padding-top: var(--space-3);
+	}
+	.activity summary {
 		cursor: pointer;
-		text-align: left;
+		color: var(--color-text-muted);
+		font: 0.75rem var(--font-mono);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
 	}
-	.meta-toggle:hover {
-		color: var(--color-text);
+	.activity summary span {
+		font-size: 0.65rem;
+		background: var(--color-surface-2);
+		padding: 0 5px;
+		border-radius: 8px;
 	}
-
-	.reconnect-prompt { background: var(--color-surface-2); border: 1px solid var(--color-accent); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
-	.reconnect-text { font-size: 0.85rem; color: var(--color-text); }
-	.btn-ghost { background: transparent; border: 1px solid var(--color-border); color: var(--color-text-muted); }
-	.btn-ghost:hover { border-color: var(--color-text-subtle); color: var(--color-text); }
-
-	.peer-info { display: flex; flex-direction: column; gap: 2px; padding: var(--space-3); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
-	.peer-label { font-size: 0.65rem; color: var(--color-text-subtle); text-transform: uppercase; letter-spacing: 0.05em; }
-	.peer-name { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; color: var(--color-text); }
-	.peer-url { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); }
+	.activity :global(.log-section) {
+		margin-top: var(--space-3);
+	}
+	.request {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding: var(--space-3);
+		background: var(--color-bg);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+	}
+	.request code {
+		overflow-wrap: anywhere;
+		color: var(--color-text-muted);
+		font-size: 0.72rem;
+	}
+	@media (max-width: 480px) {
+		.row {
+			align-items: stretch;
+			flex-direction: column;
+		}
+		.account {
+			align-items: stretch;
+			flex-direction: column;
+		}
+	}
 </style>

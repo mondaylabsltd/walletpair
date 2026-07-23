@@ -1,147 +1,66 @@
 <script lang="ts">
 	import CodeBlock from '$lib/components/CodeBlock.svelte';
 
-	const createSession = `import { WalletSession, WebSocketTransport } from 'walletpair-sdk';
-
-const transport = new WebSocketTransport('wss://relay.walletpair.org/v1');
-
-const session = new WalletSession({
-  transport,
-  capabilities: {
-    methods: [
-      'wallet_getAccounts',
-      'wallet_sendTransaction',
-      'wallet_signMessage',
-      'wallet_signTypedData',
-      'wallet_switchChain',
-    ],
-    events: ['accountsChanged', 'chainChanged'],
-    chains: ['eip155:1', 'eip155:137'],
-  },
-  meta: {
-    name: 'My Wallet',
-    description: 'A non-custodial wallet',
-    url: 'https://wallet.example',
-    icon: 'https://wallet.example/icon.png',
-  },
-});`;
-
-	const joinCode = `// Parse the QR code / pairing URI
-await session.prepareJoin(pairingUri);
-
-// Display session fingerprint to the user for verification
-console.log('Session fingerprint:', session.sessionFingerprint);
-
-// Confirm the join (dApp auto-accepts after sealed_join verification)
-await session.confirmJoin();`;
-
-	const handleRequests = `session.on('request', async (req) => {
-  console.log('Method:', req.method);
-  console.log('Params:', req.params);
-
-  switch (req.method) {
-    case 'wallet_getAccounts':
-      await session.approve(req.id, {
-        accounts: [{ address: '0x...', chains: ['eip155:1', 'eip155:137'] }],
-      });
-      break;
-
-    case 'wallet_signMessage':
-      // Show confirmation UI to user
-      const signature = await sign(req.params.message);
-      await session.approve(req.id, { signature });
-      break;
-
-    default:
-      await session.reject(req.id, {
-        code: 'unsupported_method',
-        message: \`Method \${req.method} not supported\`,
-      });
+	const response = `{
+  "id": "req-1",
+  "error": {
+    "code": 4001,
+    "message": "User rejected the request"
   }
-});`;
-
-	const pushEvents = `// Notify the dApp when accounts change
-session.pushEvent('accountsChanged', {
-  accounts: [{ address: '0xNew...', chains: ['eip155:1'] }],
-});
-
-// Notify when chain changes
-session.pushEvent('chainChanged', {
-  chain: 'eip155:137',
-});`;
-
-	const persistenceCode = `const session = new WalletSession({
-  transport,
-  capabilities: { /* ... */ },
-  persistence: {
-    save: (snapshot) => secureStore.set('walletpair.session', snapshot),
-    load: () => secureStore.get('walletpair.session'),
-    clear: () => secureStore.delete('walletpair.session'),
-  },
-});`;
+}`;
 </script>
 
-<svelte:head>
-	<title>Wallet Integration — WalletPair</title>
-</svelte:head>
+<svelte:head><title>Wallet Integration — WalletPair</title></svelte:head>
 
 <h1>Wallet Integration</h1>
 
-<p>Guide to integrating WalletPair into your wallet application.</p>
-
-<h2 id="create-session">Create a Session</h2>
-
-<CodeBlock code={createSession} lang="typescript" />
-
 <p>
-	The <code>capabilities</code> object declares what your wallet supports. Only include methods your
-	wallet can actually handle. <code>wallet_sendTransaction</code> is optional — cold wallets and
-	hardware signers that cannot broadcast should omit it.
+	A wallet implements the pairing URI parser, relay client, encryption layer, and EIP-1193 request
+	handler directly. There is no WalletPair SDK or capability negotiation message in the protocol.
 </p>
 
-<h2 id="join">Join a Pairing</h2>
+<h2>Prepare and verify the pairing</h2>
 
-<CodeBlock code={joinCode} lang="typescript" />
+<ol>
+	<li>
+		Require exactly one each of <code>ch</code>, <code>pubkey</code>, <code>relay</code>,
+		<code>name</code>, <code>url</code>, and <code>icon</code>.
+	</li>
+	<li>
+		Reject invalid percent encoding, non-canonical channel IDs or base64url keys, and invalid
+		metadata.
+	</li>
+	<li>Calculate the dApp pairing code using the decoded URI values and show it to the user.</li>
+	<li>
+		Only after the user confirms the matching code, generate a fresh X25519 key pair and join the
+		relay.
+	</li>
+	<li>Pin the public key from the QR URI; it is the wallet's authenticated dApp identity.</li>
+</ol>
 
-<p>
-	The two-step join (<code>prepareJoin</code> + <code>confirmJoin</code>) lets you display the
-	session fingerprint before completing the handshake. The dApp auto-accepts once it verifies
-	the sealed join payload.
-</p>
-
-<h2 id="handle-requests">Handle Requests</h2>
-
-<CodeBlock code={handleRequests} lang="typescript" />
-
-<p>
-	Every request must be either approved or rejected. The wallet <strong>must</strong> display a
-	confirmation UI for signing and transaction methods — never blind-sign.
-</p>
-
-<h2 id="push-events">Push Events</h2>
-
-<CodeBlock code={pushEvents} lang="typescript" />
+<h2>Validate every request</h2>
 
 <p>
-	Push events proactively to keep the dApp in sync. Always emit <code>chainChanged</code> after a
-	<code>wallet_switchChain</code> approval.
+	Decrypt only strictly increasing frames under the dApp-to-wallet key. Validate the EIP-1193
+	method, parameters, account authorization, selected chain, and all transaction or typed-data
+	details before showing approval UI. Do not trust dApp-provided summaries.
 </p>
 
-<h2 id="persistence">Persistence</h2>
+<h2>Respond with EIP-1193 errors</h2>
 
-<CodeBlock code={persistenceCode} lang="typescript" />
+<CodeBlock code={response} lang="json" />
 
 <p>
-	Use a secure storage backend (e.g., Expo SecureStore on mobile, encrypted IndexedDB on web).
-	Session snapshots contain cryptographic keys and must be stored securely.
+	Use <code>4001</code> for a user rejection, <code>4100</code> for unauthorized access,
+	<code>4200</code> for unsupported methods, and <code>4900</code>/<code>4901</code> for
+	disconnection. Malformed requests use <code>-32600</code>; invalid parameters use
+	<code>-32602</code>.
 </p>
 
-<h2 id="security">Security Requirements</h2>
+<h2>Preserve secrets and counters</h2>
 
-<ul>
-	<li>All signing methods must show a user confirmation UI</li>
-	<li>Never blind-sign transactions or EIP-712 data</li>
-	<li>Warn users that EIP-191 signatures are not chain-bound</li>
-	<li>Detect and warn on Permit/spending-allowance patterns in EIP-712</li>
-	<li>Verify that <code>chain</code> param matches <code>tx.chainId</code> when both are present</li>
-</ul>
+<p>
+	Erase ephemeral private, shared-secret, and root-key material as soon as the key schedule permits.
+	Persist traffic-key and counter state atomically before reuse across a reconnect. Otherwise
+	abandon the channel and require a new QR pairing.
+</p>

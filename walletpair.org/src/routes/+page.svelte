@@ -1,7 +1,15 @@
 <script lang="ts">
 	import FeatureCard from '$lib/components/FeatureCard.svelte';
 	import SequenceDiagram from '$lib/components/SequenceDiagram.svelte';
-	import { Braces, Lock, ArrowLeftRight, Diamond, ShieldCheck, Settings, Download } from 'lucide-svelte';
+	import {
+		Braces,
+		Lock,
+		ArrowLeftRight,
+		Diamond,
+		ShieldCheck,
+		Settings,
+		Download
+	} from 'lucide-svelte';
 
 	const features = [
 		{
@@ -23,12 +31,12 @@
 			icon: Diamond,
 			title: 'Multi-Network',
 			description:
-				'Chain-agnostic core with sub-protocols for EVM, Solana, Sui, and more via CAIP-2.'
+				'Encrypted frames carry authenticated CAIP-2 routing metadata; the current application protocol is EVM.'
 		},
 		{
 			icon: ShieldCheck,
 			title: 'Formally Verified',
-			description: 'ProVerif-proven under Dolev-Yao threat model. 7/7 security properties hold.'
+			description: 'The encryption model is checked in ProVerif against an active relay attacker.'
 		},
 		{
 			icon: Settings,
@@ -37,37 +45,20 @@
 		}
 	];
 
-	const dappCode = `import { DAppSession, WebSocketTransport } from 'walletpair-sdk';
+	const dappCode = `1. Generate a fresh X25519 key pair and a 32-byte channel ID.
+2. Connect to /v1 with ch, name, url, icon, and pubkey query fields.
+3. Display walletpair:?ch=…&pubkey=…&relay=…&name=…&url=…&icon=… as QR.
+4. Show SHA-256-derived 4-digit pairing code.
+5. After the first eligible channel_joined event, derive directional traffic keys.
+6. Send an EIP-1193 request as MessagePack in:
+   base64url(seq || ciphertext || tag)@eip155:1`;
 
-const transport = new WebSocketTransport('wss://relay.walletpair.org/v1');
-const session = new DAppSession({ transport, meta: { name: 'My dApp' } });
-
-const uri = await session.createPairing();
-// Display uri as QR code for wallet to scan
-
-session.on('phase', async (phase) => {
-  if (phase !== 'connected') return;
-  const accounts = await session.request('wallet_getAccounts');
-});`;
-
-	const walletCode = `import { WalletSession, WebSocketTransport } from 'walletpair-sdk';
-
-const transport = new WebSocketTransport('wss://relay.walletpair.org/v1');
-const session = new WalletSession({
-  transport,
-  capabilities: {
-    methods: ['wallet_getAccounts', 'wallet_signMessage'],
-    events: ['accountsChanged', 'chainChanged'],
-    chains: ['eip155:1', 'eip155:137'],
-  },
-});
-
-await session.joinFromUri(pairingUri);
-
-session.on('request', ({ id, method, params }) => {
-  // Handle request and approve or reject
-  session.approve(id, result);
-});`;
+	const walletCode = `1. Parse every required pairing URI field exactly once.
+2. Recompute and compare the four-digit dApp pairing code.
+3. Generate a fresh X25519 key pair and connect to the specified relay.
+4. Derive the wallet-to-dApp and dApp-to-wallet traffic keys.
+5. Validate and approve EIP-1193 requests before responding.
+6. Preserve sequence counters; pair again if they cannot be recovered safely.`;
 </script>
 
 <!-- Hero -->
@@ -79,7 +70,9 @@ session.on('request', ({ id, method, params }) => {
 	</p>
 	<div class="hero-actions">
 		<a href="/docs/getting-started" class="btn btn-primary">Get Started</a>
-		<a href="/docs/install-extension" class="btn btn-ghost"><Download size={16} strokeWidth={1.5} /> Install Extension</a>
+		<a href="/docs/install-extension" class="btn btn-ghost"
+			><Download size={16} strokeWidth={1.5} /> Install Extension</a
+		>
 		<a href="/playground" class="btn btn-ghost">Try the Playground →</a>
 	</div>
 </section>
@@ -99,8 +92,8 @@ session.on('request', ({ id, method, params }) => {
 	<h2 class="section-title">How It Works</h2>
 	<p class="section-desc">
 		The dApp creates a channel, displays a QR code. The wallet scans it. After a cryptographic
-		handshake with visual fingerprint verification, they communicate over an end-to-end encrypted
-		session. The relay never sees your data.
+		pairing-code comparison, they communicate over an end-to-end encrypted session. The relay never
+		sees your data.
 	</p>
 	<SequenceDiagram />
 </section>
@@ -113,8 +106,8 @@ session.on('request', ({ id, method, params }) => {
 			<h3 class="path-title">For dApp Developers</h3>
 			<ul class="path-list">
 				<li>Create a pairing URI and display it as a QR code</li>
-				<li>Send JSON-RPC requests over the encrypted channel</li>
-				<li>Wagmi connector and EIP-1193 provider included</li>
+				<li>Send EIP-1193 request envelopes over encrypted <code>eip155</code> frames</li>
+				<li>Adapt the resulting provider to your application stack</li>
 			</ul>
 			<pre class="code-block"><code>{dappCode}</code></pre>
 			<a href="/docs/dapp-integration" class="path-link">Read the dApp guide →</a>
@@ -123,7 +116,7 @@ session.on('request', ({ id, method, params }) => {
 			<h3 class="path-title">For Wallet Developers</h3>
 			<ul class="path-list">
 				<li>Scan a pairing QR code and join the session</li>
-				<li>Handle incoming requests — approve or reject</li>
+				<li>Handle incoming EIP-1193 requests — approve or reject</li>
 				<li>Push events like accountsChanged and chainChanged</li>
 			</ul>
 			<pre class="code-block"><code>{walletCode}</code></pre>

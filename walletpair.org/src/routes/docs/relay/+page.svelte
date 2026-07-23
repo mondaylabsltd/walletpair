@@ -1,91 +1,82 @@
 <script lang="ts">
 	import CodeBlock from '$lib/components/CodeBlock.svelte';
 
-	const buildCode = `cd walletpair-websocket-relay
+	const buildCode = `cd walletpair-relay
 cargo build --release
-./target/release/walletpair-relay --config config.toml`;
-
-	const configCode = `[server]
-host = "0.0.0.0"
-port = 8080
-
-[limits]
-max_channels = 10000
-
-[rate_limit]
-# Per-IP rate limiting
-enabled = true`;
+./target/release/walletpair-relay`;
+	const connection = `ws(s)://<relay-host>/v1?ch=<channel-id>&name=<name>&url=<url>&icon=<icon-url>&pubkey=<x25519-public-key>`;
+	const joined = `{
+  "type": "channel_joined",
+  "ch": "<channel-id>",
+  "name": "Example Wallet",
+  "url": "https://wallet.example",
+  "icon": "https://wallet.example/icon.png",
+  "pubkey": "<base64url-x25519-public-key>"
+}`;
 </script>
 
-<svelte:head>
-	<title>Self-Hosting Relay — WalletPair</title>
-</svelte:head>
+<svelte:head><title>Self-Hosting Relay — WalletPair</title></svelte:head>
 
 <h1>Self-Hosting the Relay</h1>
 
 <p>
-	The relay is a lightweight Rust binary that routes encrypted messages between peers. It holds
-	channels in memory only — no database, no persistent storage, no breach risk.
+	The relay is a stateless WebSocket router. It validates connection metadata, emits join events,
+	and forwards application frames unchanged. It does not create channels with a separate command,
+	decrypt payloads, store messages, or require a WebSocket subprotocol header.
 </p>
 
-<h2 id="build">Build from Source</h2>
+<h2>Build from source</h2>
 
 <CodeBlock code={buildCode} lang="bash" />
 
-<h2 id="config">Configuration</h2>
+<h2>Connection</h2>
 
-<CodeBlock code={configCode} lang="toml" filename="config.toml" />
-
-<h2 id="endpoints">Endpoints</h2>
+<CodeBlock code={connection} lang="text" />
 
 <table>
-	<thead>
-		<tr>
-			<th>Path</th>
-			<th>Purpose</th>
-		</tr>
-	</thead>
+	<thead><tr><th>Field</th><th>Validation</th></tr></thead>
 	<tbody>
-		<tr>
-			<td><code>/v1</code></td>
-			<td>WebSocket endpoint (requires <code>walletpair.v1</code> subprotocol header)</td>
-		</tr>
-		<tr>
-			<td><code>/healthz</code></td>
-			<td>Liveness probe — always returns 200</td>
-		</tr>
-		<tr>
-			<td><code>/readyz</code></td>
-			<td>Readiness probe — returns 503 if at capacity</td>
-		</tr>
-		<tr>
-			<td><code>/metrics</code></td>
-			<td>Prometheus metrics export</td>
-		</tr>
+		<tr><td><code>ch</code></td><td>Exactly 64 lowercase hexadecimal characters.</td></tr>
+		<tr><td><code>name</code></td><td>1–128 UTF-8 bytes; no control characters.</td></tr>
+		<tr
+			><td><code>url</code></td><td
+				>Absolute <code>http:</code> or <code>https:</code> URL, at most 2048 UTF-8 bytes.</td
+			></tr
+		>
+		<tr
+			><td><code>icon</code></td><td>Absolute <code>https:</code> URL, at most 2048 UTF-8 bytes.</td
+			></tr
+		>
+		<tr
+			><td><code>pubkey</code></td><td
+				>Canonical unpadded base64url, 32 decoded bytes, not all zero.</td
+			></tr
+		>
 	</tbody>
 </table>
 
-<h2 id="deployment">Deployment</h2>
-
-<p>The relay is a single binary with no external dependencies. Deploy it anywhere you can run a process:</p>
-
-<ul>
-	<li><strong>Docker</strong> — planned but not yet available</li>
-	<li><strong>Bare metal / VM</strong> — just run the binary with a config file</li>
-	<li><strong>Cloud Run / Fly.io</strong> — works well for low-ops deployment</li>
-</ul>
+<h2>Join event and routing</h2>
 
 <p>
-	The relay is stateless, so horizontal scaling is straightforward: run multiple instances behind a
-	load balancer. Each channel lives on a single relay instance.
+	After a client joins, the relay sends this JSON text frame to every active connection in that
+	channel, including the new connection. A client waits for its own event before sending application
+	frames.
 </p>
 
-<h2 id="security">Security Notes</h2>
+<CodeBlock code={joined} lang="json" />
 
 <ul>
-	<li>The relay <strong>never</strong> sees decrypted payloads</li>
-	<li>No persistent storage means no data to breach</li>
-	<li>Rate limiting and channel limits protect against resource exhaustion</li>
-	<li>All WebSocket connections require the <code>walletpair.v1</code> subprotocol</li>
-	<li>Consider TLS termination (via reverse proxy) for production deployments</li>
+	<li>
+		Text and binary application frames are forwarded unchanged to every other active connection in
+		the same channel.
+	</li>
+	<li>The sender does not receive its own application frame.</li>
+	<li>There is no cross-channel forwarding and no replay for later joiners.</li>
 </ul>
+
+<h2>Deployment note</h2>
+
+<p>
+	Each in-memory channel must remain on one relay instance. Use TLS for public traffic and configure
+	load balancing for channel affinity if you run multiple instances.
+</p>

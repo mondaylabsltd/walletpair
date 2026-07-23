@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ActivityEntry } from '@/lib/types';
+  import { ChevronDown } from 'lucide-svelte';
   let { entries = [], filterOrigin, onClear }: {
     entries: ActivityEntry[];
     filterOrigin?: string;
@@ -64,8 +65,13 @@
     expandedId = expandedId === id ? null : id;
   }
 
-  function hasDetail(entry: ActivityEntry): boolean {
-    return entry.params !== undefined || entry.result !== undefined || entry.error !== undefined;
+  function statusLabel(status: ActivityEntry['status']): string {
+    switch (status) {
+      case 'pending': return 'Awaiting wallet';
+      case 'success': return 'Completed';
+      case 'rejected': return 'Rejected';
+      case 'error': return 'Failed';
+    }
   }
 </script>
 
@@ -90,55 +96,73 @@
     {:else}
     <div class="activity-list">
       {#each filteredEntries.slice(0, 20) as entry}
-        <button
-          class="activity-row"
-          class:expandable={hasDetail(entry)}
-          class:expanded={expandedId === entry.id}
-          onclick={() => hasDetail(entry) && toggleExpand(entry.id)}
-          type="button"
-        >
-          <div class="activity-left">
-            <span class="badge {entry.category}">{categoryLabel(entry.category)}</span>
-            <span class="method">{shortMethod(entry.method)}</span>
-          </div>
-          <div class="activity-right">
-            <span class="origin">{shortOrigin(entry.origin)}</span>
-            <span class="status-icon {entry.status}">
-              {#if entry.status === 'pending'}●{:else if entry.status === 'success'}✓{:else if entry.status === 'rejected'}✕{:else}!{/if}
-            </span>
-            <span class="time">{relativeTime(entry.timestamp)}</span>
-          </div>
-        </button>
-        {#if expandedId === entry.id}
-          <div class="detail-panel">
-            <div class="detail-field">
-              <span class="detail-label">Method</span>
-              <code class="detail-value">{entry.method}</code>
+        <div class="activity-item">
+          <button
+            class="activity-row"
+            class:expanded={expandedId === entry.id}
+            onclick={() => toggleExpand(entry.id)}
+            type="button"
+            aria-expanded={expandedId === entry.id}
+            aria-controls={`activity-detail-${entry.id}`}
+          >
+            <div class="activity-left">
+              <span class="badge {entry.category}">{categoryLabel(entry.category)}</span>
+              <span class="method" title={entry.method}>{shortMethod(entry.method)}</span>
             </div>
-            <div class="detail-field">
-              <span class="detail-label">Origin</span>
-              <code class="detail-value">{entry.origin}</code>
+            <div class="activity-right">
+              <span class="origin">{shortOrigin(entry.origin)}</span>
+              <span class="status-icon {entry.status}" title={statusLabel(entry.status)}>
+                {#if entry.status === 'pending'}●{:else if entry.status === 'success'}✓{:else if entry.status === 'rejected'}✕{:else}!{/if}
+              </span>
+              <span class="time">{relativeTime(entry.timestamp)}</span>
+              <ChevronDown class="chevron" size={14} strokeWidth={1.8} />
             </div>
-            {#if entry.params !== undefined}
+          </button>
+          {#if expandedId === entry.id}
+            <div class="detail-panel" id={`activity-detail-${entry.id}`}>
+              <div class="detail-grid">
+                <div class="detail-field">
+                  <span class="detail-label">Method</span>
+                  <code class="detail-value">{entry.method}</code>
+                </div>
+                <div class="detail-field">
+                  <span class="detail-label">Status</span>
+                  <span class="detail-status {entry.status}">{statusLabel(entry.status)}</span>
+                </div>
+              </div>
+              <div class="detail-field">
+                <span class="detail-label">Origin</span>
+                <code class="detail-value">{entry.origin}</code>
+              </div>
               <div class="detail-field">
                 <span class="detail-label">Params</span>
-                <pre class="detail-pre">{formatJson(entry.params)}</pre>
+                {#if entry.params !== undefined}
+                  <pre class="detail-pre">{formatJson(entry.params)}</pre>
+                {:else}
+                  <span class="detail-empty">No parameters</span>
+                {/if}
               </div>
-            {/if}
-            {#if entry.result !== undefined}
-              <div class="detail-field">
-                <span class="detail-label">Result</span>
-                <pre class="detail-pre result">{formatJson(entry.result)}</pre>
-              </div>
-            {/if}
-            {#if entry.error}
-              <div class="detail-field">
-                <span class="detail-label">Error</span>
-                <pre class="detail-pre error">{formatJson(entry.error)}</pre>
-              </div>
-            {/if}
-          </div>
-        {/if}
+              {#if entry.status === 'pending'}
+                <div class="pending-note">
+                  <span class="pending-dot"></span>
+                  The request is waiting for a response from the wallet.
+                </div>
+              {/if}
+              {#if entry.result !== undefined}
+                <div class="detail-field">
+                  <span class="detail-label">Result</span>
+                  <pre class="detail-pre result">{formatJson(entry.result)}</pre>
+                </div>
+              {/if}
+              {#if entry.error}
+                <div class="detail-field">
+                  <span class="detail-label">Error</span>
+                  <pre class="detail-pre error">{formatJson(entry.error)}</pre>
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
       {/each}
     </div>
     {/if}
@@ -148,22 +172,22 @@
 <style>
   .activity {
     width: 100%;
-    margin-top: 8px;
+    margin-top: 2px;
   }
 
   .activity-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
 
   .activity-title {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-dimmer);
+    color: var(--text-dim);
     margin: 0;
     padding: 0;
     display: flex;
@@ -207,63 +231,59 @@
     padding: 16px 8px;
     background: var(--bg-card);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 12px;
   }
 
   .activity-list {
-    max-height: 320px;
+    max-height: 360px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 1px;
-    border-radius: 8px;
+    border-radius: 14px;
     background: var(--bg-card);
     border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .activity-item:not(:last-child) {
+    border-bottom: 1px solid var(--border-subtle);
   }
 
   .activity-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 28px;
-    padding: 0 8px;
+    min-height: 40px;
+    padding: 0 10px;
     font-size: 12px;
     background: none;
     border: none;
     color: inherit;
     width: 100%;
-    cursor: default;
+    cursor: pointer;
     text-align: left;
     font-family: inherit;
   }
 
-  .activity-row.expandable {
-    cursor: pointer;
-  }
-
-  .activity-row.expandable:hover {
-    background: var(--bg-hover, rgba(128, 128, 128, 0.06));
+  .activity-row:hover {
+    background: var(--bg-hover);
   }
 
   .activity-row.expanded {
-    background: var(--bg-hover, rgba(128, 128, 128, 0.06));
-  }
-
-  .activity-row:not(:last-child) {
-    border-bottom: 1px solid var(--border);
+    background: var(--bg-hover);
   }
 
   .activity-left {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     min-width: 0;
   }
 
   .activity-right {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     flex-shrink: 0;
   }
 
@@ -278,8 +298,8 @@
   }
 
   .badge.read {
-    background: rgba(128, 128, 128, 0.12);
-    color: var(--text-dimmer);
+    background: var(--neutral-dim);
+    color: var(--text-dim);
   }
 
   .badge.sign {
@@ -300,7 +320,7 @@
   .method {
     font-family: 'SF Mono', 'Fira Code', monospace;
     font-size: 11px;
-    color: var(--text-dim);
+    color: var(--text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -345,14 +365,29 @@
     text-align: right;
   }
 
+  :global(.chevron) {
+    color: var(--text-dimmer);
+    flex-shrink: 0;
+    transition: transform 0.16s ease;
+  }
+
+  .activity-row.expanded :global(.chevron) {
+    transform: rotate(180deg);
+  }
+
   /* Detail panel */
   .detail-panel {
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-hover, rgba(128, 128, 128, 0.03));
+    padding: 12px;
+    background: var(--bg-soft);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 10px;
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
   }
 
   .detail-field {
@@ -366,13 +401,13 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-dimmer);
+    color: var(--text-dim);
   }
 
   .detail-value {
     font-family: 'SF Mono', 'Fira Code', monospace;
     font-size: 11px;
-    color: var(--text-dim);
+    color: var(--text);
     word-break: break-all;
   }
 
@@ -383,12 +418,48 @@
     margin: 0;
     padding: 6px 8px;
     border-radius: 4px;
-    background: var(--bg-card);
+    background: var(--code-bg);
     border: 1px solid var(--border);
     white-space: pre-wrap;
     word-break: break-all;
     max-height: 120px;
     overflow-y: auto;
+  }
+
+  .detail-empty {
+    color: var(--text-dimmer);
+    font-size: 11px;
+  }
+
+  .detail-status {
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .detail-status.pending { color: var(--orange); }
+  .detail-status.success { color: var(--green); }
+  .detail-status.rejected,
+  .detail-status.error { color: var(--red); }
+
+  .pending-note {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--orange-dim);
+    color: var(--orange);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .pending-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--orange);
+    flex-shrink: 0;
+    animation: pulse 1.5s ease-in-out infinite;
   }
 
   .detail-pre.result {

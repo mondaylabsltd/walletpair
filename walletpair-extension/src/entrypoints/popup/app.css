@@ -1,21 +1,27 @@
 :root {
-  --bg: #0f0f14;
-  --bg-card: #181821;
-  --bg-hover: #22222e;
-  --text: #e8e8f0;
-  --text-dim: #8888a0;
-  --text-dimmer: #555566;
-  --accent: #2563eb;
-  --accent-hover: #3b82f6;
-  --accent-dim: rgba(37, 99, 235, 0.15);
-  --green: #22c55e;
-  --green-dim: rgba(34, 197, 94, 0.15);
-  --red: #ef4444;
-  --red-dim: rgba(239, 68, 68, 0.15);
-  --orange: #f59e0b;
-  --orange-dim: rgba(245, 158, 11, 0.15);
-  --border: #2a2a38;
-  --border-subtle: #23232e;
+  color-scheme: light;
+  --bg: #f5f7fb;
+  --bg-card: #ffffff;
+  --bg-soft: #f8faff;
+  --bg-hover: #f0f4ff;
+  --code-bg: #f6f8fc;
+  --text: #172033;
+  --text-dim: #667085;
+  --text-dimmer: #98a2b3;
+  --accent: #3867f4;
+  --accent-hover: #2454e6;
+  --accent-dim: #eaf0ff;
+  --green: #078b55;
+  --green-dim: #e8f8f0;
+  --red: #d92d20;
+  --red-dim: #fef0ef;
+  --orange: #c7650a;
+  --orange-dim: #fff4e5;
+  --neutral-dim: #eef1f6;
+  --border: #e2e7f0;
+  --border-subtle: #edf0f5;
+  --shadow-sm: 0 1px 2px rgba(33, 50, 84, 0.04);
+  --shadow-card: 0 8px 24px rgba(33, 50, 84, 0.08), 0 1px 3px rgba(33, 50, 84, 0.05);
   --radius: 12px;
   --radius-sm: 8px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
@@ -36,7 +42,9 @@ html, body {
 
 body {
   font-family: var(--font);
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 10% 0%, rgba(56, 103, 244, 0.08), transparent 36%),
+    var(--bg);
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;
@@ -55,6 +63,12 @@ button {
   border: none;
   outline: none;
   transition: all 0.15s ease;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(56, 103, 244, 0.32);
+  outline-offset: 2px;
 }
 
 button:active {

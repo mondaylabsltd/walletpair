@@ -1,54 +1,66 @@
 <script lang="ts">
-	import { DAppSession, WebSocketTransport } from 'walletpair-sdk';
-	import type { DAppPhase } from 'walletpair-sdk';
 	import QRCode from 'qrcode';
+	import {
+		DAppSession,
+		createRequest,
+		isEvmEvent,
+		isEvmResponse,
+		type JsonValue,
+		type ParticipantMeta,
+		type SessionPhase
+	} from '$lib/walletpair/protocol';
+	import { createLocalRelaySocket } from './local-relay';
 	import MessageLog from './MessageLog.svelte';
 	import { playground, type LogEntry } from './state.svelte';
-	import { Zap, RadioTower, Link } from 'lucide-svelte';
 
-	const STORAGE_KEY = 'walletpair.playground.evm.dapp';
-
-	let phase: DAppPhase = $state('idle');
-	let pairingUri = $state('');
-	let sessionFingerprint = $state('------');
-	let session: DAppSession | null = $state(null);
-	let qrDataUrl = $state('');
-
-	let metaName = $state('EVM Playground');
-	let metaUrl = $state('https://walletpair.org');
-	let metaIcon = $state('https://walletpair.org/favicon.png');
-	let showMeta = $state(true);
-
-	let walletCaps = $state<{ methods?: string[]; events?: string[]; chains?: string[] } | null>(null);
-	let peerMeta = $state<{ name?: string; url?: string; icon?: string } | null>(null);
-	let method = $state('wallet_getAccounts');
-	let params = $state('{}');
-	let log = $state<LogEntry[]>([]);
-
-	let showReconnectPrompt = $state(false);
-
-	const persistence = {
-		save: (snapshot: string) => localStorage.setItem(STORAGE_KEY, snapshot),
-		load: () => localStorage.getItem(STORAGE_KEY),
-		clear: () => localStorage.removeItem(STORAGE_KEY)
+	type RequestResult = {
+		id: string;
+		method: string;
+		state: 'pending' | 'approved' | 'rejected';
+		result?: JsonValue;
+		error?: { code: number; message: string };
 	};
 
-	$effect(() => {
-		const snap = localStorage.getItem(STORAGE_KEY);
-		if (snap && phase === 'idle' && !session) {
-			showReconnectPrompt = true;
-		}
-	});
+	let session: DAppSession | null = $state(null);
+	let phase: SessionPhase = $state('idle');
+	let pairingUri = $state('');
+	let pairingCode = $state('----');
+	let qrDataUrl = $state('');
+	let peerMeta = $state<ParticipantMeta | null>(null);
+	let metaName = $state('WalletPair Playground');
+	let metaUrl = $state('https://walletpair.org');
+	let metaIcon = $state('https://walletpair.org/icon.png');
+	let showAdvanced = $state(false);
+	let method = $state('eth_requestAccounts');
+	let paramsText = $state('[]');
+	let requestResults = $state<RequestResult[]>([]);
+	let log = $state<LogEntry[]>([]);
+	let copied = $state(false);
 
-	function addLog(dir: 'out' | 'in' | 'err', type: string, detail = '') {
+	function addLog(dir: LogEntry['dir'], type: string, detail = '') {
 		const now = new Date();
 		const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`;
 		log = [...log, { dir, type, detail, time }];
 	}
 
-	async function renderQR(text: string) {
+	function dappMeta(): ParticipantMeta {
+		return {
+			name: metaName || 'WalletPair Playground',
+			url: metaUrl || 'https://walletpair.org',
+			icon: metaIcon || 'https://walletpair.org/icon.png'
+		};
+	}
+
+	function phaseLabel(): string {
+		if (phase === 'idle') return 'Ready';
+		if (phase === 'pairing') return 'Waiting for wallet';
+		if (phase === 'connected') return 'Paired';
+		return phase.replace('_', ' ');
+	}
+
+	async function renderQr(uri: string) {
 		try {
-			qrDataUrl = await QRCode.toDataURL(text, {
+			qrDataUrl = await QRCode.toDataURL(uri, {
 				width: 200,
 				margin: 2,
 				color: { dark: '#e6edf3', light: '#141416' }
@@ -58,321 +70,239 @@
 		}
 	}
 
-	function setupSessionEvents(s: DAppSession) {
-		s.on('phase', (p) => {
-			phase = p;
-			addLog('in', 'phase', p);
-		});
-
-		s.on('pairingUri', (uri) => {
-			pairingUri = uri;
-			playground.pairingUri = uri;
-			renderQR(uri);
-		});
-
-		(s as any).on('sessionFingerprint', (fingerprint: string) => {
-			sessionFingerprint = fingerprint;
-			addLog('in', 'fingerprint', fingerprint);
-		});
-
-		s.on('walletJoined', ({ capabilities, meta }) => {
-			walletCaps = capabilities as typeof walletCaps;
-			peerMeta = meta as typeof peerMeta;
-			if (walletCaps?.methods?.length) method = walletCaps.methods[0]!;
-			addLog(
-				'in',
-				'join',
-				`wallet=${meta?.name || 'unknown'} methods=[${walletCaps?.methods?.join(', ')}]`
-			);
-		});
-
-		s.on('response', ({ id, ok, result }) => {
-			addLog('in', 'res', `id=${id} ok=${ok} ${JSON.stringify(result)}`);
-		});
-
-		s.on('event', ({ event, data }) => {
-			addLog('in', 'evt', `event=${event} ${JSON.stringify(data)}`);
-		});
-	}
-
-	function createEvmDAppMeta() {
-		return {
-			name: metaName || 'EVM Playground',
-			description: 'Interactive playground',
-			url: metaUrl || 'https://walletpair.org',
-			icon: metaIcon || 'https://walletpair.org/favicon.png'
-		};
-	}
-
-	const evmMethods = ['wallet_getAccounts', 'wallet_signTransaction', 'wallet_signMessage', 'wallet_signTypedData', 'wallet_switchChain', 'wallet_sendCalls', 'wallet_getCallsStatus'];
-
-	async function connect() {
-		showReconnectPrompt = false;
-
-		const transport = new WebSocketTransport(playground.relayUrl);
-		const s = new DAppSession({
-			transport,
-			meta: createEvmDAppMeta(),
-			methods: evmMethods,
-			chains: ['eip155:1'],
-			persistence
-		} as ConstructorParameters<typeof DAppSession>[0]);
-		session = s;
-		setupSessionEvents(s);
-
+	async function startPairing() {
+		if (phase !== 'idle') return;
 		try {
-			await s.createPairing();
-			sessionFingerprint = (s as any).sessionFingerprint ?? '------';
-			addLog('out', 'create', `ch=${s.channelId.slice(0, 12)}...`);
-		} catch (e: any) {
-			addLog('err', 'connect', e.message);
+			const next = new DAppSession({
+				relayUrl: playground.relayUrl,
+				meta: dappMeta(),
+				webSocketFactory: playground.transport === 'local' ? createLocalRelaySocket : undefined,
+				onPhase: (nextPhase) => {
+					phase = nextPhase;
+					addLog('in', 'phase', nextPhase);
+				},
+				onPeer: (peer) => {
+					peerMeta = peer;
+					addLog('in', 'channel_joined', peer.name);
+				},
+				onMessage: (message, chainId) => {
+					if (isEvmResponse(message)) {
+						requestResults = requestResults.map((request) =>
+							request.id === message.id
+								? 'error' in message
+									? { ...request, state: 'rejected', error: message.error }
+									: { ...request, state: 'approved', result: message.result }
+								: request
+						);
+						addLog('in', 'response', `${message.id} @ ${chainId}`);
+					} else if (isEvmEvent(message)) {
+						addLog('in', 'event', `${message.event} @ ${chainId}`);
+					} else {
+						addLog('err', 'message', 'Received an invalid EVM response/event envelope');
+					}
+				},
+				onError: (error) => addLog('err', 'protocol', error.message)
+			});
+			session = next;
+			pairingUri = next.pairingUri;
+			pairingCode = next.pairingCode;
+			playground.pairingUri = pairingUri;
+			await renderQr(pairingUri);
+			await next.start();
+			addLog('out', 'connect', 'Relay connection established');
+		} catch (error) {
+			addLog('err', 'connect', error instanceof Error ? error.message : 'Unable to start pairing');
 		}
 	}
 
-	async function sendRequest() {
-		if (!session) return;
-		const m = method === 'custom' ? prompt('Method name:') : method;
-		if (!m) return;
-		let p;
+	function sendRequest() {
+		if (!session || phase !== 'connected') return;
+		let parsed: unknown;
 		try {
-			p = JSON.parse(params);
+			parsed = JSON.parse(paramsText);
 		} catch {
-			addLog('err', 'params', 'Invalid JSON');
+			addLog('err', 'params', 'Parameters must be valid JSON');
 			return;
 		}
-		addLog('out', 'req', `method=${m}`);
-		try {
-			await session.request(m, Object.keys(p).length > 0 ? p : undefined);
-		} catch (e: any) {
-			addLog('err', 'req_error', e.message);
+		if (!Array.isArray(parsed) && (typeof parsed !== 'object' || parsed === null)) {
+			addLog('err', 'params', 'EIP-1193 params must be an array or object');
+			return;
 		}
-	}
-
-	function sendPing() {
-		session?.ping();
-		addLog('out', 'ping', '');
-	}
-
-	function closeSession() {
-		session?.close();
-		addLog('out', 'close', 'normal');
+		try {
+			const request = createRequest(method, parsed as JsonValue[] | { [key: string]: JsonValue });
+			session.send(request);
+			const pendingRequest: RequestResult = {
+				id: request.id,
+				method: request.method,
+				state: 'pending'
+			};
+			requestResults = [pendingRequest, ...requestResults].slice(0, 6);
+			addLog('out', 'request', `${method} @ eip155:1`);
+		} catch (error) {
+			addLog('err', 'request', error instanceof Error ? error.message : 'Unable to send request');
+		}
 	}
 
 	function reset() {
-		session?.destroy();
+		session?.close();
 		session = null;
 		phase = 'idle';
 		pairingUri = '';
-		playground.pairingUri = '';
-		sessionFingerprint = '------';
+		pairingCode = '----';
 		qrDataUrl = '';
-		walletCaps = null;
 		peerMeta = null;
+		requestResults = [];
+		playground.pairingUri = '';
 		log = [];
-		showReconnectPrompt = false;
-		persistence.clear();
-	}
-
-	async function reconnectSession() {
-		showReconnectPrompt = false;
-		const transport = new WebSocketTransport(playground.relayUrl);
-		const s = new DAppSession({
-			transport,
-			meta: {
-				name: metaName || 'EVM Playground',
-				description: 'Interactive playground',
-				url: metaUrl || 'https://walletpair.org',
-				icon: metaIcon || 'https://walletpair.org/favicon.png'
-			},
-			persistence
-		} as ConstructorParameters<typeof DAppSession>[0]);
-		session = s;
-		setupSessionEvents(s);
-
-		try {
-			const restored = await s.restoreFromPersistence();
-			if (!restored) {
-				addLog('err', 'reconnect', 'Failed to restore session');
-				persistence.clear();
-				session = null;
-				return;
-			}
-			sessionFingerprint = s.sessionFingerprint || '------';
-			walletCaps = (s.walletCapabilities as typeof walletCaps) ?? null;
-			if (walletCaps?.methods?.length) method = walletCaps.methods[0]!;
-			addLog('out', 'reconnect', `ch=${s.channelId.slice(0, 12)}... restoring...`);
-			await s.reconnect();
-		} catch (e: any) {
-			addLog('err', 'reconnect', e.message);
-		}
-	}
-
-	function dismissReconnect() {
-		showReconnectPrompt = false;
-		persistence.clear();
-	}
-
-	let copied = $state(false);
-	function copyUri() {
-		navigator.clipboard.writeText(pairingUri);
-		copied = true;
-		setTimeout(() => (copied = false), 2000);
 	}
 
 	function onMethodChange() {
-		if (method === 'wallet_signMessage') params = '{"message": "Hello WalletPair!"}';
-		else if (method === 'wallet_signTypedData') params = '{}';
-		else if (method === 'wallet_sendTransaction')
-			params = '{"chain":"eip155:1","address":"0x...","tx":{"to":"0x...","value":"0x0","data":"0x","type":"0x2","chainId":"0x1"}}';
-		else if (method === 'wallet_sendCalls')
-			params = '{"version":"2.0.0","chainId":"0x1","from":"0x...","atomicRequired":false,"calls":[{"to":"0x...","value":"0x0","data":"0x"}]}';
-		else if (method === 'wallet_getCallsStatus')
-			params = '"0xabababababababababababababababababababababababababababababababab"';
-		else params = '{}';
+		if (method === 'personal_sign')
+			paramsText = '["0x48656c6c6f2057616c6c65745061697221", "0x..."]';
+		else if (method === 'eth_sendTransaction')
+			paramsText = '[{"from":"0x...","to":"0x...","value":"0x0","data":"0x"}]';
+		else if (method === 'wallet_switchEthereumChain') paramsText = '[{"chainId":"0x1"}]';
+		else paramsText = '[]';
+	}
+
+	async function copyUri() {
+		await navigator.clipboard.writeText(pairingUri);
+		copied = true;
+		setTimeout(() => (copied = false), 2000);
 	}
 </script>
 
 <div class="panel">
 	<div class="panel-header">
-		<h3>dApp <span class="badge evm">EVM</span></h3>
-		<span class="status">
-			<span
-				class="dot"
-				class:connected={phase === 'connected'}
-				class:waiting={phase === 'waiting' || phase === 'pending_accept'}
-				class:error={phase === 'closed' || phase === 'disconnected'}
-			></span>
-			{phase}
-		</span>
-	</div>
-
-	{#if showReconnectPrompt && phase === 'idle'}
-		<div class="reconnect-prompt">
-			<div class="reconnect-text">Previous EVM session found. Resume or start fresh?</div>
-			<div class="row">
-				<button class="btn-primary" onclick={reconnectSession}>Reconnect</button>
-				<button class="btn-ghost" onclick={dismissReconnect}>New Session</button>
-			</div>
+		<div>
+			<div class="step">Step 1</div>
+			<h3>Create a pairing QR <span class="badge">EVM</span></h3>
 		</div>
-	{/if}
-
-	<div class="field">
-		<label>Relay URL</label>
-		<div class="row">
-			<input bind:value={playground.relayUrl} placeholder="wss://..." />
-			{#if phase === 'idle'}
-				<button class="btn-primary" onclick={connect}>Connect</button>
-			{:else}
-				<button class="btn-danger" onclick={reset}>Reset</button>
-			{/if}
-		</div>
+		<span class:connected={phase === 'connected'} class="status">{phaseLabel()}</span>
 	</div>
 
-	<!-- Metadata (collapsible) -->
-	<div class="field">
-		<button class="meta-toggle" onclick={() => (showMeta = !showMeta)}>
-			{showMeta ? '▾' : '▸'} Metadata
-		</button>
-		{#if showMeta}
-			<input bind:value={metaName} placeholder="dApp name" />
-			<input bind:value={metaUrl} placeholder="dApp URL (default: current origin)" />
-			<input bind:value={metaIcon} placeholder="Icon URL (default: /favicon.png)" />
-		{/if}
-	</div>
+	{#if phase === 'idle'}
+		<p class="intro">Create a one-time pairing, then continue in the Wallet panel.</p>
+		<button class="btn-primary btn-large" onclick={startPairing}>Create pairing QR</button>
 
-	<!-- QR Code & URI -->
-	{#if phase !== 'idle'}
-		<div class="field">
-			<label>Pairing QR</label>
-			{#if qrDataUrl}
-				<div class="qr-wrap">
-					<img src={qrDataUrl} alt="QR Code" />
+		<div class="advanced">
+			<button class="meta-toggle" onclick={() => (showAdvanced = !showAdvanced)}
+				>{showAdvanced ? '▾' : '▸'} Advanced connection settings</button
+			>
+			{#if showAdvanced}
+				<div class="field">
+					<label class="label" for="dapp-transport">Delivery mode</label>
+					<select id="dapp-transport" bind:value={playground.transport}>
+						<option value="local">Same-page demo (local relay)</option>
+						<option value="relay">Configured WebSocket relay</option>
+					</select>
+					{#if playground.transport === 'local'}
+						<p class="setting-hint">
+							Both roles stay in this tab; encrypted frames use a local relay simulation.
+						</p>
+					{/if}
 				</div>
-			{/if}
-			<div class="uri-box">{pairingUri || '--'}</div>
-			<button class="btn-sm" onclick={copyUri} disabled={!pairingUri}>{copied ? 'Copied!' : 'Copy URI'}</button>
-		</div>
-
-		{#if sessionFingerprint !== '------'}
-			<div class="field">
-				<label>Session Fingerprint</label>
-				<div class="fingerprint">{sessionFingerprint}</div>
-			</div>
-		{/if}
-	{/if}
-
-	<!-- Send Requests -->
-	{#if phase === 'connected'}
-		{#if peerMeta}
-			<div class="peer-info">
-				<span class="peer-label">Connected to</span>
-				<span class="peer-name">{peerMeta.name || 'Unknown Wallet'}</span>
-				{#if peerMeta.url}<span class="peer-url">{peerMeta.url}</span>{/if}
-			</div>
-		{/if}
-
-		{#if walletCaps}
-			<div class="field">
-				<label>Wallet Capabilities</label>
-				<div class="caps-box">
-					<div class="caps-row">
-						<span class="caps-icon"><Zap size={14} strokeWidth={1.5} /></span>
-						<span class="caps-label">Methods</span>
-						<div class="caps-tags">
-							{#each walletCaps.methods || [] as m}
-								<button class="cap-tag" class:active={method === m} onclick={() => { method = m; onMethodChange(); }}>{m}</button>
-							{/each}
-						</div>
+				{#if playground.transport === 'relay'}
+					<div class="field">
+						<label class="label" for="dapp-relay">Relay URL</label>
+						<input
+							id="dapp-relay"
+							bind:value={playground.relayUrl}
+							placeholder="wss://relay.example/v1"
+						/>
 					</div>
-					<div class="caps-row">
-						<span class="caps-icon"><RadioTower size={14} strokeWidth={1.5} /></span>
-						<span class="caps-label">Events</span>
-						<div class="caps-tags">
-							{#each walletCaps.events || [] as e}
-								<span class="cap-tag readonly">{e}</span>
-							{/each}
-						</div>
-					</div>
-					<div class="caps-row">
-						<span class="caps-icon"><Link size={14} strokeWidth={1.5} /></span>
-						<span class="caps-label">Chains</span>
-						<div class="caps-tags">
-							{#each walletCaps.chains || [] as c}
-								<span class="cap-tag readonly">{c}</span>
-							{/each}
-						</div>
-					</div>
-				</div>
-			</div>
-		{/if}
-
-		<div class="field">
-			<label>Send Request — <code>{method}</code></label>
-			<select bind:value={method} onchange={onMethodChange}>
-				{#if walletCaps?.methods?.length}
-					{#each walletCaps.methods as m}
-						<option value={m}>{m}</option>
-					{/each}
-				{:else}
-					<option value="wallet_getAccounts">wallet_getAccounts</option>
-					<option value="wallet_signMessage">wallet_signMessage</option>
-					<option value="wallet_signTypedData">wallet_signTypedData</option>
-					<option value="wallet_sendTransaction">wallet_sendTransaction</option>
-					<option value="wallet_sendCalls">wallet_sendCalls</option>
-					<option value="wallet_getCallsStatus">wallet_getCallsStatus</option>
 				{/if}
-				<option value="custom">custom...</option>
-			</select>
-			<textarea bind:value={params} rows="3" placeholder="JSON params"></textarea>
-			<div class="row">
-				<button class="btn-primary" onclick={sendRequest}>Send</button>
-				<button class="btn-sm" onclick={sendPing}>Ping</button>
-				<button class="btn-danger" onclick={closeSession}>Close</button>
-			</div>
+				<div class="field">
+					<div class="label">dApp identity</div>
+					<input bind:value={metaName} placeholder="dApp name" />
+					<input bind:value={metaUrl} placeholder="https://dapp.example" />
+					<input bind:value={metaIcon} placeholder="https://dapp.example/icon.png" />
+				</div>
+			{/if}
 		</div>
+	{:else}
+		<div class="pairing-state">
+			<div>
+				<div class="label">Scan or share this pairing</div>
+				<p>Open the Wallet panel, use the current pairing, and compare the code below.</p>
+			</div>
+			{#if qrDataUrl}<div class="qr-wrap">
+					<img src={qrDataUrl} alt="WalletPair pairing QR code" />
+				</div>{/if}
+			<div class="pairing-code-wrap">
+				<div class="label">Pairing code</div>
+				<div class="pairing-code">{pairingCode}</div>
+			</div>
+			<div class="uri-box">{pairingUri}</div>
+			<button class="btn-small" onclick={copyUri}>{copied ? 'Copied' : 'Copy pairing link'}</button>
+		</div>
+		<button class="btn-danger close" onclick={reset}>Close pairing</button>
 	{/if}
 
-	<MessageLog entries={log} />
+	{#if phase === 'connected'}
+		<div class="connected-banner" aria-live="polite">
+			<span>✓</span> Paired successfully — send a test request below.
+		</div>
+		{#if peerMeta}<div class="peer">
+				Connected to <strong>{peerMeta.name}</strong> · {peerMeta.url}
+			</div>{/if}
+		<div class="request-field">
+			<div>
+				<div class="step">Step 3</div>
+				<div class="label">Send a test request on <code>eip155:1</code></div>
+			</div>
+			<select bind:value={method} onchange={onMethodChange}>
+				<option value="eth_requestAccounts">eth_requestAccounts</option>
+				<option value="eth_accounts">eth_accounts</option>
+				<option value="eth_chainId">eth_chainId</option>
+				<option value="net_version">net_version</option>
+				<option value="personal_sign">personal_sign</option>
+				<option value="eth_sendTransaction">eth_sendTransaction</option>
+				<option value="wallet_switchEthereumChain">wallet_switchEthereumChain</option>
+			</select>
+			<textarea bind:value={paramsText} rows="3" placeholder="JSON params"></textarea>
+			<button class="btn-primary" onclick={sendRequest}>Send request</button>
+		</div>
+
+		{#if requestResults.length > 0}
+			<div class="request-results" aria-live="polite">
+				<div class="label">Request results</div>
+				{#each requestResults as request (request.id)}
+					<div class="request-result">
+						<div class="request-result-header">
+							<strong>{request.method}</strong>
+							<span
+								class:pending={request.state === 'pending'}
+								class:approved={request.state === 'approved'}
+								class:rejected={request.state === 'rejected'}
+								class="request-state"
+							>
+								{request.state === 'pending'
+									? 'Waiting for wallet'
+									: request.state === 'approved'
+										? 'Wallet response'
+										: 'Wallet error'}
+							</span>
+						</div>
+						{#if request.state === 'pending'}
+							<p>The wallet has not approved or rejected this request yet.</p>
+						{:else if request.state === 'approved'}
+							<code>{JSON.stringify(request.result ?? null)}</code>
+						{:else}
+							<p>{request.error?.message ?? 'The wallet rejected this request.'}</p>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
+	{/if}
+
+	{#if log.length > 0}
+		<details class="activity">
+			<summary>Protocol activity <span>{log.length}</span></summary>
+			<MessageLog entries={log} />
+		</details>
+	{/if}
 </div>
 
 <style>
@@ -384,214 +314,255 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-4);
-		overflow: hidden;
 	}
-
 	.panel-header {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
+		gap: var(--space-2);
 	}
-
-	.panel-header h3 {
+	.panel-header {
+		justify-content: space-between;
+		align-items: flex-start;
+	}
+	.step {
+		color: var(--color-accent);
+		font: 600 0.68rem var(--font-mono);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		margin-bottom: 3px;
+	}
+	h3 {
 		font-family: var(--font-mono);
 		font-size: 1rem;
-		font-weight: 600;
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
 	}
-
 	.badge {
-		font-size: 0.65rem;
-		font-weight: 500;
+		color: #a78bfa;
+		border: 1px solid #a78bfa55;
 		border-radius: var(--radius-sm);
+		font-size: 0.65rem;
 		padding: 1px 6px;
 	}
-
-	.badge.evm {
-		color: #a78bfa;
-		background: rgba(167, 139, 250, 0.1);
-		border: 1px solid rgba(167, 139, 250, 0.3);
-	}
-
 	.status {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		font-size: 0.8rem;
 		color: var(--color-text-muted);
-		font-family: var(--font-mono);
+		font: 0.8rem var(--font-mono);
 	}
-
-	.dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--color-text-subtle);
+	.status.connected {
+		color: var(--color-success);
 	}
-	.dot.connected {
-		background: var(--color-success);
-	}
-	.dot.waiting {
-		background: var(--color-warning);
-	}
-	.dot.error {
-		background: var(--color-error);
-	}
-
 	.field {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
 	}
-
-	label {
+	.intro,
+	.pairing-state p,
+	.setting-hint {
+		margin: 0;
+		color: var(--color-text-muted);
+		font-size: 0.86rem;
+		line-height: 1.55;
+	}
+	.setting-hint {
+		font-size: 0.78rem;
+	}
+	.label {
 		font-size: 0.75rem;
 		color: var(--color-text-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
 	}
-
-	.row {
-		display: flex;
-		gap: var(--space-2);
-	}
-
 	input,
 	select,
 	textarea {
+		width: 100%;
 		background: var(--color-bg);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
-		padding: var(--space-2) var(--space-3);
 		color: var(--color-text);
-		font-family: var(--font-mono);
-		font-size: 0.8rem;
-		width: 100%;
+		padding: var(--space-2);
+		font: 0.8rem var(--font-mono);
 	}
-
 	textarea {
 		resize: vertical;
-		min-height: 60px;
 	}
-
-	input:focus,
-	select:focus,
-	textarea:focus {
-		outline: none;
-		border-color: var(--color-accent);
-	}
-
 	button {
+		cursor: pointer;
+		border-radius: var(--radius-sm);
 		padding: var(--space-2) var(--space-3);
 		border: 1px solid var(--color-border);
-		border-radius: var(--radius-sm);
-		background: var(--color-surface-2);
-		color: var(--color-text-muted);
 		font-size: 0.8rem;
-		font-family: var(--font-mono);
 		white-space: nowrap;
-		transition:
-			background 0.15s,
-			border-color 0.15s;
 	}
-
-	button:hover {
-		background: var(--color-border);
+	button:disabled {
+		cursor: not-allowed;
+		opacity: 0.5;
 	}
-
 	.btn-primary {
 		background: var(--color-accent);
+		color: white;
 		border-color: var(--color-accent);
-		color: #fff;
 	}
-	.btn-primary:hover {
-		background: var(--color-accent-hover);
+	.btn-large {
+		width: 100%;
+		padding: var(--space-3) var(--space-4);
+		font-size: 0.9rem;
+		font-weight: 600;
 	}
-
 	.btn-danger {
+		background: transparent;
 		color: var(--color-error);
 		border-color: var(--color-error);
+	}
+	.btn-small,
+	.meta-toggle {
+		align-self: flex-start;
 		background: transparent;
+		color: var(--color-text-muted);
 	}
-	.btn-danger:hover {
-		background: rgba(239, 68, 68, 0.1);
+	.advanced {
+		border-top: 1px solid var(--color-border);
+		padding-top: var(--space-3);
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
 	}
-
-	.btn-sm {
-		font-size: 0.7rem;
-		padding: var(--space-1) var(--space-2);
-	}
-
-	.qr-wrap {
-		text-align: center;
-		padding: var(--space-2) 0;
-	}
-
-	.qr-wrap img {
-		display: inline-block;
+	.pairing-state {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-3);
+		padding: var(--space-4);
+		background: var(--color-bg);
+		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
-		width: 160px;
-		height: 160px;
 	}
-
+	.qr-wrap {
+		align-self: center;
+		padding: var(--space-2);
+		background: #141416;
+		border-radius: var(--radius-md);
+	}
+	.qr-wrap img {
+		display: block;
+		width: 180px;
+		height: 180px;
+	}
 	.uri-box {
-		font-family: var(--font-mono);
-		font-size: 0.7rem;
-		color: var(--color-text-subtle);
-		word-break: break-all;
+		overflow-wrap: anywhere;
 		background: var(--color-bg);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
 		padding: var(--space-2);
-		max-height: 60px;
-		overflow-y: auto;
-	}
-
-	.fingerprint {
-		font-family: var(--font-mono);
-		font-size: 1.5rem;
-		font-weight: 600;
-		text-align: center;
-		color: var(--color-accent);
-		letter-spacing: 0.15em;
-	}
-
-	.meta-toggle {
-		background: none;
-		border: none;
+		font: 0.7rem var(--font-mono);
 		color: var(--color-text-muted);
-		font-family: var(--font-mono);
-		font-size: 0.75rem;
-		padding: 0;
+	}
+	.pairing-code {
+		font: 600 1.6rem var(--font-mono);
+		letter-spacing: 0.18em;
+		color: var(--color-accent);
+	}
+	.pairing-code-wrap {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--space-3);
+	}
+	.close {
+		align-self: flex-start;
+	}
+	.peer {
+		font-size: 0.8rem;
+		color: var(--color-text-muted);
+		padding: var(--space-2);
+		border-left: 2px solid var(--color-accent);
+	}
+	.connected-banner {
+		display: flex;
+		gap: var(--space-2);
+		align-items: center;
+		padding: var(--space-3);
+		border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--color-success) 10%, transparent);
+		color: var(--color-text);
+		font-size: 0.84rem;
+	}
+	.connected-banner span {
+		color: var(--color-success);
+		font-weight: 700;
+	}
+	.request-field {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding-top: var(--space-2);
+		border-top: 1px solid var(--color-border);
+	}
+	.request-results {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+	}
+	.request-result {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding: var(--space-3);
+		background: var(--color-bg);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+	}
+	.request-result-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-3);
+		font: 0.8rem var(--font-mono);
+	}
+	.request-result p {
+		margin: 0;
+		color: var(--color-text-muted);
+		font-size: 0.8rem;
+	}
+	.request-result code {
+		overflow-wrap: anywhere;
+		color: var(--color-text);
+		font-size: 0.78rem;
+	}
+	.request-state {
+		padding: 2px 6px;
+		border-radius: 999px;
+		background: var(--color-surface-2);
+		color: var(--color-text-muted);
+		font-size: 0.67rem;
+		white-space: nowrap;
+	}
+	.request-state.pending {
+		color: #fbbf24;
+	}
+	.request-state.approved {
+		color: var(--color-success);
+	}
+	.request-state.rejected {
+		color: var(--color-error);
+	}
+	.activity {
+		border-top: 1px solid var(--color-border);
+		padding-top: var(--space-3);
+	}
+	.activity summary {
 		cursor: pointer;
-		text-align: left;
+		color: var(--color-text-muted);
+		font: 0.75rem var(--font-mono);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
 	}
-	.meta-toggle:hover {
-		color: var(--color-text);
+	.activity summary span {
+		font-size: 0.65rem;
+		background: var(--color-surface-2);
+		padding: 0 5px;
+		border-radius: 8px;
 	}
-
-	.reconnect-prompt { background: var(--color-surface-2); border: 1px solid var(--color-accent); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
-	.reconnect-text { font-size: 0.85rem; color: var(--color-text); }
-	.btn-ghost { background: transparent; border: 1px solid var(--color-border); color: var(--color-text-muted); }
-	.btn-ghost:hover { border-color: var(--color-text-subtle); color: var(--color-text); }
-
-	.caps-box { background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
-	.caps-row { display: flex; align-items: flex-start; gap: var(--space-2); font-size: 0.8rem; }
-	.caps-icon { flex-shrink: 0; display: flex; align-items: center; color: var(--color-accent); }
-	.caps-label { flex-shrink: 0; min-width: 4.5em; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 600; color: var(--color-text-subtle); text-transform: uppercase; letter-spacing: 0.03em; line-height: 1.8; }
-	.caps-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-	.cap-tag { font-family: var(--font-mono); font-size: 0.7rem; padding: 2px 8px; border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); cursor: pointer; transition: border-color 0.15s, color 0.15s, background 0.15s; white-space: nowrap; }
-	.cap-tag:hover { border-color: var(--color-accent); color: var(--color-text); }
-	.cap-tag.active { border-color: var(--color-accent); background: rgba(59, 130, 246, 0.15); color: var(--color-accent); }
-	.cap-tag.readonly { cursor: default; }
-	.cap-tag.readonly:hover { border-color: var(--color-border); color: var(--color-text-muted); }
-
-	.peer-info { display: flex; flex-direction: column; gap: 2px; padding: var(--space-3); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
-	.peer-label { font-size: 0.65rem; color: var(--color-text-subtle); text-transform: uppercase; letter-spacing: 0.05em; }
-	.peer-name { font-family: var(--font-mono); font-size: 0.85rem; font-weight: 600; color: var(--color-text); }
-	.peer-url { font-family: var(--font-mono); font-size: 0.7rem; color: var(--color-text-muted); }
+	.activity :global(.log-section) {
+		margin-top: var(--space-3);
+	}
 </style>

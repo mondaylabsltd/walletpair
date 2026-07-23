@@ -1,12 +1,4 @@
-/**
- * Background service worker - manages WalletPair session via SDK.
- *
- * Uses WalletPairProvider from walletpair-sdk for method mapping,
- * instead of reimplementing it.
- */
-import { DAppSession, WebSocketTransport } from 'walletpair-sdk';
-import * as WalletPairSDK from 'walletpair-sdk';
-import { WalletPairProvider } from 'walletpair-sdk/evm/eip1193';
+/** Background service worker for the self-contained WalletPair protocol. */
 import { DEFAULT_RELAY_URL } from '@/lib/constants';
 import {
   getSettings,
@@ -20,12 +12,14 @@ import {
   getPermissions,
   saveConnectedAt,
   getConnectedAt,
+  clearConnectionState,
   addActivityEntry,
   updateActivityStatus,
 } from '@/lib/storage';
 import { READ_ONLY_METHODS, proxyRpcCall } from '@/lib/rpc-proxy';
-import { getHandler } from '@/lib/protocols/registry';
-import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request, PendingConfirmationInfo, ActivityEntry } from '@/lib/types';
+import { WALLET_METHODS } from '@/lib/protocols/ethereum/methods';
+import { WalletPairSession, type EthereumEvent } from '@/lib/walletpair/session';
+import type { ExtensionState, ConnectedWallet, BackgroundMessage, EIP1193Request, ActivityEntry, RpcErrorInfo } from '@/lib/types';
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -37,60 +31,46 @@ const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 // ── State ────────────────────────────────────────────────────────────────
 
-let session: DAppSession | null = null;
-let evmProvider: WalletPairProvider | null = null;
-let transport: WebSocketTransport | null = null;
+let session: WalletPairSession | null = null;
 let state: ExtensionState = { phase: 'idle' };
 let connectedWallet: ConnectedWallet | null = null;
+let activeChainId = 1;
 let pairingInProgress = false;
 
-/** RPC URLs received from the wallet via capabilities (CAIP-2 keyed, e.g. "eip155:1") */
-let walletRpcUrls: Record<string, string> = {};
+type RpcResponse = { result?: unknown; error?: RpcErrorInfo };
 
-/** EIP-5792 wallet capabilities keyed by hex chain ID, relayed from wallet */
-let walletEip5792Capabilities: Record<string, Record<string, unknown>> = {};
-
-/** Contract bytecode provided by wallet for counterfactual eth_getCode responses */
-let walletContractBytecode: string | null = null;
+const DAPP_META = Object.freeze({
+  name: 'WalletPair Extension',
+  url: 'https://walletpair.org',
+  icon: 'https://walletpair.org/icon.png',
+});
 
 // Exponential backoff state for reconnection
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+/** Explicit close/expiry disables every in-flight and future reconnect until a
+ * new pairing is started. */
+let reconnectAllowed = true;
 /** Guards against overlapping rebuild-and-reconnect attempts (scheduleReconnect,
  * keepalive-alarm backstop, and SW-startup can all fire near-simultaneously). */
 let reconnecting = false;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 
-/**
- * Pipe the SDK's developer-only disconnect diagnostics into the extension
- * console so disconnect reasons (close code, relay terminate reason, phase,
- * willReconnect) are queryable while debugging. NOT shown to end users.
- *
- * Forward-compatible: `setDisconnectLogSink` ships in a newer walletpair-sdk
- * than is currently installed, so we feature-detect — this is a no-op until the
- * SDK dependency is bumped, then it activates automatically.
- */
-function wireDisconnectDiagnostics() {
-  const sink = (WalletPairSDK as { setDisconnectLogSink?: (fn: (e: unknown) => void) => void })
-    .setDisconnectLogSink;
-  if (typeof sink === 'function') {
-    sink((entry) => console.debug('[WalletPair][disconnect]', entry));
-  }
-}
-
 function scheduleReconnect() {
-  if (reconnectTimer) return; // already scheduled
+  if (!reconnectAllowed || reconnectTimer) return; // stopped or already scheduled
   const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt), RECONNECT_MAX_MS);
   reconnectAttempt++;
   console.warn(`[WalletPair] Scheduling reconnect in ${delay}ms (attempt ${reconnectAttempt})`);
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
+    if (!reconnectAllowed) return;
     const ok = await tryReconnect();
-    if (ok) {
+    if (ok && reconnectAllowed) {
       reconnectAttempt = 0;
       console.log('[WalletPair] Reconnected successfully');
-    } else {
+    } else if (reconnectAllowed && await getSessionState().catch(() => null)) {
       scheduleReconnect();
     }
   }, delay);
@@ -104,12 +84,27 @@ function resetReconnectBackoff() {
   }
 }
 
+function startKeepalive(sessionRef: WalletPairSession) {
+  stopKeepalive();
+  keepaliveTimer = setInterval(() => {
+    if (session === sessionRef && sessionRef.phase === 'connected') {
+      sessionRef.ping(currentCaip2());
+    }
+  }, 20_000);
+}
+
+function stopKeepalive() {
+  if (!keepaliveTimer) return;
+  clearInterval(keepaliveTimer);
+  keepaliveTimer = null;
+}
+
 // Pending RPC requests waiting for pairing to complete
 const deferredRequests: Array<{
   id: string;
   payload: EIP1193Request;
   origin?: string;
-  resolve: (v: { result?: unknown; error?: { code: number; message: string } }) => void;
+  resolve: (v: RpcResponse) => void;
   timer: ReturnType<typeof setTimeout>;
 }> = [];
 
@@ -119,15 +114,11 @@ interface PendingConfirmation {
   method: string;
   params: unknown;
   origin: string;
-  resolve: (v: { result?: unknown; error?: { code: number; message: string } }) => void;
+  resolve: (v: RpcResponse) => void;
   windowId?: number;
   timeoutTimer?: ReturnType<typeof setTimeout>;
 }
 const pendingConfirmations = new Map<string, PendingConfirmation>();
-
-/** Methods that require user confirmation before forwarding to wallet.
- * Sourced from the protocol handler for the connected wallet's protocol. */
-const CONFIRMATION_METHODS = getHandler('ethereum').confirmationMethods;
 
 // Map of connected content script ports
 const contentPorts = new Map<number, chrome.runtime.Port>();
@@ -149,6 +140,13 @@ function senderOrigin(sender: { origin?: string; url?: string } | undefined): st
   } catch {
     return undefined;
   }
+}
+
+async function stateVisibleToSender(sender: { tab?: unknown; origin?: string; url?: string } | undefined): Promise<ExtensionState> {
+  if (!sender?.tab) return state; // Extension UI pages receive the full state.
+  const origin = senderOrigin(sender);
+  if (!origin || !(await isPermitted(origin))) return { phase: 'idle' };
+  return state;
 }
 
 function broadcastEvent(event: string, data: unknown) {
@@ -189,7 +187,7 @@ function rejectAllDeferred(code: number, message: string) {
 function addDeferredRequest(
   id: string,
   payload: EIP1193Request,
-  resolve: (v: { result?: unknown; error?: { code: number; message: string } }) => void,
+  resolve: (v: RpcResponse) => void,
   origin?: string,
 ) {
   const timer = setTimeout(() => {
@@ -208,138 +206,112 @@ function addDeferredRequest(
 // Track listener removers so we can clean up before re-attaching
 let cleanupSessionListeners: (() => void) | null = null;
 
-function attachSessionListeners(autoAccepted: boolean) {
+function attachSessionListeners() {
   if (!session) return;
-
-  // Remove any previously attached listeners to avoid duplicates on reconnect
-  if (cleanupSessionListeners) {
-    cleanupSessionListeners();
-    cleanupSessionListeners = null;
-  }
+  cleanupSessionListeners?.();
 
   const sessionRef = session;
-  const evmRef = evmProvider;
-
-  // Phase handler
   const onPhase = (phase: string) => {
     switch (phase) {
       case 'waiting':
         updateState({ phase: 'pairing', pairingUri: sessionRef.pairingUri });
         break;
-      case 'pending_accept':
-        updateState({ phase: 'pending_accept' });
-        break;
       case 'connected':
-        updateState({ phase: 'connected' });
+        updateState({ phase: 'connected', walletMeta: sessionRef.walletMeta });
         pairingInProgress = false;
         resetReconnectBackoff();
+        startKeepalive(sessionRef);
         saveSessionState(sessionRef.serialize()).catch((e) => console.warn('[WalletPair]', e));
         saveConnectedAt(Date.now()).catch((e) => console.warn('[WalletPair]', e));
-        // Clear any existing keepalive alarm before creating new one (Fix #11)
         chrome.alarms.clear('walletpair-keepalive', () => {
-          chrome.alarms.create('walletpair-keepalive', { periodInMinutes: 0.33 });
+          chrome.alarms.create('walletpair-keepalive', { periodInMinutes: 0.5 });
         });
         flushDeferredRequests();
         break;
       case 'disconnected':
+        stopKeepalive();
         updateState({ phase: 'disconnected' });
         scheduleReconnect();
         break;
       case 'closed':
-        handleSessionClosed();
+        void handleSessionClosed().catch((e) => console.warn('[WalletPair]', e));
         break;
     }
   };
-  sessionRef.on('phase', onPhase);
-
-  const onFingerprint = (code: unknown) => {
-    updateState({ sessionFingerprint: code as string });
-  };
-  sessionRef.on('sessionFingerprint', onFingerprint);
-
-  const onWalletJoined = ({ meta, capabilities }: { meta?: { name?: string; icon?: string }; capabilities?: any }) => {
-    console.log('[WalletPair] walletJoined meta:', JSON.stringify(meta));
+  const onFingerprint = (code: unknown) => updateState({ sessionFingerprint: String(code) });
+  const onWalletJoined = ({ meta }: { meta?: { name?: string; icon?: string } }) => {
     updateState({ walletMeta: meta ? { name: meta.name, icon: meta.icon } : undefined });
-
-    // Capture RPC URLs from wallet capabilities for local read-only proxying
-    if (capabilities?.rpcUrls) {
-      walletRpcUrls = capabilities.rpcUrls;
-      console.log('[WalletPair] Received wallet RPC URLs:', Object.keys(walletRpcUrls).join(', '));
-    }
-
-    // Capture EIP-5792 wallet capabilities for wallet_getCapabilities
-    if (capabilities?.walletCapabilities) {
-      walletEip5792Capabilities = capabilities.walletCapabilities;
-      console.log('[WalletPair] Received wallet capabilities:', Object.keys(walletEip5792Capabilities).join(', '));
-    }
-
-    // Capture contract bytecode for counterfactual eth_getCode
-    if (capabilities?.contractBytecode) {
-      walletContractBytecode = capabilities.contractBytecode;
-      console.log('[WalletPair] Received contract bytecode for counterfactual detection');
-    }
   };
+  const onEthereumEvent = (event: EthereumEvent) => handleEthereumEvent(sessionRef, event);
+
+  sessionRef.on('phase', onPhase);
+  sessionRef.on('sessionFingerprint', onFingerprint);
   sessionRef.on('walletJoined', onWalletJoined);
+  sessionRef.on('ethereumEvent', onEthereumEvent);
 
-  // EVM provider event handlers
-  const onAccountsChanged = (accounts: string[]) => {
-    if (accounts.length > 0) {
-      connectedWallet = {
-        address: accounts[0]!,
-        chainId: connectedWallet?.chainId ?? 1,
-        name: sessionRef.walletMeta?.name,
-        icon: sessionRef.walletMeta?.icon,
-      };
-      saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
-      updateState({ wallet: { ...connectedWallet } });
-    }
-    broadcastEvent('accountsChanged', accounts);
-  };
-
-  const onChainChanged = (hexChainId: string) => {
-    const numericChainId = parseInt(hexChainId, 16);
-    if (connectedWallet) {
-      connectedWallet.chainId = numericChainId;
-      saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
-      updateState({ wallet: { ...connectedWallet } });
-    }
-    broadcastEvent('chainChanged', hexChainId);
-  };
-
-  const onDisconnect = () => {
-    broadcastEvent('disconnect', undefined);
-  };
-
-  const onConnect = (info: { chainId: string }) => {
-    broadcastEvent('connect', info);
-  };
-
-  if (evmRef) {
-    evmRef.on('accountsChanged', onAccountsChanged);
-    evmRef.on('chainChanged', onChainChanged);
-    evmRef.on('disconnect', onDisconnect);
-    evmRef.on('connect', onConnect);
-  }
-
-  // Store cleanup function to remove all listeners before next attach
   cleanupSessionListeners = () => {
     sessionRef.off('phase', onPhase);
     sessionRef.off('sessionFingerprint', onFingerprint);
     sessionRef.off('walletJoined', onWalletJoined);
-    if (evmRef) {
-      evmRef.removeListener('accountsChanged', onAccountsChanged);
-      evmRef.removeListener('chainChanged', onChainChanged);
-      evmRef.removeListener('disconnect', onDisconnect);
-      evmRef.removeListener('connect', onConnect);
-    }
+    sessionRef.off('ethereumEvent', onEthereumEvent);
   };
 }
 
-function handleSessionClosed() {
+function handleEthereumEvent(sessionRef: WalletPairSession, event: EthereumEvent) {
+  if (event.event === 'accountsChanged') {
+    if (!Array.isArray(event.data) || !event.data.every((account) => typeof account === 'string')) return;
+    const accounts = event.data as string[];
+    if (accounts.length > 0) {
+      const chainId = activeChainId;
+      connectedWallet = {
+        address: accounts[0]!,
+        chainId,
+        name: sessionRef.walletMeta?.name,
+        icon: sessionRef.walletMeta?.icon,
+        protocolName: 'ethereum',
+        chainRef: String(chainId),
+      };
+      saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
+      updateState({ wallet: { ...connectedWallet } });
+    } else {
+      connectedWallet = null;
+      saveConnectedWallet(null).catch((e) => console.warn('[WalletPair]', e));
+      updateState({ wallet: undefined });
+    }
+    broadcastEvent('accountsChanged', accounts);
+    return;
+  }
+
+  if (event.event === 'chainChanged') {
+    if (typeof event.data !== 'string' || !/^0x(?:0|[1-9a-f][0-9a-f]*)$/.test(event.data)) return;
+    const numericChainId = Number.parseInt(event.data, 16);
+    if (!Number.isSafeInteger(numericChainId)) return;
+    activeChainId = numericChainId;
+    if (connectedWallet) {
+      connectedWallet = { ...connectedWallet, chainId: numericChainId, chainRef: String(numericChainId) };
+      saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
+      updateState({ wallet: { ...connectedWallet } });
+    }
+    broadcastEvent('chainChanged', event.data);
+    return;
+  }
+
+  if (event.event === 'connect') {
+    const data = event.data as { chainId?: unknown };
+    if (typeof data?.chainId === 'string' && /^0x(?:0|[1-9a-f][0-9a-f]*)$/.test(data.chainId)) {
+      const numericChainId = Number.parseInt(data.chainId, 16);
+      if (Number.isSafeInteger(numericChainId)) activeChainId = numericChainId;
+    }
+  }
+
+  broadcastEvent(event.event, event.data);
+}
+
+async function handleSessionClosed(): Promise<void> {
   pairingInProgress = false;
-  walletRpcUrls = {};
-  walletEip5792Capabilities = {};
-  walletContractBytecode = null;
+  reconnectAllowed = false;
+  resetReconnectBackoff();
+  stopKeepalive();
   // Reject all deferred requests since session is gone
   rejectAllDeferred(4001, 'Session closed');
 
@@ -354,9 +326,8 @@ function handleSessionClosed() {
     walletMeta: undefined,
   });
   connectedWallet = null;
-  saveSessionState(null).catch((e) => console.warn('[WalletPair]', e));
-  saveConnectedWallet(null).catch((e) => console.warn('[WalletPair]', e));
-  saveConnectedAt(null).catch((e) => console.warn('[WalletPair]', e));
+  activeChainId = 1;
+  await clearConnectionState();
   broadcastEvent('disconnect', undefined);
 }
 
@@ -364,28 +335,26 @@ async function createSession(): Promise<void> {
   const settings = await getSettings();
   const relayUrl = settings.relayUrl || DEFAULT_RELAY_URL;
 
-  // Clean up existing
-  if (session) session.destroy();
-
-  transport = new WebSocketTransport(relayUrl);
-  session = new DAppSession({
-    transport,
-    meta: { name: 'WalletPair Extension', description: 'Browser extension for WalletPair', url: 'https://walletpair.org', icon: 'https://walletpair.org/icon.png' },
+  cleanupSessionListeners?.();
+  cleanupSessionListeners = null;
+  session?.destroy();
+  reconnectAllowed = true;
+  pairingInProgress = true;
+  session = new WalletPairSession({
+    relayUrl,
+    meta: DAPP_META,
     requestTimeout: 60_000,
+    persist: saveSessionState,
   });
-
-  // Use SDK's EVM provider for method mapping
-  evmProvider = new WalletPairProvider({ session, chainId: 1 });
-
-  attachSessionListeners(false);
+  attachSessionListeners();
   await session.createPairing();
 }
 
 async function tryReconnect(): Promise<boolean> {
   // Prevent overlapping rebuilds: the keepalive-alarm backstop, scheduleReconnect,
   // and SW-startup can all call this near-simultaneously, which would otherwise
-  // create several competing DAppSession instances.
-  if (reconnecting) return false;
+  // create several competing session instances.
+  if (!reconnectAllowed || reconnecting) return false;
   reconnecting = true;
   try {
     return await doTryReconnect();
@@ -396,38 +365,59 @@ async function tryReconnect(): Promise<boolean> {
 
 async function doTryReconnect(): Promise<boolean> {
   const saved = await getSessionState();
-  if (!saved) return false;
+  if (!saved || !reconnectAllowed) return false;
 
   // Check if session has expired (24-hour limit)
   const connectedAt = await getConnectedAt();
+  if (!reconnectAllowed) return false;
   if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
-    saveSessionState(null).catch((e) => console.warn('[WalletPair]', e));
-    saveConnectedWallet(null).catch((e) => console.warn('[WalletPair]', e));
-    saveConnectedAt(null).catch((e) => console.warn('[WalletPair]', e));
+    cleanupSessionListeners?.();
+    cleanupSessionListeners = null;
+    const expiredSession = session;
+    session = null;
+    if (expiredSession) await expiredSession.closeAndDrain();
+    await handleSessionClosed();
     return false;
   }
 
   try {
     const settings = await getSettings();
-    transport = new WebSocketTransport(settings.relayUrl || DEFAULT_RELAY_URL);
-    session = new DAppSession({
-      transport,
-      meta: { name: 'WalletPair Extension', description: 'Browser extension for WalletPair', url: 'https://walletpair.org', icon: 'https://walletpair.org/icon.png' },
+    if (!reconnectAllowed) return false;
+    cleanupSessionListeners?.();
+    cleanupSessionListeners = null;
+    session?.destroy();
+    const restored = new WalletPairSession({
+      relayUrl: settings.relayUrl || DEFAULT_RELAY_URL,
+      meta: DAPP_META,
       requestTimeout: 60_000,
+      persist: saveSessionState,
     });
-
-    evmProvider = new WalletPairProvider({ session, chainId: 1 });
-    attachSessionListeners(true);
-
-    const ok = session.restore(saved);
-    if (!ok) return false;
-
+    const ok = restored.restore(saved);
+    if (!ok) {
+      reconnectAllowed = false;
+      await clearConnectionState();
+      return false;
+    }
+    if (!reconnectAllowed) {
+      restored.destroy();
+      return false;
+    }
+    session = restored;
+    attachSessionListeners();
+    updateState({
+      phase: restored.walletMeta ? 'disconnected' : 'pairing',
+      pairingUri: restored.pairingUri,
+      sessionFingerprint: restored.pairingCode,
+      walletMeta: restored.walletMeta,
+    });
     await session.reconnect();
+    if (!reconnectAllowed || session !== restored) return false;
 
     // Restore connected wallet from storage and broadcast to all tabs
     const savedWallet = await getConnectedWallet();
     if (savedWallet) {
       connectedWallet = savedWallet;
+      activeChainId = savedWallet.chainId;
       updateState({ wallet: { ...connectedWallet } });
       broadcastEvent('accountsChanged', [connectedWallet.address]);
     }
@@ -447,7 +437,7 @@ function requestUserConfirmation(
   method: string,
   params: unknown,
   origin: string,
-): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
+): Promise<RpcResponse> {
   const buf = new Uint8Array(16);
   crypto.getRandomValues(buf);
   const confirmId = `confirm-${Array.from(buf, b => b.toString(16).padStart(2, '0')).join('')}`;
@@ -492,12 +482,13 @@ function requestUserConfirmation(
 async function forwardToWallet(
   method: string,
   params: unknown[] | Record<string, unknown> | undefined,
-): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
+): Promise<RpcResponse> {
   try {
-    const result = await evmProvider!.request({ method, params });
+    if (!session) throw Object.assign(new Error('WalletPair channel is disconnected'), { code: 4900 });
+    const result = await session.request({ method, params }, currentCaip2());
     return { result };
   } catch (err: any) {
-    return { error: { code: err.code ?? -32603, message: err.message ?? 'Request failed' } };
+    return { error: { code: err.code ?? -32603, message: err.message ?? 'Request failed', data: err.data } };
   }
 }
 
@@ -505,10 +496,49 @@ async function forwardToWallet(
 
 function classifyMethod(method: string): ActivityEntry['category'] {
   if (['eth_requestAccounts', 'wallet_requestPermissions'].includes(method)) return 'auth';
-  if (['personal_sign', 'eth_signTypedData_v4', 'eth_signTypedData_v3'].includes(method)) return 'sign';
-  if (['eth_sendTransaction', 'eth_signTransaction', 'wallet_sendCalls'].includes(method)) return 'tx';
-  if (['eth_chainId', 'net_version', 'web3_clientVersion', 'eth_accounts', 'wallet_getPermissions', 'wallet_getCapabilities'].includes(method)) return 'local';
+  if (['personal_sign', 'eth_signTypedData', 'eth_signTypedData_v1', 'eth_signTypedData_v3', 'eth_signTypedData_v4'].includes(method)) return 'sign';
+  if (['eth_sendTransaction', 'wallet_sendCalls'].includes(method)) return 'tx';
+  if (['eth_chainId', 'net_version', 'eth_accounts', 'wallet_getPermissions'].includes(method)) return 'local';
   return 'read';
+}
+
+function currentCaip2(): string {
+  return `eip155:${activeChainId}`;
+}
+
+function explicitChainMatches(method: string, params: unknown, active: number): boolean {
+  if (method === 'wallet_switchEthereumChain' || method === 'wallet_addEthereumChain' || method === 'wallet_getCapabilities') {
+    return true;
+  }
+  const list = Array.isArray(params) ? params : [];
+  let candidate: unknown;
+  if (['eth_sendTransaction', 'eth_call', 'eth_estimateGas', 'eth_createAccessList'].includes(method)) {
+    candidate = isObject(list[0]) ? list[0].chainId : undefined;
+  } else if (method === 'wallet_sendCalls') {
+    candidate = isObject(list[0]) ? list[0].chainId : undefined;
+  } else if (method.startsWith('eth_signTypedData')) {
+    const raw = list.find((value) => isObject(value) || (typeof value === 'string' && value.startsWith('{')));
+    let typedData = raw;
+    if (typeof raw === 'string') {
+      try { typedData = JSON.parse(raw); } catch { return false; }
+    }
+    candidate = isObject(typedData) && isObject(typedData.domain) ? typedData.domain.chainId : undefined;
+  }
+  if (candidate === undefined) return true;
+  const parsed = parseExplicitChainId(candidate);
+  return parsed !== null && parsed === BigInt(active);
+}
+
+function parseExplicitChainId(value: unknown): bigint | null {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
+  }
+  if (typeof value !== 'string' || !/^(?:0x(?:0|[1-9a-f][0-9a-f]*)|(?:0|[1-9][0-9]*))$/.test(value)) return null;
+  try { return BigInt(value); } catch { return null; }
+}
+
+function isObject(value: unknown): value is Record<string, any> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // ── RPC Request Handling ─────────────────────────────────────────────────
@@ -517,8 +547,14 @@ async function handleRpcRequest(
   id: string,
   payload: EIP1193Request,
   origin?: string,
-): Promise<{ result?: unknown; error?: { code: number; message: string } }> {
-  let { method, params } = payload;
+): Promise<RpcResponse> {
+  const { method, params } = payload;
+  if (typeof method !== 'string' || method.length === 0 || new TextEncoder().encode(method).length > 128) {
+    return { error: { code: -32600, message: 'Invalid EIP-1193 request' } };
+  }
+  if (params !== undefined && !Array.isArray(params) && (typeof params !== 'object' || params === null)) {
+    return { error: { code: -32602, message: 'params must be an array or object' } };
+  }
   const permitted = origin ? await isPermitted(origin) : true;
 
   // Activity logging setup
@@ -542,18 +578,12 @@ async function handleRpcRequest(
     updateState({ signingInProgress: { method, origin: origin || 'unknown' } });
   }
 
-  // Normalize v3 → v4 (v4 is a superset of v3)
-  if (method === 'eth_signTypedData_v3') {
-    method = 'eth_signTypedData_v4';
-  }
-
   // ── Local methods (always answerable) ──────────────────────────────────
   if (method === 'eth_chainId') {
-    const chainId = connectedWallet?.chainId ?? 1;
-    return { result: `0x${chainId.toString(16)}` };
+    return { result: `0x${activeChainId.toString(16)}` };
   }
   if (method === 'net_version') {
-    return { result: String(connectedWallet?.chainId ?? 1) };
+    return { result: String(activeChainId) };
   }
   if (method === 'eth_accounts') {
     // Only return accounts if the origin is permitted
@@ -569,36 +599,17 @@ async function handleRpcRequest(
     return { result: [] };
   }
 
-  // ── wallet_getCapabilities (EIP-5792, local) ──────────────────────────
-  if (method === 'wallet_getCapabilities') {
-    return { result: walletEip5792Capabilities };
-  }
-
-  // ── eth_getCode: smart wallet override for counterfactual addresses ────
-  // If the wallet provided contract bytecode via capabilities and the dApp
-  // queries getCode for the connected address, return the wallet-provided
-  // bytecode when the contract hasn't been deployed yet (counterfactual).
-  if (method === 'eth_getCode' && connectedWallet && walletContractBytecode) {
-    const queryAddress = (params as [string, string])?.[0]?.toLowerCase();
-    if (queryAddress === connectedWallet.address.toLowerCase()) {
-      const chainId = connectedWallet.chainId ?? 1;
-      try {
-        const realCode = await proxyRpcCall(chainId, method, params, walletRpcUrls);
-        if (realCode && realCode !== '0x') {
-          if (shouldLog) updateActivityStatus(activityId, 'success', { result: realCode }).catch(() => {});
-          return { result: realCode };
-        }
-      } catch { /* fall through to wallet-provided bytecode */ }
-      if (shouldLog) updateActivityStatus(activityId, 'success', { result: walletContractBytecode }).catch(() => {});
-      return { result: walletContractBytecode };
-    }
+  if (!explicitChainMatches(method, params, activeChainId)) {
+    const mismatch = { code: -32602, message: 'Explicit chainId does not match the authenticated CAIP-2 context' };
+    if (shouldLog) updateActivityStatus(activityId, 'error', { error: mismatch }).catch(() => {});
+    return { error: mismatch };
   }
 
   // ── Read-only methods → proxy to public RPC ───────────────────────────
   if (READ_ONLY_METHODS.has(method)) {
-    const chainId = connectedWallet?.chainId ?? 1;
+    const chainId = activeChainId;
     try {
-      const result = await proxyRpcCall(chainId, method, params, walletRpcUrls);
+      const result = await proxyRpcCall(chainId, method, params);
       if (shouldLog) updateActivityStatus(activityId, 'success', { result }).catch(() => {});
       return { result };
     } catch (err: any) {
@@ -608,25 +619,23 @@ async function handleRpcRequest(
     }
   }
 
-  // ── Wallet methods: require connected session ─────────────────────────
-
-  // wallet_requestPermissions acts like eth_requestAccounts
-  const effectiveMethod = method === 'wallet_requestPermissions' ? 'eth_requestAccounts' : method;
+  if (!WALLET_METHODS.has(method)) {
+    const unsupported = { code: 4200, message: `${method} is not supported` };
+    if (shouldLog) updateActivityStatus(activityId, 'error', { error: unsupported }).catch(() => {});
+    if (category === 'sign' || category === 'tx') updateState({ signingInProgress: undefined });
+    return { error: unsupported };
+  }
 
   if (!session || session.phase !== 'connected') {
-    if (effectiveMethod === 'eth_requestAccounts') {
-      // If already permitted, skip the popup approval — just start pairing if needed
+    if (method === 'eth_requestAccounts' || method === 'wallet_requestPermissions') {
       if (!pairingInProgress && (!session || session.phase === 'idle' || session.phase === 'closed')) {
         pairingInProgress = true;
         await createSession();
-        // Always open popup so user can see pairing QR / approve wallet
         openPopup();
       }
-      // Defer until connected (with timeout); grant permission on resolve
       return new Promise((resolve) => {
         addDeferredRequest(id, payload, (response) => {
-          // On successful connection, grant the origin permission
-          if (origin && response.result && !response.error) {
+          if (origin && !response.error) {
             grantPermission(origin).catch((e) => console.warn('[WalletPair]', e));
           }
           if (shouldLog) {
@@ -643,54 +652,47 @@ async function handleRpcRequest(
     return { error: notConnectedError };
   }
 
-  // ── wallet_requestPermissions: trigger accounts request ───────────────
-  if (method === 'wallet_requestPermissions') {
-    try {
-      await evmProvider!.request({ method: 'eth_requestAccounts', params: [] });
-      const permResult = [{ parentCapability: 'eth_accounts' }];
-      if (shouldLog) updateActivityStatus(activityId, 'success', { result: permResult }).catch(() => {});
-      return { result: permResult };
-    } catch (err: any) {
-      const error = { code: err.code ?? -32603, message: err.message ?? 'Request failed' };
-      if (shouldLog) updateActivityStatus(activityId, 'error', { error }).catch(() => {});
-      return { error };
-    }
-  }
-
-  // ── Forward wallet methods directly (no double confirmation) ────────────
-  // Signing and transaction confirmation happens in the real wallet, not here.
-  // The extension is a transparent bridge — it only forwards requests.
-  if (!permitted && method !== 'eth_requestAccounts') {
+  if (!permitted && method !== 'eth_requestAccounts' && method !== 'wallet_requestPermissions') {
     const notPermittedError = { code: 4100, message: 'Not permitted. Call eth_requestAccounts first.' };
     if (shouldLog) updateActivityStatus(activityId, 'error', { error: notPermittedError }).catch(() => {});
     if (category === 'sign' || category === 'tx') updateState({ signingInProgress: undefined });
     return { error: notPermittedError };
   }
   try {
-    const result = await evmProvider!.request({ method, params });
+    const result = await session.request({ method, params }, currentCaip2());
 
-    // Update local wallet state after account requests
     if (method === 'eth_requestAccounts') {
+      if (!Array.isArray(result) || !result.every((account) => typeof account === 'string' && /^0x[0-9a-fA-F]{40}$/.test(account))) {
+        throw Object.assign(new Error('Wallet returned invalid eth_requestAccounts data'), { code: -32603 });
+      }
       const accounts = result as string[];
-      if (accounts?.length > 0) {
+      if (accounts.length > 0) {
+        const chainId = activeChainId;
         connectedWallet = {
           address: accounts[0]!,
-          chainId: connectedWallet?.chainId ?? 1,
+          chainId,
           name: session.walletMeta?.name,
           icon: session.walletMeta?.icon,
+          protocolName: 'ethereum',
+          chainRef: String(chainId),
         };
         saveConnectedWallet(connectedWallet).catch((e) => console.warn('[WalletPair]', e));
         updateState({ wallet: { ...connectedWallet } });
-        // Grant permission on successful eth_requestAccounts
         if (origin) grantPermission(origin).catch((e) => console.warn('[WalletPair]', e));
       }
+    }
+    if (method === 'wallet_requestPermissions' && origin) {
+      grantPermission(origin).catch((e) => console.warn('[WalletPair]', e));
     }
 
     if (shouldLog) updateActivityStatus(activityId, 'success', { result }).catch(() => {});
     if (category === 'sign' || category === 'tx') updateState({ signingInProgress: undefined });
     return { result };
   } catch (err: any) {
-    const error = { code: err.code ?? -32603, message: err.message ?? 'Request failed' };
+    const code = err.code
+      ?? (err instanceof RangeError && /64 KiB|exceeds/.test(err.message) ? -32005
+        : err instanceof TypeError ? -32602 : -32603);
+    const error = { code, message: err.message ?? 'Request failed', data: err.data };
     if (shouldLog) {
       const status = err.code === 4001 ? 'rejected' : 'error';
       updateActivityStatus(activityId, status, { error }).catch(() => {});
@@ -763,6 +765,11 @@ export default defineBackground(() => {
             ...response,
           });
         } catch {}
+      } else if (msg.action === 'get-state') {
+        const visibleState = await stateVisibleToSender(port.sender);
+        try {
+          port.postMessage({ action: 'get-state', state: visibleState });
+        } catch {}
       }
     });
 
@@ -776,7 +783,11 @@ export default defineBackground(() => {
     (async () => { try {
       switch (msg.action) {
         case 'get-state':
-          sendResponse(state);
+          if (sender.tab) {
+            sendResponse({ action: 'get-state', state: await stateVisibleToSender(sender) });
+          } else {
+            sendResponse(state);
+          }
           break;
 
         case 'open-panel':
@@ -791,36 +802,22 @@ export default defineBackground(() => {
           sendResponse(state);
           break;
 
-        case 'reject-wallet':
-          session?.rejectWallet();
-          rejectAllDeferred(4001, 'User rejected wallet');
-          sendResponse({ ok: true });
-          break;
-
-        case 'accept-wallet':
-          session?.acceptWallet();
-          sendResponse({ ok: true });
-          break;
-
         case 'disconnect':
           // Fix #7: Full cleanup on disconnect
           if (cleanupSessionListeners) {
             cleanupSessionListeners();
             cleanupSessionListeners = null;
           }
-          resetReconnectBackoff();
           // Reject all pending confirmations
           for (const [cid, pc] of pendingConfirmations) {
             if (pc.timeoutTimer) clearTimeout(pc.timeoutTimer);
             pc.resolve({ error: { code: 4001, message: 'Disconnected' } });
             pendingConfirmations.delete(cid);
           }
-          if (session) {
-            session.close();
-            session = null;
-            evmProvider = null;
-          }
-          handleSessionClosed();
+          const closingSession = session;
+          session = null;
+          if (closingSession) await closingSession.closeAndDrain();
+          await handleSessionClosed();
           sendResponse({ ok: true });
           break;
 
@@ -917,21 +914,24 @@ export default defineBackground(() => {
       // Check 24-hour session expiry
       const connectedAt = await getConnectedAt();
       if (connectedAt && Date.now() - connectedAt > SESSION_MAX_AGE_MS) {
-        session.close();
+        cleanupSessionListeners?.();
+        cleanupSessionListeners = null;
+        const expiredSession = session;
         session = null;
-        evmProvider = null;
-        handleSessionClosed();
+        await expiredSession.closeAndDrain();
+        await handleSessionClosed();
         return;
       }
-      // Keep the relay socket warm (CF Worker idle-closes ~30s).
-      session.ping();
+      // This is a persistent backstop. The in-memory 20s timer normally sends
+      // the encrypted keepalive before Chrome's service-worker idle deadline.
+      session.ping(currentCaip2());
       return;
     }
 
     // Not connected but the alarm exists, so we *had* a live session. The MV3
     // service worker was likely killed while idle — which silently drops the
-    // WebSocket and discards the in-memory setTimeout reconnect timers (both the
-    // extension's and the SDK's). This persistent alarm is the recovery
+    // WebSocket and discards in-memory setTimeout reconnect timers. This
+    // persistent alarm is the recovery
     // backstop: rebuild from the saved snapshot and reconnect. tryReconnect is
     // guarded, so this is a no-op if a reconnect is already in flight.
     const saved = await getSessionState();
@@ -939,9 +939,6 @@ export default defineBackground(() => {
     const ok = await tryReconnect();
     if (ok) console.log('[WalletPair] reconnected via keepalive backstop');
   });
-
-  // Pipe SDK disconnect diagnostics to the console (developer-only).
-  wireDisconnectDiagnostics();
 
   // On SW start, try to restore session
   tryReconnect().then((ok) => {

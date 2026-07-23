@@ -8,14 +8,18 @@ on:
       - main
     paths:
       - 'walletpair-extension/**'
-      - 'walletpair-sdk/**'
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-extension-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -27,23 +31,34 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: |
-            walletpair-sdk/pnpm-lock.yaml
-            walletpair-extension/pnpm-lock.yaml
+          cache-dependency-path: walletpair-extension/pnpm-lock.yaml
 
-      - name: Install & build SDK
-        working-directory: walletpair-sdk
-        run: pnpm install && pnpm build
-
-      - name: Install & build extension
+      - name: Install dependencies
         working-directory: walletpair-extension
-        run: pnpm install && pnpm build
+        run: pnpm install --frozen-lockfile
 
-      - name: Zip extension
+      - name: Verify extension
+        working-directory: walletpair-extension
+        run: pnpm check && pnpm test
+
+      - name: Build Chrome and Firefox extensions
+        working-directory: walletpair-extension
+        run: pnpm build && pnpm build:firefox
+
+      - name: Package extensions
         working-directory: walletpair-extension
         run: |
-          cd .output/chrome-mv3
-          zip -r ../../walletpair-extension-chrome-mv3.zip .
+          (cd .output/chrome-mv3 && zip -r ../../walletpair-extension-chrome-mv3.zip .)
+          (cd .output/firefox-mv2 && zip -r ../../walletpair-extension-firefox.zip .)
+
+      - name: Verify tagged version
+        if: startsWith(github.ref, 'refs/tags/extension-v')
+        working-directory: walletpair-extension
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#extension-v}"
+          package_version="$(node --print "require('./package.json').version")"
+          test "$tag_version" = "$package_version"
 
       - name: Extract version from tag
         if: startsWith(github.ref, 'refs/tags/extension-v')
@@ -78,8 +93,9 @@ jobs:
 
             ## Install
 
-            1. Download `walletpair-extension-chrome-mv3.zip` below
+            1. Download the Chrome or Firefox archive below
             2. Unzip to a local folder
-            3. Open `chrome://extensions` and enable **Developer mode**
-            4. Click **Load unpacked** and select the unzipped folder
-          files: walletpair-extension/walletpair-extension-chrome-mv3.zip
+            3. Load it using the browser's extension development tools
+          files: |
+            walletpair-extension/walletpair-extension-chrome-mv3.zip
+            walletpair-extension/walletpair-extension-firefox.zip

@@ -1,126 +1,51 @@
-<script lang="ts">
-	import CodeBlock from '$lib/components/CodeBlock.svelte';
+<svelte:head><title>EIP-1193 and wagmi — WalletPair</title></svelte:head>
 
-	// Use string concat to prevent Vite from scanning template literals for imports
-	const im = 'import';
-
-	const connectorCode = `${im} { walletPair } from 'walletpair-sdk/evm/wagmi';
-${im} { createConfig, http } from '@wagmi/core';
-${im} { mainnet, sepolia, polygon } from '@wagmi/core/chains';
-
-const config = createConfig({
-  chains: [mainnet, sepolia, polygon],
-  connectors: [
-    walletPair({
-      relayUrl: 'wss://relay.walletpair.org/v1',
-      onPairingUri: (uri) => {
-        // Display QR code
-        showQRCode(uri);
-      },
-      onSessionFingerprint: (fingerprint) => {
-        // Display fingerprint for user verification
-        showFingerprint(fingerprint);
-      },
-    }),
-  ],
-  transports: {
-    [mainnet.id]: http(),
-    [sepolia.id]: http(),
-    [polygon.id]: http(),
-  },
-});`;
-
-	const connectCode = `${im} { connect, disconnect, signMessage, switchChain } from '@wagmi/core';
-
-// Connect (triggers pairing flow)
-const result = await connect(config, {
-  connector: config.connectors[0],
-});
-console.log('Connected:', result.accounts);
-
-// Sign a message
-const signature = await signMessage(config, {
-  message: 'Hello from wagmi!',
-});
-
-// Switch chain
-await switchChain(config, { chainId: 137 });
-
-// Disconnect
-await disconnect(config);`;
-
-	const eventsCode = `${im} { watchAccount, watchChainId } from '@wagmi/core';
-
-watchAccount(config, {
-  onChange: (account) => {
-    console.log('Account changed:', account.address);
-  },
-});
-
-watchChainId(config, {
-  onChange: (chainId) => {
-    console.log('Chain changed:', chainId);
-  },
-});`;
-
-	const eip1193Code = `${im} { WalletPairProvider } from 'walletpair-sdk/evm/eip1193';
-
-// Create an EIP-1193 provider from an existing DAppSession
-const provider = new WalletPairProvider({ session: dAppSession });
-
-// Standard EIP-1193 interface
-const accounts = await provider.request({ method: 'eth_accounts' });
-const signature = await provider.request({
-  method: 'personal_sign',
-  params: ['0x48656c6c6f', accounts[0]],
-});
-
-// Provider events
-provider.on('accountsChanged', (accounts) => { /* ... */ });
-provider.on('chainChanged', (chainId) => { /* ... */ });`;
-</script>
-
-<svelte:head>
-	<title>Wagmi Connector — WalletPair</title>
-</svelte:head>
-
-<h1>Wagmi Connector</h1>
+<h1>EIP-1193 and wagmi</h1>
 
 <p>
-	WalletPair ships a drop-in <a href="https://wagmi.sh" target="_blank" rel="noopener">wagmi</a>
-	connector. If your dApp already uses wagmi, integration is a few lines.
+	WalletPair does not ship a wagmi connector or provider package. Implement the Ethereum protocol
+	first, then expose its dApp-side transport through your own EIP-1193-compatible provider.
 </p>
 
-<h2 id="setup">Setup</h2>
+<h2>Provider contract</h2>
 
-<CodeBlock code={connectorCode} lang="typescript" filename="wagmi.config.ts" />
+<pre><code
+		>{`interface RequestArguments {
+  readonly method: string
+  readonly params?: readonly unknown[] | object
+}
 
-<h2 id="connect">Connect and Use</h2>
-
-<CodeBlock code={connectCode} lang="typescript" />
+provider.request(args): Promise<unknown>
+provider.on(event, listener): Provider
+provider.removeListener(event, listener): Provider`}</code
+	></pre>
 
 <p>
-	When <code>connect()</code> is called, the connector creates a pairing and calls your
-	<code>onPairingUri</code> callback. Display the URI as a QR code. Once the wallet scans and
-	joins, the connection resolves.
+	Successful <code>request()</code> calls resolve to the method result itself. Failures reject with
+	a <code>ProviderRpcError</code> containing the EIP-1193 numeric error code. Implement
+	<code>addListener</code> as an alias of <code>on</code> and <code>once</code> for ecosystem
+	compatibility; legacy <code>send</code> and <code>sendAsync</code> are out of scope.
 </p>
 
-<h2 id="events">Watch for Changes</h2>
+<h2>Adapter responsibilities</h2>
 
-<CodeBlock code={eventsCode} lang="typescript" />
-
-<h2 id="eip1193">EIP-1193 Provider</h2>
+<ul>
+	<li>Turn each provider call into the encrypted request envelope from the Ethereum protocol.</li>
+	<li>
+		Route a response to its outstanding request ID and emit wallet events after local state updates.
+	</li>
+	<li>
+		Preserve the EIP-155 suffix for responses and select the new suffix for <code>chainChanged</code
+		>.
+	</li>
+	<li>Use a separately trusted RPC endpoint only for explicitly allowlisted read-only methods.</li>
+	<li>
+		Expose the provider to wagmi using the normal custom-connector integration points in the wagmi
+		version you use.
+	</li>
+</ul>
 
 <p>
-	If you're not using wagmi, you can use the standalone EIP-1193 provider directly:
-</p>
-
-<CodeBlock code={eip1193Code} lang="typescript" />
-
-<h2 id="rpc-routing">RPC Method Routing</h2>
-
-<p>
-	The provider only sends wallet operations (signing, accounts, chain switching) through WalletPair.
-	Read-only RPC methods (<code>eth_call</code>, <code>eth_getBalance</code>, etc.) are routed to
-	your dApp's own RPC provider — they never touch the wallet.
+	This separation keeps application-framework adapters out of the WalletPair wire protocol and
+	avoids shipping a stale, incompatible SDK abstraction.
 </p>

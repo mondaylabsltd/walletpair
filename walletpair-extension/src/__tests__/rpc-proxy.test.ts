@@ -69,8 +69,8 @@ describe('READ_ONLY_METHODS', () => {
     }
   });
 
-  it('includes eth_sendRawTransaction (pre-signed, no wallet needed)', () => {
-    expect(READ_ONLY_METHODS.has('eth_sendRawTransaction')).toBe(true);
+  it('excludes eth_sendRawTransaction because it submits data to the network', () => {
+    expect(READ_ONLY_METHODS.has('eth_sendRawTransaction')).toBe(false);
   });
 });
 

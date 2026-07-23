@@ -6,6 +6,7 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { READ_ONLY_METHODS, proxyRpcCall, DEFAULT_RPC } from '../lib/rpc-proxy';
+import { CONFIRMATION_METHODS, WALLET_METHODS } from '../lib/protocols/ethereum/methods';
 import {
   grantPermission,
   revokePermission,
@@ -21,7 +22,9 @@ const store: Record<string, unknown> = {};
 const chromeStorageLocal = {
   get: vi.fn(async (key: string) => ({ [key]: store[key] })),
   set: vi.fn(async (items: Record<string, unknown>) => Object.assign(store, items)),
-  remove: vi.fn(async (key: string) => { delete store[key]; }),
+  remove: vi.fn(async (keys: string | string[]) => {
+    for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
+  }),
 };
 
 vi.stubGlobal('chrome', {
@@ -65,13 +68,15 @@ describe('RPC Routing Logic', () => {
   describe('READ_ONLY_METHODS set', () => {
     it('contains all expected read-only methods', () => {
       const expected = [
-        'eth_blockNumber', 'eth_call', 'eth_estimateGas', 'eth_feeHistory',
+        'web3_clientVersion', 'eth_syncing', 'eth_blockNumber',
+        'eth_call', 'eth_estimateGas', 'eth_createAccessList', 'eth_feeHistory',
         'eth_gasPrice', 'eth_maxPriorityFeePerGas',
-        'eth_getBalance', 'eth_getCode', 'eth_getStorageAt', 'eth_getTransactionCount',
-        'eth_getTransactionByHash', 'eth_getTransactionReceipt', 'eth_getLogs',
-        'eth_getBlockByNumber', 'eth_getBlockByHash',
-        'eth_newFilter', 'eth_newBlockFilter', 'eth_getFilterChanges', 'eth_uninstallFilter',
-        'eth_sendRawTransaction', 'eth_syncing',
+        'eth_getBalance', 'eth_getCode', 'eth_getStorageAt', 'eth_getProof',
+        'eth_getTransactionCount', 'eth_getBlockByHash', 'eth_getBlockByNumber',
+        'eth_getBlockTransactionCountByHash', 'eth_getBlockTransactionCountByNumber',
+        'eth_getTransactionByHash', 'eth_getTransactionByBlockHashAndIndex',
+        'eth_getTransactionByBlockNumberAndIndex', 'eth_getTransactionReceipt',
+        'eth_getLogs',
       ];
       expect(READ_ONLY_METHODS.size).toBe(expected.length);
       for (const method of expected) {
@@ -420,7 +425,7 @@ describe('ExtensionState Transitions', () => {
     expect(getState().phase).toBe('idle');
   });
 
-  it('transitions idle -> pairing -> pending_accept -> connected -> idle (full lifecycle)', () => {
+  it('transitions idle -> pairing -> connected -> idle (first joiner is pinned automatically)', () => {
     const { getState, updateState } = createStateMachine();
 
     // Start pairing
@@ -428,15 +433,10 @@ describe('ExtensionState Transitions', () => {
     expect(getState().phase).toBe('pairing');
     expect(getState().pairingUri).toBe('wc:abc123');
 
-    // Wallet wants to connect
-    updateState({ phase: 'pending_accept' });
-    expect(getState().phase).toBe('pending_accept');
-    // pairingUri persists from previous state (shallow merge)
-    expect(getState().pairingUri).toBe('wc:abc123');
-
-    // Connected
+    // The first eligible channel_joined event connects immediately.
     updateState({ phase: 'connected' });
     expect(getState().phase).toBe('connected');
+    expect(getState().pairingUri).toBe('wc:abc123');
 
     // Disconnect (cleanup)
     updateState({
@@ -517,15 +517,15 @@ describe('ExtensionState Transitions', () => {
     const { getState, updateState } = createStateMachine();
 
     updateState({ phase: 'pairing', pairingUri: 'wc:abc' });
-    updateState({ sessionFingerprint: '123456' });
-    expect(getState().sessionFingerprint).toBe('123456');
+    updateState({ sessionFingerprint: '1234' });
+    expect(getState().sessionFingerprint).toBe('1234');
     expect(getState().phase).toBe('pairing');
   });
 
   it('walletMeta is set when wallet joins', () => {
     const { getState, updateState } = createStateMachine();
 
-    updateState({ phase: 'pending_accept' });
+    updateState({ phase: 'connected' });
     updateState({ walletMeta: { name: 'MetaMask', icon: 'https://mm.io/icon.png' } });
     expect(getState().walletMeta).toEqual({ name: 'MetaMask', icon: 'https://mm.io/icon.png' });
   });
@@ -535,30 +535,23 @@ describe('ExtensionState Transitions', () => {
 
 describe('Method Mapping', () => {
   describe('CONFIRMATION_METHODS', () => {
-    /**
-     * Re-declare the set from background.ts since it is module-scoped.
-     */
-    const CONFIRMATION_METHODS = new Set([
-      'eth_sendTransaction',
-      'eth_signTransaction',
-      'personal_sign',
-      'eth_signTypedData_v4',
-      'eth_signTypedData_v3',
-    ]);
-
     it('contains all methods that require user confirmation', () => {
       expect(CONFIRMATION_METHODS.has('eth_sendTransaction')).toBe(true);
-      expect(CONFIRMATION_METHODS.has('eth_signTransaction')).toBe(true);
       expect(CONFIRMATION_METHODS.has('personal_sign')).toBe(true);
+      expect(CONFIRMATION_METHODS.has('eth_signTypedData')).toBe(true);
+      expect(CONFIRMATION_METHODS.has('eth_signTypedData_v1')).toBe(true);
       expect(CONFIRMATION_METHODS.has('eth_signTypedData_v4')).toBe(true);
       expect(CONFIRMATION_METHODS.has('eth_signTypedData_v3')).toBe(true);
+      expect(CONFIRMATION_METHODS.has('wallet_sendCalls')).toBe(true);
+      expect(CONFIRMATION_METHODS.has('wallet_switchEthereumChain')).toBe(true);
+      expect(CONFIRMATION_METHODS.has('wallet_addEthereumChain')).toBe(true);
     });
 
     it('does not include read-only or non-signing methods', () => {
       expect(CONFIRMATION_METHODS.has('eth_call')).toBe(false);
       expect(CONFIRMATION_METHODS.has('eth_requestAccounts')).toBe(false);
       expect(CONFIRMATION_METHODS.has('eth_chainId')).toBe(false);
-      expect(CONFIRMATION_METHODS.has('wallet_switchEthereumChain')).toBe(false);
+      expect(CONFIRMATION_METHODS.has('wallet_getCallsStatus')).toBe(false);
     });
   });
 
@@ -610,26 +603,11 @@ describe('Method Mapping', () => {
     });
   });
 
-  describe('wallet_requestPermissions mapping', () => {
-    it('maps wallet_requestPermissions to eth_requestAccounts', () => {
+  describe('wallet_requestPermissions routing', () => {
+    it('forwards wallet_requestPermissions unchanged to the Wallet', () => {
+      expect(WALLET_METHODS.has('wallet_requestPermissions')).toBe(true);
       const method = 'wallet_requestPermissions';
-      const effectiveMethod = method === 'wallet_requestPermissions' ? 'eth_requestAccounts' : method;
-      expect(effectiveMethod).toBe('eth_requestAccounts');
-    });
-
-    it('does not remap other methods', () => {
-      const methods = ['eth_sendTransaction', 'personal_sign', 'eth_call'];
-      for (const method of methods) {
-        const effectiveMethod = method === 'wallet_requestPermissions' ? 'eth_requestAccounts' : method;
-        expect(effectiveMethod).toBe(method);
-      }
-    });
-
-    it('wallet_requestPermissions returns correct permission shape on success', () => {
-      // From background.ts: after successful eth_requestAccounts, returns:
-      const result = [{ parentCapability: 'eth_accounts' }];
-      expect(result).toHaveLength(1);
-      expect(result[0].parentCapability).toBe('eth_accounts');
+      expect(method).toBe('wallet_requestPermissions');
     });
   });
 

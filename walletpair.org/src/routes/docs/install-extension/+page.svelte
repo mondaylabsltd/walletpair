@@ -29,11 +29,7 @@ pnpm build`;
 		</div>
 		<p>
 			Go to the
-			<a
-				href="https://github.com/atshelchin/walletpair/releases"
-				target="_blank"
-				rel="noopener"
-			>
+			<a href="https://github.com/atshelchin/walletpair/releases" target="_blank" rel="noopener">
 				GitHub Releases
 			</a>
 			page and download the latest <code>walletpair-extension-chrome-mv3.zip</code>.
@@ -62,8 +58,8 @@ pnpm build`;
 			<strong>Load Unpacked</strong>
 		</div>
 		<p>
-			Click <strong>Load unpacked</strong> and select the folder you extracted. The WalletPair
-			extension icon should now appear in your toolbar.
+			Click <strong>Load unpacked</strong> and select the folder you extracted. The WalletPair extension
+			icon should now appear in your toolbar.
 		</p>
 	</li>
 </ol>
@@ -75,23 +71,24 @@ pnpm build`;
 <CodeBlock code={cloneCode} lang="bash" />
 
 <p>
-	After building, the extension will be in <code>.output/chrome-mv3/</code>. Load that folder as
-	an unpacked extension following the same steps above (starting from step 3).
+	After building, the extension will be in <code>.output/chrome-mv3/</code>. Load that folder as an
+	unpacked extension following the same steps above (starting from step 3).
 </p>
 
 <h2 id="update">Updating</h2>
 
 <p>
 	When a new version is released, download or build the latest version, then go to
-	<code>chrome://extensions</code> and click the reload icon on the WalletPair card. Your settings
-	will be preserved.
+	<code>chrome://extensions</code> and click the reload icon on the WalletPair card. Your settings will
+	be preserved.
 </p>
 
 <h2 id="next">Next Steps</h2>
 
 <ul>
 	<li>
-		<a href="/docs/getting-started">Getting Started</a> — set up the SDK and connect your first dApp
+		<a href="/docs/getting-started">Getting Started</a> — implement the protocol and connect your first
+		dApp
 	</li>
 	<li>
 		<a href="/playground">Playground</a> — test the full flow in your browser

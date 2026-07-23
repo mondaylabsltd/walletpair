@@ -5,11 +5,11 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"build": "wrangler types --check && vite build",
+		"build": "vite build && wrangler types --check",
 		"preview": "wrangler dev .svelte-kit/cloudflare/_worker.js --port 4173",
 		"deploy": "pnpm build && wrangler deploy",
 		"prepare": "svelte-kit sync || echo ''",
-		"check": "wrangler types --check && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
@@ -22,10 +22,8 @@
 		"@noble/ciphers": "^1.2.1",
 		"@noble/curves": "^1.8.1",
 		"@noble/hashes": "^1.7.1",
-		"canonicalize": "^2.0.0",
 		"lucide-svelte": "^1.0.1",
-		"qrcode": "^1.5.4",
-		"walletpair-sdk": "^1.1.0"
+		"qrcode": "^1.5.4"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.4",

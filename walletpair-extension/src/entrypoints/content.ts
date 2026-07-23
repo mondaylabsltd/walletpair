@@ -172,9 +172,10 @@ export default defineContentScript({
       }
     }
 
-    // Listen for broadcast messages from background (for events that go to all tabs)
+    // State is requested through the sender-bound port so background can apply
+    // per-origin permission filtering. Only already-filtered events are global.
     chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.action === 'emit-event' || msg.action === 'state-update') {
+      if (msg.action === 'emit-event') {
         handleBackgroundMessage(msg);
       }
     });

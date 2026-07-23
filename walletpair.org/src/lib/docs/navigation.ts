@@ -13,8 +13,8 @@ export const docsNav: NavItem[] = [
 	{ title: 'Wallet Integration', href: '/docs/wallet-integration' },
 	{ title: 'Self-Hosting Relay', href: '/docs/relay' },
 	{ title: 'Security', href: '/docs/security' },
-	{ title: 'Sub-Protocols', href: '', separator: true },
-	{ title: 'Sub-Protocols Overview', href: '/docs/sub-protocols' },
-	{ title: 'EVM Sub-Protocol', href: '/docs/evm-methods' },
-	{ title: 'Wagmi Connector', href: '/docs/wagmi' }
+	{ title: 'Protocol Specifications', href: '', separator: true },
+	{ title: 'Protocol Map', href: '/docs/sub-protocols' },
+	{ title: 'Ethereum Protocol', href: '/docs/evm-methods' },
+	{ title: 'EIP-1193 and wagmi', href: '/docs/wagmi' }
 ];

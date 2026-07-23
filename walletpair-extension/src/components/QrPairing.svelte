@@ -12,7 +12,7 @@
       QRCode.toDataURL(uri, {
         width: 240,
         margin: 2,
-        color: { dark: '#e8e8f0', light: '#00000000' },
+        color: { dark: '#172033', light: '#ffffff' },
         errorCorrectionLevel: 'M',
       }).then((url: string) => {
         qrDataUrl = url;
@@ -112,7 +112,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--shadow-card);
   }
 
   .qr-img {

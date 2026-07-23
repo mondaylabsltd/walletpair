@@ -3,7 +3,6 @@
   import type { ExtensionState } from '@/lib/types';
   import QrPairing from '@/components/QrPairing.svelte';
   import ConnectedView from '@/components/ConnectedView.svelte';
-  import PendingAccept from '@/components/PendingAccept.svelte';
   import SettingsView from '@/components/SettingsView.svelte';
   import { Settings, Info } from 'lucide-svelte';
 
@@ -42,13 +41,6 @@
     extState = { phase: 'idle' };
   }
 
-  async function acceptWallet() {
-    await sendToBackground({ action: 'accept-wallet' });
-  }
-
-  async function rejectWallet() {
-    await sendToBackground({ action: 'reject-wallet' });
-  }
 </script>
 
 <div class="popup">
@@ -96,13 +88,6 @@
       <div class="animate-slide">
         <QrPairing uri={extState.pairingUri ?? ''} fingerprint={extState.sessionFingerprint} onCancel={disconnect} />
       </div>
-    {:else if extState.phase === 'pending_accept'}
-      <PendingAccept
-        code={extState.sessionFingerprint ?? ''}
-        walletName={extState.walletMeta?.name}
-        onAccept={acceptWallet}
-        onReject={rejectWallet}
-      />
     {:else if extState.phase === 'connected'}
       <div class="animate-scale">
         <ConnectedView wallet={extState.wallet} onDisconnect={disconnect} signingInProgress={extState.signingInProgress} />
@@ -131,9 +116,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 16px;
+    padding: 13px 16px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, rgba(37, 99, 235, 0.03) 0%, transparent 100%);
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(12px);
   }
 
   .header-left {
@@ -146,7 +132,7 @@
     width: 22px;
     height: 22px;
     border-radius: 5px;
-    filter: drop-shadow(0 0 6px rgba(37, 99, 235, 0.3));
+    box-shadow: 0 3px 10px rgba(48, 70, 120, 0.16);
   }
 
   .header-title {
@@ -172,7 +158,7 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    padding: 24px 20px;
+    padding: 18px 16px;
   }
 
   .idle-view,
@@ -194,7 +180,7 @@
     transform: translateX(-50%);
     width: 200px;
     height: 200px;
-    background: radial-gradient(circle, rgba(37, 99, 235, 0.08) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(56, 103, 244, 0.13) 0%, transparent 70%);
     pointer-events: none;
   }
 

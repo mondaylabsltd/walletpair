@@ -2,7 +2,7 @@
   "name": "walletpair-extension",
   "description": "WalletPair - Bridge any dApp to your wallet via WalletPair protocol",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -18,9 +18,11 @@
     "postinstall": "wxt prepare"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
     "lucide-svelte": "^1.0.1",
-    "qrcode": "^1.5.4",
-    "walletpair-sdk": "^1.1.0"
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@tsconfig/svelte": "^5.0.8",

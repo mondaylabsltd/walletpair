@@ -1,0 +1,33 @@
+name: walletpair-relay
+
+services:
+  relay:
+    image: ${WALLETPAIR_RELAY_IMAGE:-walletpair-relay:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      WALLETPAIR_RELAY_LISTEN_ADDR: 0.0.0.0:3000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_ALERT_STATE_FILE: /var/lib/walletpair-relay/telegram-alerts.json
+    ports:
+      - "${WALLETPAIR_RELAY_PORT:-3000}:3000"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - relay-state:/var/lib/walletpair-relay
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:3000/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  relay-state:

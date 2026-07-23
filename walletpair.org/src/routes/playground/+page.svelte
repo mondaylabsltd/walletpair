@@ -1,8 +1,6 @@
 <script lang="ts">
 	import PlaygroundDApp from '$lib/playground/PlaygroundDApp.svelte';
 	import PlaygroundWallet from '$lib/playground/PlaygroundWallet.svelte';
-	import ProtocolDApp from '$lib/playground/ProtocolDApp.svelte';
-	import ProtocolWallet from '$lib/playground/ProtocolWallet.svelte';
 	import { playground } from '$lib/playground/state.svelte';
 
 	let width = $state(0);
@@ -19,41 +17,32 @@
 	<div class="playground-header">
 		<h1>Playground</h1>
 		<p>
-			Test the full WalletPair flow in your browser. Connect the dApp panel to the wallet
-			panel, send requests, and see encrypted messages in real time.
+			Pair the two demo panels in three short steps. The EVM requests travel in encrypted WalletPair
+			frames, but you only need to make the choices that matter.
 		</p>
 	</div>
 
-	<!-- Mode switcher -->
-	<div class="mode-switcher">
-		<button
-			class="mode-btn"
-			class:active={playground.mode === 'protocol'}
-			onclick={() => (playground.mode = 'protocol')}
-		>
-			<span class="mode-label">Protocol</span>
-			<span class="mode-desc">Network-agnostic · raw requests & responses</span>
-		</button>
-		<button
-			class="mode-btn"
-			class:active={playground.mode === 'evm'}
-			onclick={() => (playground.mode = 'evm')}
-		>
-			<span class="mode-label">EVM</span>
-			<span class="mode-desc">Ethereum · signing, accounts, transactions</span>
-		</button>
-	</div>
+	<ol class="steps" aria-label="Playground steps">
+		<li>
+			<span>1</span>
+			<div><strong>Create a QR</strong><small>Start in the dApp panel</small></div>
+		</li>
+		<li>
+			<span>2</span>
+			<div><strong>Verify the code</strong><small>Join from the Wallet panel</small></div>
+		</li>
+		<li>
+			<span>3</span>
+			<div>
+				<strong>Try a request</strong><small>Send EIP-1193 over <code>eip155:1</code></small>
+			</div>
+		</li>
+	</ol>
 
-	<!-- Active mode indicator -->
-	<div class="mode-indicator">
-		<span class="mode-dot"></span>
-		{#if playground.mode === 'protocol'}
-			<span>Protocol Mode</span>
-			<span class="mode-hint">Network-agnostic — send any method name, respond with any JSON</span>
-		{:else}
-			<span>EVM Mode</span>
-			<span class="mode-hint">Ethereum — ephemeral EOA wallet with real secp256k1 signing</span>
-		{/if}
+	<div class="protocol-note">
+		<span class="mode-dot"></span><strong>Same-page demo</strong><span
+			>dApp + Wallet run together</span
+		><span>End-to-end encrypted</span><code>eip155:1</code>
 	</div>
 
 	{#if isMobile}
@@ -74,31 +63,17 @@
 				Wallet
 			</button>
 		</div>
-		{#if playground.activeTab === 'dapp'}
-			{#if playground.mode === 'protocol'}
-				<ProtocolDApp />
-			{:else}
-				<PlaygroundDApp />
-			{/if}
-		{:else}
-			{#if playground.mode === 'protocol'}
-				<ProtocolWallet />
-			{:else}
-				<PlaygroundWallet />
-			{/if}
-		{/if}
-	{:else}
-		<!-- Desktop: split view -->
-		<div class="split">
-			{#if playground.mode === 'protocol'}
-				<ProtocolDApp />
-				<ProtocolWallet />
-			{:else}
-				<PlaygroundDApp />
-				<PlaygroundWallet />
-			{/if}
-		</div>
 	{/if}
+
+	<!-- Both roles remain mounted so a mobile tab switch never loses a live pairing. -->
+	<div class="session-panels">
+		<div class="session-panel" hidden={isMobile && playground.activeTab !== 'dapp'}>
+			<PlaygroundDApp />
+		</div>
+		<div class="session-panel" hidden={isMobile && playground.activeTab !== 'wallet'}>
+			<PlaygroundWallet />
+		</div>
+	</div>
 </div>
 
 <style>
@@ -125,95 +100,81 @@
 		max-width: 600px;
 	}
 
-	/* ── Mode Switcher ── */
-	.mode-switcher {
-		display: flex;
-		gap: var(--space-3);
-		margin-bottom: var(--space-6);
+	.steps {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: var(--space-2);
+		padding: 0;
+		margin: 0 0 var(--space-3);
+		list-style: none;
 	}
 
-	.mode-btn {
-		flex: 1;
+	.steps li {
 		display: flex;
-		flex-direction: column;
-		gap: 2px;
+		align-items: center;
+		gap: var(--space-3);
 		padding: var(--space-3) var(--space-4);
 		background: var(--color-surface);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
-		text-align: left;
-		cursor: pointer;
-		transition:
-			border-color 0.15s,
-			background 0.15s;
 	}
 
-	.mode-btn:hover {
-		border-color: var(--color-text-subtle);
-	}
-
-	.mode-btn.active {
-		border-color: var(--color-accent);
+	.steps li > span {
+		display: grid;
+		place-items: center;
+		width: 1.6rem;
+		height: 1.6rem;
+		border-radius: 50%;
 		background: var(--color-surface-2);
+		color: var(--color-accent);
+		font: 600 0.75rem var(--font-mono);
+		flex: 0 0 auto;
 	}
 
-	.mode-label {
-		font-family: var(--font-mono);
-		font-size: 0.9rem;
-		font-weight: 600;
-		color: var(--color-text);
+	.steps strong,
+	.steps small {
+		display: block;
 	}
 
-	.mode-desc {
-		font-size: 0.75rem;
-		color: var(--color-text-subtle);
+	.steps strong {
+		font-size: 0.82rem;
 	}
 
-	/* ── Mode Indicator ── */
-	.mode-indicator {
+	.steps small {
+		margin-top: 2px;
+		color: var(--color-text-muted);
+		font-size: 0.72rem;
+	}
+
+	.protocol-note {
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
-		padding: var(--space-3) var(--space-4);
 		margin-bottom: var(--space-4);
-		background: var(--color-surface);
-		border: 1px solid var(--color-accent);
-		border-radius: var(--radius-md);
-		font-family: var(--font-mono);
-		font-size: 0.85rem;
-		font-weight: 600;
-		color: var(--color-text);
+		color: var(--color-text-muted);
+		font: 0.72rem var(--font-mono);
 	}
 
 	.mode-dot {
 		width: 8px;
 		height: 8px;
 		border-radius: 50%;
-		background: var(--color-accent);
+		background: var(--color-success);
 		flex-shrink: 0;
 	}
 
-	.mode-hint {
-		font-weight: 400;
-		font-size: 0.75rem;
-		color: var(--color-text-muted);
-		margin-left: auto;
-	}
-
 	@media (max-width: 640px) {
-		.mode-indicator {
-			flex-wrap: wrap;
+		.steps {
+			grid-template-columns: 1fr;
 		}
 
-		.mode-hint {
-			width: 100%;
-			margin-left: 0;
-			padding-left: 16px;
+		.steps li {
+			padding: var(--space-2) var(--space-3);
 		}
 	}
 
-	/* ── Split ── */
-	.split {
+	/* ── Session panels ── */
+	.session-panels {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: var(--space-4);
@@ -250,9 +211,9 @@
 		color: var(--color-text);
 	}
 
-	@media (max-width: 480px) {
-		.mode-switcher {
-			flex-direction: column;
+	@media (max-width: 767px) {
+		.session-panels {
+			display: block;
 		}
 	}
 </style>
