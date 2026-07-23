@@ -1,0 +1,101 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - 'extension-v*'
+    branches:
+      - main
+    paths:
+      - 'walletpair-extension/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-extension-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: walletpair-extension/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: walletpair-extension
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify extension
+        working-directory: walletpair-extension
+        run: pnpm check && pnpm test
+
+      - name: Build Chrome and Firefox extensions
+        working-directory: walletpair-extension
+        run: pnpm build && pnpm build:firefox
+
+      - name: Package extensions
+        working-directory: walletpair-extension
+        run: |
+          (cd .output/chrome-mv3 && zip -r ../../walletpair-extension-chrome-mv3.zip .)
+          (cd .output/firefox-mv2 && zip -r ../../walletpair-extension-firefox.zip .)
+
+      - name: Verify tagged version
+        if: startsWith(github.ref, 'refs/tags/extension-v')
+        working-directory: walletpair-extension
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#extension-v}"
+          package_version="$(node --print "require('./package.json').version")"
+          test "$tag_version" = "$package_version"
+
+      - name: Extract version from tag
+        if: startsWith(github.ref, 'refs/tags/extension-v')
+        id: tag_version
+        run: echo "version=${GITHUB_REF#refs/tags/extension-}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate dev version
+        if: "!startsWith(github.ref, 'refs/tags/extension-v')"
+        id: dev_version
+        run: echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Set version
+        id: version
+        run: echo "version=${{ steps.tag_version.outputs.version || steps.dev_version.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - name: Delete existing dev release
+        if: "!startsWith(github.ref, 'refs/tags/extension-v')"
+        run: gh release delete extension-dev --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/extension-v') && github.ref_name || 'extension-dev' }}
+          name: WalletPair Extension ${{ steps.version.outputs.version }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/extension-v') }}
+          body: |
+            ## WalletPair Extension ${{ steps.version.outputs.version }}
+
+            Commit: ${{ github.sha }}
+
+            ## Install
+
+            1. Download the Chrome or Firefox archive below
+            2. Unzip to a local folder
+            3. Load it using the browser's extension development tools
+          files: |
+            walletpair-extension/walletpair-extension-chrome-mv3.zip
+            walletpair-extension/walletpair-extension-firefox.zip
