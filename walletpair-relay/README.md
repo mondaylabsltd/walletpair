@@ -1,10 +1,53 @@
 # WalletPair Relay
 
-An intentionally minimal WebSocket relay for local WalletPair development.
+An intentionally minimal WebSocket relay for WalletPair channels.
+
+## Run from source
 
 ```sh
 cargo run
 ```
+
+The relay listens on `0.0.0.0:3000` by default. Override it with:
+
+```sh
+WALLETPAIR_RELAY_LISTEN_ADDR=127.0.0.1:4000 cargo run
+```
+
+Health check: `GET /healthz` returns `200 OK` while the process can serve HTTP.
+
+## Docker
+
+Build and run directly:
+
+```sh
+docker build -t walletpair-relay:local .
+docker run --rm -p 3000:3000 walletpair-relay:local
+```
+
+Or use Compose:
+
+```sh
+docker compose up --build -d
+docker compose ps
+docker compose down
+```
+
+Set `WALLETPAIR_RELAY_PORT` to change the published host port or
+`WALLETPAIR_RELAY_IMAGE` to run a prebuilt image:
+
+```sh
+WALLETPAIR_RELAY_PORT=4000 docker compose up --build -d
+```
+
+The runtime container uses an unprivileged user, a read-only filesystem, and a
+Docker health check.
+
+Tags matching `relay-v<version>` publish a Linux x86_64 binary to the GitHub
+release and a multi-platform image to
+`ghcr.io/<repository-owner>/walletpair-relay:<version>`.
+
+## WebSocket protocol
 
 Each WebSocket connection must identify its channel and participant. All query values must be percent-encoded:
 

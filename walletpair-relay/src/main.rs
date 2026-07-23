@@ -12,6 +12,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
+    env,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -26,6 +27,8 @@ const CHANNEL_ID_LENGTH: usize = 64;
 const X25519_PUBLIC_KEY_LENGTH: usize = 32;
 const MAX_NAME_BYTES: usize = 128;
 const MAX_URL_BYTES: usize = 2048;
+const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:3000";
+const LISTEN_ADDR_ENV: &str = "WALLETPAIR_RELAY_LISTEN_ADDR";
 
 #[derive(Clone, Default)]
 struct RelayState {
@@ -51,12 +54,13 @@ enum ChannelMessage {
 #[tokio::main]
 async fn main() {
     let app = app();
-    let listener = TcpListener::bind("0.0.0.0:3000")
+    let listen_addr = env::var(LISTEN_ADDR_ENV).unwrap_or_else(|_| DEFAULT_LISTEN_ADDR.to_owned());
+    let listener = TcpListener::bind(&listen_addr)
         .await
         .expect("failed to bind relay listener");
 
     println!(
-        "WalletPair relay listening on ws://127.0.0.1:3000/v1?ch=<channel-id>&name=<name>&url=<url>&icon=<icon>&pubkey=<x25519-public-key>"
+        "WalletPair relay listening on {listen_addr}; WebSocket endpoint: /v1?ch=<channel-id>&name=<name>&url=<url>&icon=<icon>&pubkey=<x25519-public-key>"
     );
     axum::serve(listener, app)
         .await
@@ -65,8 +69,13 @@ async fn main() {
 
 fn app() -> Router {
     Router::new()
+        .route("/healthz", get(health_handler))
         .route("/v1", get(websocket_handler))
         .with_state(RelayState::default())
+}
+
+async fn health_handler() -> StatusCode {
+    StatusCode::OK
 }
 
 async fn websocket_handler(
