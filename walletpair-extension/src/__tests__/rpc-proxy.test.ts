@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { READ_ONLY_METHODS, proxyRpcCall, DEFAULT_RPC } from '../lib/rpc-proxy';
-import { isSafeRpcUrl } from '../lib/protocols/ethereum/rpc-proxy';
+import { isSafeRpcUrl, __resetRpcProxyCaches } from '../lib/protocols/ethereum/rpc-proxy';
 
 // ── Mock chrome.storage.local (needed by getSettings) ──────────────────
 
@@ -117,18 +117,37 @@ describe('isSafeRpcUrl (SSRF guard for untrusted RPC URLs)', () => {
 describe('proxyRpcCall', () => {
   beforeEach(() => {
     for (const key of Object.keys(store)) delete store[key];
+    __resetRpcProxyCaches();
     vi.clearAllMocks();
   });
 
-  it('sends a correct JSON-RPC POST request', async () => {
-    mockFetch.mockResolvedValueOnce(
-      mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x10' }),
-    );
+  /**
+   * Mock the eth_chainId verification probe the proxy issues before any read
+   * (ethereum.md requires confirming the endpoint's chain matches the selection).
+   */
+  function mockChainIdProbe(chainId: number) {
+    return mockJsonResponse({ jsonrpc: '2.0', id: 1, result: `0x${chainId.toString(16)}` });
+  }
+
+  /** The actual read fetch (the one whose body method is not the eth_chainId probe). */
+  function rpcCall() {
+    return mockFetch.mock.calls.find((c: any) => {
+      try { return JSON.parse(c[1].body).method !== 'eth_chainId'; } catch { return false; }
+    });
+  }
+
+  it('verifies the endpoint chain, then sends a correct JSON-RPC POST request', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(1))
+      .mockResolvedValueOnce(mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x10' }));
 
     const result = await proxyRpcCall(1, 'eth_blockNumber', []);
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const [url, options] = mockFetch.mock.calls[0];
+    // First fetch is the eth_chainId verification probe; second is the read.
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).method).toBe('eth_chainId');
+
+    const [url, options] = rpcCall()!;
     expect(url).toBe('https://eth.llamarpc.com');
     expect(options.method).toBe('POST');
     expect(options.headers['Content-Type']).toBe('application/json');
@@ -144,47 +163,62 @@ describe('proxyRpcCall', () => {
   it('uses user-configured RPC URL over default', async () => {
     store['settings'] = { rpcUrls: { 1: 'https://custom-rpc.example.com' } };
 
-    mockFetch.mockResolvedValueOnce(
-      mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x5' }),
-    );
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(1))
+      .mockResolvedValueOnce(mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x5' }));
 
     await proxyRpcCall(1, 'eth_blockNumber', []);
 
-    const [url] = mockFetch.mock.calls[0];
-    expect(url).toBe('https://custom-rpc.example.com');
+    expect(rpcCall()![0]).toBe('https://custom-rpc.example.com');
   });
 
   it('falls back to DEFAULT_RPC when settings have no URL for chain', async () => {
     store['settings'] = { rpcUrls: {} };
 
-    mockFetch.mockResolvedValueOnce(
-      mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x1' }),
-    );
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(137))
+      .mockResolvedValueOnce(mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x1' }));
 
     await proxyRpcCall(137, 'eth_blockNumber', []);
 
-    const [url] = mockFetch.mock.calls[0];
-    expect(url).toBe(DEFAULT_RPC[137]);
+    expect(rpcCall()![0]).toBe(DEFAULT_RPC[137]);
   });
 
-  it('throws with code -32601 when no RPC URL for chain', async () => {
+  it('rejects an endpoint whose eth_chainId does not match the selected chain', async () => {
+    // Endpoint answers eth_chainId with 0x89 (137) for a chain-12345 request; no
+    // DEFAULT_RPC for 12345 and discovery finds nothing → 4901, read never sent.
+    store['settings'] = { rpcUrls: { 12345: 'https://wrong-chain.example.com' } };
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(137))
+      .mockResolvedValue(mockJsonResponse({}, { ok: false, status: 404 }));
+
+    try {
+      await proxyRpcCall(12345, 'eth_blockNumber', []);
+      expect.fail('should have thrown');
+    } catch (err: any) {
+      expect(err.code).toBe(4901);
+    }
+    expect(rpcCall()).toBeUndefined();
+  });
+
+  it('throws with code 4901 when no endpoint can serve the chain', async () => {
     store['settings'] = { rpcUrls: {} };
+    mockFetch.mockResolvedValue(mockJsonResponse({}, { ok: false, status: 404 }));
 
     try {
       await proxyRpcCall(99999, 'eth_blockNumber', []);
       expect.fail('should have thrown');
     } catch (err: any) {
-      expect(err.message).toContain('No RPC URL configured for chain 99999');
-      expect(err.code).toBe(-32601);
+      expect(err.message).toContain('No usable RPC endpoint for chain 99999');
+      expect(err.code).toBe(4901);
     }
   });
 
   it('throws with code -32603 on HTTP error', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 502,
-      statusText: 'Bad Gateway',
-    });
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(1)) // verification passes
+      .mockResolvedValueOnce({ ok: false, status: 502, statusText: 'Bad Gateway' }) // read 502 (transient)
+      .mockResolvedValue(mockJsonResponse({}, { ok: false, status: 404 })); // discovery → null
 
     try {
       await proxyRpcCall(1, 'eth_blockNumber', []);
@@ -196,13 +230,13 @@ describe('proxyRpcCall', () => {
   });
 
   it('throws with RPC error code when JSON-RPC response contains error', async () => {
-    mockFetch.mockResolvedValueOnce(
-      mockJsonResponse({
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(1))
+      .mockResolvedValueOnce(mockJsonResponse({
         jsonrpc: '2.0',
         id: 1,
         error: { code: -32000, message: 'execution reverted' },
-      }),
-    );
+      }));
 
     try {
       await proxyRpcCall(1, 'eth_call', [{ to: '0x0', data: '0x' }, 'latest']);
@@ -214,49 +248,49 @@ describe('proxyRpcCall', () => {
   });
 
   it('passes params through to the RPC body', async () => {
-    mockFetch.mockResolvedValueOnce(
-      mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x0' }),
-    );
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(1))
+      .mockResolvedValueOnce(mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x0' }));
 
     const params = [{ to: '0xdead', data: '0x1234' }, 'latest'];
     await proxyRpcCall(1, 'eth_call', params);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.params).toEqual(params);
+    expect(JSON.parse(rpcCall()![1].body).params).toEqual(params);
   });
 
   it('defaults params to empty array when null/undefined', async () => {
-    mockFetch.mockResolvedValueOnce(
-      mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x5' }),
-    );
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(1))
+      .mockResolvedValueOnce(mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x5' }));
 
     await proxyRpcCall(1, 'eth_blockNumber', null);
 
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.params).toEqual([]);
+    expect(JSON.parse(rpcCall()![1].body).params).toEqual([]);
   });
 
   it('includes AbortSignal for timeout', async () => {
-    mockFetch.mockResolvedValueOnce(
-      mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x1' }),
-    );
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(1))
+      .mockResolvedValueOnce(mockJsonResponse({ jsonrpc: '2.0', id: 1, result: '0x1' }));
 
     await proxyRpcCall(1, 'eth_blockNumber', []);
 
-    const [, options] = mockFetch.mock.calls[0];
+    const [, options] = rpcCall()!;
     expect(options.signal).toBeDefined();
     expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 
   it('throws on oversized response', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      headers: {
-        get: (key: string) => key.toLowerCase() === 'content-length' ? '10000000' : null,
-      },
-      text: async () => 'x'.repeat(10000000),
-    });
+    mockFetch
+      .mockResolvedValueOnce(mockChainIdProbe(1))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (key: string) => key.toLowerCase() === 'content-length' ? '10000000' : null,
+        },
+        text: async () => 'x'.repeat(10000000),
+      });
 
     try {
       await proxyRpcCall(1, 'eth_blockNumber', []);
