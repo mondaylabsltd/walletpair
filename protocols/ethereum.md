@@ -1,5 +1,11 @@
 # Ethereum Protocol
 
+## Conventions
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
+"SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be
+interpreted as described in [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt).
+
 ## Scope
 
 This protocol exposes an EIP-1193 Provider for EVM chains over an encrypted
@@ -113,7 +119,11 @@ recovered; otherwise it is discarded.
 
 Requests flow from DApp to Wallet, responses and events from Wallet to DApp. An
 implementation MAY answer account, chain, permission, or read-only methods
-locally; externally visible results and errors MUST remain identical.
+locally; externally visible results and errors MUST remain identical. A locally
+answered method MUST return exactly what the Wallet would have returned — in
+particular, a locally answered `wallet_getPermissions` or `eth_accounts` MUST
+reflect the permissions the Wallet has actually granted, not a value assumed by
+the DApp side.
 
 The response MUST reuse the request's CAIP-2 suffix. For ordinary RPC and
 signing methods, the suffix selects the request's chain context and any explicit
@@ -220,12 +230,18 @@ eth_getLogs
 
 Read calls without an explicit chain target use the active chain. They MAY be
 answered by a trusted RPC endpoint instead of crossing the WalletPair channel.
-The implementation MUST ensure that endpoint's `eth_chainId` matches the
-selected chain. An implementation MAY add other read methods through an
+Before an endpoint answers any read call, the implementation MUST confirm that a
+live `eth_chainId` query to that endpoint returns the selected chain; this probe
+result MAY be cached per endpoint and chain for a bounded interval. An endpoint
+whose reported `eth_chainId` differs from the selected chain, or that fails the
+probe, MUST NOT be used. A liveness check that discards the returned chain does
+not satisfy this requirement. An implementation MAY add other read methods through an
 explicit allowlist. It MUST NOT infer safety from an `eth_` prefix or blindly
 forward unknown methods.
 
-`eth_sendRawTransaction` is not read-only. Filter creation, subscriptions,
+`eth_sendRawTransaction` is not read-only: in the base protocol it is unsupported
+and returns `4200`, and it MUST NOT be answered from the read-only RPC path or
+signed on the DApp's behalf. Filter creation, subscriptions,
 debug, trace, admin, mining, and transaction-pool methods are outside the base
 protocol. `eth_subscribe` and `eth_unsubscribe` MAY be implemented as an
 extension when the selected RPC transport supports subscriptions.
@@ -286,8 +302,12 @@ error codes SHOULD be preserved when they accurately describe the failure. An
 unsupported or unknown method MUST return `4200`; it MUST NOT be forwarded
 speculatively.
 
-If a valid response would exceed the encryption protocol's 64 KiB plaintext
-limit, the responder returns `-32005` (`Limit exceeded`) instead.
+`-32005` (`Limit exceeded`) is reserved for exactly one condition: a valid
+response whose plaintext would exceed the encryption protocol's 64 KiB limit. The
+responder returns `-32005` instead of the oversized response. A read that cannot
+be serviced because no endpoint for the selected chain is available returns
+`4901`, or `4900` when no chain is serviceable; such a failure MUST NOT be
+reported as `-32601`, which is not a WalletPair error code.
 
 ## Security requirements
 

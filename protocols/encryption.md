@@ -1,5 +1,11 @@
 # Encryption Protocol
 
+## Conventions
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
+"SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be
+interpreted as described in [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt).
+
 ## Security goal
 
 Each channel has exactly two cryptographic peers:
@@ -19,7 +25,7 @@ The DApp displays this URI as a QR code:
 walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-percent-encoded>&name=<dapp-name>&url=<dapp-url>&icon=<icon-url>
 ```
 
-All six query keys MUST occur exactly once. `ch` and `pubkey` use their canonical encodings above. The UTF-8 values of `relay`, `name`, `url`, and `icon` MUST be RFC 3986 percent-encoded when serialized and decoded exactly once when parsed. Duplicate required keys, malformed percent encoding, or invalid UTF-8 MUST be rejected. Fingerprint inputs are the decoded strings exactly as received; implementations MUST NOT apply URL canonicalization or Unicode normalization before hashing.
+All six query keys MUST occur exactly once, and no other key may appear. A parser MUST reject a query that omits a required key, repeats one, or carries any additional key. `ch` and `pubkey` use their canonical encodings above. The UTF-8 values of `relay`, `name`, `url`, and `icon` MUST use the canonical RFC 3986 percent-encoding: every byte outside the unreserved set (`A`–`Z`, `a`–`z`, `0`–`9`, `-`, `.`, `_`, `~`) is percent-encoded, percent-encodings use uppercase hexadecimal digits, and no unreserved byte is percent-encoded. The query is not `application/x-www-form-urlencoded`: a literal `+` is encoded as `%2B` and MUST NOT be decoded to a space. A parser decodes each value exactly once and MUST reject a value that is not in this canonical form, contains malformed percent encoding, or is invalid UTF-8. Fingerprint inputs are the decoded strings exactly as received; implementations MUST NOT apply URL canonicalization or Unicode normalization before hashing.
 
 The DApp MUST use the same `ch`, `name`, `url`, `icon`, and `pubkey` values in this URI and in its relay connection. Those five values MUST satisfy the [relay connection validation](./relay.md#connection). The decoded `relay` MUST be an absolute `ws:` or `wss:` URL for the relay WebSocket endpoint.
 
@@ -101,7 +107,8 @@ The encryption layer accepts only the JSON data model and encodes it as MessageP
 
 - JSON `null`, booleans, strings, arrays, and objects map to the corresponding MessagePack types.
 - Object keys MUST be unique UTF-8 strings. Map ordering has no meaning.
-- Integers MUST be within `[-(2^53-1), 2^53-1]` and use the shortest MessagePack integer encoding.
+- Integers MUST be within `[-(2^53-1), 2^53-1]` and use the shortest MessagePack integer encoding; a decoder MUST reject a non-shortest integer.
+- Shortest-form is required only for integers. String, array, and map length prefixes SHOULD be minimal, but a decoder MUST accept any valid length prefix, including a non-minimal one: the AEAD tag authenticates the exact transmitted bytes and the plaintext is never re-encoded, so length-prefix width carries no security or interop meaning.
 - Other numbers MUST be finite and use MessagePack float64. `NaN` and infinities are forbidden.
 - MessagePack binary, extension/timestamp values, non-string map keys, invalid UTF-8, and trailing bytes are forbidden.
 - Encoded plaintext MUST NOT exceed 64 KiB and nesting depth MUST NOT exceed 64.
@@ -112,7 +119,7 @@ The exact MessagePack bytes are opaque to the relay and are not part of key deri
 
 A uses `dapp_to_wallet_key`; B uses `wallet_to_dapp_key`. Each direction owns an independent send counter.
 
-Every application frame carries a canonical [CAIP-2](https://standards.chainagnostic.org/CAIPs/caip-2) chain ID. It is an ASCII `namespace:reference` string of at most 41 bytes, such as `eip155:1`. The CAIP-2 value is public routing metadata, but it is authenticated by AEAD.
+Every application frame carries a canonical [CAIP-2](https://standards.chainagnostic.org/CAIPs/caip-2) chain ID. It is an ASCII `namespace:reference` string of at most 41 bytes, such as `eip155:1`, where `namespace` matches `[-a-z0-9]{3,8}` and `reference` matches `[-_a-zA-Z0-9]{1,32}`. For the `eip155` namespace the reference is the decimal chain ID with no leading zeros (`eip155:1`, never `eip155:01`). A receiver MUST reject a suffix that is not in this canonical form. The CAIP-2 value is public routing metadata, but it is authenticated by AEAD.
 
 ```text
 seq_bytes = uint32_be(send_sequence)
@@ -156,6 +163,8 @@ Frames from later joiners cannot verify under the pinned receive-direction key a
 Each send counter starts at `0` and increases once per sealed message. Each receive counter starts at `-1`; gaps are valid, while replayed and out-of-order values are rejected. Counters are per direction and traffic key, not per CAIP-2 chain: all chain suffixes in one channel share the same directional counter.
 
 Before encrypting, the sender MUST atomically reserve and persist the next counter value. Counters persist across reconnects and MUST NOT reset while traffic keys are reused. If counter state cannot be recovered safely, the channel MUST be abandoned and paired again with fresh keys. Valid send values are `0` through `2^31-1`; before using `2^31`, the peer closes the channel and requires fresh pairing.
+
+At most one sender may be active per traffic key at any time. Contexts that share persisted counter state — for example, multiple browser tabs or app instances restored from the same snapshot — MUST coordinate so that each counter value is used at most once, or abandon the session. Two senders that reserve the same counter value reuse a nonce and destroy the confidentiality of both directions.
 
 ## Security properties and limits
 
