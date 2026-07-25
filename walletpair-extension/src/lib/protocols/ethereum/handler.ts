@@ -27,6 +27,9 @@ export const ethereumHandler: ProtocolHandler = {
         return state.chainRef || '1';
       case 'eth_accounts':
         return state.isConnected ? [...state.accounts] : [];
+      case 'wallet_getPermissions':
+        // EIP-2255: expose the eth_accounts capability only once authorized.
+        return state.isConnected ? [{ parentCapability: 'eth_accounts' }] : [];
       default:
         throw new Error(`Not a local method: ${method}`);
     }

@@ -49,6 +49,15 @@ describe('formatValue', () => {
     // 10 ETH = 0x8AC7230489E80000
     expect(formatValue('0x8AC7230489E80000')).toBe('10.000000 ETH');
   });
+
+  it('labels the value with the chain native symbol, not always ETH', () => {
+    expect(formatValue('0x0', '56')).toBe('0 BNB'); // BSC
+    expect(formatValue('0x0', '137')).toBe('0 POL'); // Polygon
+    expect(formatValue('0x0', '43114')).toBe('0 AVAX'); // Avalanche
+    expect(formatValue('0x0', '100')).toBe('0 xDAI'); // Gnosis
+    expect(formatValue('0xDE0B6B3A7640000', '56')).toBe('1.000000 BNB');
+    expect(formatValue('0xDE0B6B3A7640000', '8453')).toBe('1.000000 ETH'); // Base is ETH-native
+  });
 });
 
 // ── shortenAddr ─────────────────────────────────────────────────────

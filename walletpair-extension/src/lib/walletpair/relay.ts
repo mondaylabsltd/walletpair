@@ -122,3 +122,26 @@ export function parseChannelJoined(value: unknown): ChannelJoined | null {
     return null;
   }
 }
+
+export interface ChannelLeft {
+  type: 'channel_left';
+  ch: string;
+  pubkey: string;
+}
+
+export function parseChannelLeft(value: unknown): ChannelLeft | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.type !== 'channel_left') return null;
+  const keys = Object.keys(record).sort();
+  const expected = ['ch', 'pubkey', 'type'];
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) return null;
+  if (typeof record.ch !== 'string' || typeof record.pubkey !== 'string') return null;
+  try {
+    validateChannelId(record.ch);
+    validatePublicKey(record.pubkey);
+  } catch {
+    return null;
+  }
+  return { type: 'channel_left', ch: record.ch, pubkey: record.pubkey };
+}

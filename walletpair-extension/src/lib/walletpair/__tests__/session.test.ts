@@ -35,6 +35,47 @@ async function drain(): Promise<void> {
 }
 
 describe('WalletPairSession', () => {
+  it('rejects pending and emits walletLeft when the pinned wallet leaves', async () => {
+    let socket!: FakeWebSocket;
+    const session = new WalletPairSession({
+      relayUrl: 'ws://127.0.0.1:3000/v1',
+      meta: { name: 'DApp', url: 'https://dapp.example', icon: 'https://dapp.example/icon.png' },
+      persist: async () => {},
+      webSocketFactory: (url) => (socket = new FakeWebSocket(url)) as unknown as WebSocket,
+      requestTimeout: 10_000,
+    });
+    await session.createPairing();
+    const own = Object.fromEntries(new URL(socket.url).searchParams);
+    socket.receive(JSON.stringify({ type: 'channel_joined', ...own }));
+    const wallet = generateX25519KeyPair();
+    socket.receive(JSON.stringify({
+      type: 'channel_joined', ch: own.ch!, name: 'W',
+      url: 'https://w.example', icon: 'https://w.example/i.png',
+      pubkey: wallet.publicKeyBase64Url,
+    }));
+    await drain();
+    expect(session.phase).toBe('connected');
+
+    let left: any;
+    session.on('walletLeft', (info) => { left = info; });
+    const pending = session.request({ method: 'eth_chainId' }, 'eip155:1');
+    const rejection = expect(pending).rejects.toMatchObject({ code: 4900 });
+
+    socket.receive(JSON.stringify({ type: 'channel_left', ch: own.ch!, pubkey: wallet.publicKeyBase64Url }));
+    await drain();
+    await rejection;
+    expect(left).toMatchObject({ pubkey: wallet.publicKeyBase64Url });
+
+    // A channel_left for a different pubkey does not fire walletLeft.
+    let stray = false;
+    session.on('walletLeft', () => { stray = true; });
+    socket.receive(JSON.stringify({
+      type: 'channel_left', ch: own.ch!, pubkey: generateX25519KeyPair().publicKeyBase64Url,
+    }));
+    await drain();
+    expect(stray).toBe(false);
+  });
+
   it('pins the first joiner automatically and exchanges encrypted Ethereum messages', async () => {
     let socket!: FakeWebSocket;
     let latestSnapshot = '';
