@@ -15,7 +15,7 @@ Each channel has exactly two cryptographic peers:
 
 Subject to the pairing assumptions below, the protocol authenticates the DApp to the Wallet. The DApp does not authenticate the Wallet: it pins the first `channel_joined` participant whose public key differs from its own. Later participants may remain connected to the relay, but both peers ignore their events and any ciphertext that does not verify with the pinned directional key. A participant that joins first can therefore deny service, but cannot impersonate the DApp to the Wallet or decrypt Wallet messages.
 
-Each peer generates a fresh ephemeral X25519 key pair for every channel. Public keys use canonical unpadded base64url and decode to exactly 32 bytes. `channel_id_bytes` is the 32-byte value decoded from the 64-character lowercase hexadecimal `ch`.
+Each peer generates a fresh ephemeral X25519 key pair for every channel. Public keys use canonical unpadded base64url and decode to exactly 32 bytes. `channel_id_bytes` is the 32-byte value decoded from the 64-character lowercase hexadecimal `ch`. The DApp MUST generate `channel_id_bytes` with a cryptographically secure random number generator; its 256 bits of entropy make the channel ID unguessable, so an attacker cannot pre-join the channel to win the first-joiner race.
 
 ## DApp pairing
 
@@ -27,7 +27,7 @@ walletpair:?ch=<channel-id>&pubkey=<dapp-pubkey-base64url>&relay=<relay-url-perc
 
 All six query keys MUST occur exactly once, and no other key may appear. A parser MUST reject a query that omits a required key, repeats one, or carries any additional key. `ch` and `pubkey` use their canonical encodings above. The UTF-8 values of `relay`, `name`, `url`, and `icon` MUST use the canonical RFC 3986 percent-encoding: every byte outside the unreserved set (`A`–`Z`, `a`–`z`, `0`–`9`, `-`, `.`, `_`, `~`) is percent-encoded, percent-encodings use uppercase hexadecimal digits, and no unreserved byte is percent-encoded. The query is not `application/x-www-form-urlencoded`: a literal `+` is encoded as `%2B` and MUST NOT be decoded to a space. A parser decodes each value exactly once and MUST reject a value that is not in this canonical form, contains malformed percent encoding, or is invalid UTF-8. Fingerprint inputs are the decoded strings exactly as received; implementations MUST NOT apply URL canonicalization or Unicode normalization before hashing.
 
-The DApp MUST use the same `ch`, `name`, `url`, `icon`, and `pubkey` values in this URI and in its relay connection. Those five values MUST satisfy the [relay connection validation](./relay.md#connection). The decoded `relay` MUST be an absolute `ws:` or `wss:` URL for the relay WebSocket endpoint.
+The DApp MUST use the same `ch`, `name`, `url`, `icon`, and `pubkey` values in this URI and in its relay connection. Those five values MUST satisfy the [relay connection validation](./relay.md#connection). The decoded `relay` MUST be an absolute `ws:` or `wss:` URL and is the complete WebSocket endpoint URL including its path (for example `wss://relay.example/v1`). A client MUST connect to exactly this URL with the five query parameters appended; it MUST NOT append to or rewrite the path. The `relay` value MUST NOT itself carry a query string or fragment.
 
 The Wallet obtains the DApp channel, metadata, relay URL, and public key by scanning the QR code. The DApp obtains the Wallet metadata and public key from the first eligible `channel_joined` event. The relay URL selects transport but is intentionally not one of the five fingerprint fields.
 
@@ -38,6 +38,8 @@ lp(s) = uint16_be(byte_length(utf8(s))) || utf8(s)
 ```
 
 An implementation MUST reject any `lp()` input longer than 65,535 UTF-8 bytes.
+
+Notation: `uint16_be(n)` and `uint32_be(n)` are the 2- and 4-byte big-endian encodings of a non-negative integer `n`; `byte_length(x)` is the length in bytes of byte string `x`; and `x[i:j]` is the byte slice of `x` from index `i` (inclusive) to `j` (exclusive). In the `pairing_code` line below, `uint32_be(dapp_fingerprint[0:4])` denotes the inverse reading — the unsigned integer value of the first four fingerprint bytes interpreted big-endian — and `zero_pad_4(n)` is the base-10 representation of `n` left-padded with `0` to exactly four digits.
 
 Both sides independently compute the DApp pairing code from the decoded URI values:
 
@@ -60,7 +62,7 @@ If an attacker must commit replacement pairing data before learning the genuine 
 
 Subject to no four-digit collision, the comparison authenticates the five scanned fingerprint fields to the currently trusted DApp page. It does not authenticate `relay`, an already compromised page, or an untrusted standalone URI. Changing only `relay` can redirect or deny transport, but cannot produce ciphertext valid under the pinned DApp key.
 
-No explicit `dapp_confirm` message is required, and the Wallet may send after entering `paired`. For an honest Wallet, the first valid A→B ciphertext provides implicit confirmation that its peer derived the same shared secret from the pinned DApp key.
+No explicit `dapp_confirm` message is required, and the Wallet may send after entering `paired`. Symmetrically, the Wallet MUST NOT derive or use traffic keys to decrypt, deliver, or act on any DApp→Wallet application frame before it has entered the `paired` state; a frame that arrives earlier MUST be discarded or buffered unprocessed, so a pre-pairing frame can never auto-answer (for example `eth_accounts`) or execute. For an honest Wallet, the first valid A→B ciphertext provides implicit confirmation that its peer derived the same shared secret from the pinned DApp key.
 
 ## Key schedule
 
@@ -109,7 +111,7 @@ The encryption layer accepts only the JSON data model and encodes it as MessageP
 - Object keys MUST be unique UTF-8 strings. Map ordering has no meaning.
 - Integers MUST be within `[-(2^53-1), 2^53-1]` and use the shortest MessagePack integer encoding; a decoder MUST reject a non-shortest integer.
 - Shortest-form is required only for integers. String, array, and map length prefixes SHOULD be minimal, but a decoder MUST accept any valid length prefix, including a non-minimal one: the AEAD tag authenticates the exact transmitted bytes and the plaintext is never re-encoded, so length-prefix width carries no security or interop meaning.
-- Other numbers MUST be finite and use MessagePack float64. `NaN` and infinities are forbidden.
+- A number whose value is integral MUST use the shortest integer encoding above — JSON does not distinguish `1` from `1.0`, so a `float64` (`0xcb`) whose decoded value is integral (for example `2.0`) MUST be rejected. Non-integral numbers MUST be finite and use MessagePack `float64`. `NaN` and infinities are forbidden.
 - MessagePack binary, extension/timestamp values, non-string map keys, invalid UTF-8, and trailing bytes are forbidden.
 - Encoded plaintext MUST NOT exceed 64 KiB and nesting depth MUST NOT exceed 64.
 
@@ -150,7 +152,7 @@ ChaCha20-Poly1305 uses a 32-byte key, 12-byte nonce, and full 16-byte tag. Tags 
 
 1. Split `frame` at its single `@`; reject a missing/duplicate separator or a non-canonical CAIP-2 suffix.
 2. Reject a non-canonical base64url `sealed` value or decoded value outside 20–65,556 bytes.
-3. Split the first 4 decoded bytes as `seq_bytes`; reject a sequence number that is not strictly greater than the last accepted value.
+3. Split the first 4 decoded bytes as `seq_bytes`; reject a sequence number that is `2^31` or greater, or that is not strictly greater than the last accepted value.
 4. Rebuild `nonce` and `aad`, including the received CAIP-2 suffix, then authenticate and decrypt with the receive-direction key.
 5. Reject an AEAD failure without changing receive state.
 6. Decode the plaintext with the JSON-only MessagePack profile; reject malformed, oversized, excessively nested, or trailing data.
@@ -164,7 +166,9 @@ Each send counter starts at `0` and increases once per sealed message. Each rece
 
 Before encrypting, the sender MUST atomically reserve and persist the next counter value. Counters persist across reconnects and MUST NOT reset while traffic keys are reused. If counter state cannot be recovered safely, the channel MUST be abandoned and paired again with fresh keys. Valid send values are `0` through `2^31-1`; before using `2^31`, the peer closes the channel and requires fresh pairing.
 
-At most one sender may be active per traffic key at any time. Contexts that share persisted counter state — for example, multiple browser tabs or app instances restored from the same snapshot — MUST coordinate so that each counter value is used at most once, or abandon the session. Two senders that reserve the same counter value reuse a nonce and destroy the confidentiality of both directions.
+At most one sender may be active per traffic key at any time. Contexts that share persisted counter state — for example, multiple browser tabs or app instances restored from the same snapshot — MUST coordinate so that each counter value is used at most once, or abandon the session. Two senders that reserve the same counter value reuse a nonce on the same traffic key, which destroys the confidentiality of that direction and leaks that direction's Poly1305 authentication subkey (enabling forgery in that direction); the opposite direction uses an independent key and is unaffected.
+
+The binding invariant is only that no counter value is ever reused. An implementation MAY reduce persistence cost by reserving a high-water-mark — persisting `reserved = next + N` once, then emitting values below `reserved` from memory — provided no value is emitted before the mark covering it is durable and no value is ever reused.
 
 ## Security properties and limits
 
@@ -172,12 +176,13 @@ At most one sender may be active per traffic key at any time. Contexts that shar
 - The Wallet accepts only messages authenticated with the direction key derived from the DApp public key pinned by QR pairing.
 - The DApp deliberately provides no Wallet identity guarantee; a malicious first joiner may become its peer or cause denial of service.
 - The relay and extra participants can drop, delay, replay, reorder, or inject frames. AEAD and sequence checks detect forgery and replay but cannot prevent denial of service.
+- The scanned fingerprint fields (`name`, `url`, `icon`, `pubkey`) are self-asserted labels bound only to the QR the currently trusted DApp page displays, not to that page's real web origin, and each channel is a one-time ephemeral key pair with no cross-session cryptographic identity. A downstream protocol MUST NOT treat `url` as a verified cross-session identity for authorization; see the [Ethereum protocol](./ethereum.md#security-requirements).
 
 ## Formal verification
 
 The [ProVerif model](../formal-verification/encryption.pv) represents an active attacker controlling the relay and permits an attacker to become the DApp's first joiner. With ideal X25519, HKDF, hashing, MessagePack, and AEAD primitives, ProVerif 2.05 proves:
 
-- a successful, collision-free Wallet comparison binds all five fingerprint fields to an honest DApp display;
+- under the model's idealization of the four-digit human comparison as authentic and collision-free, a successful Wallet comparison corresponds to an honest DApp display of the same five fingerprint fields (those fields reach the model over an authenticated channel; the human checks only the four derived digits);
 - every modeled A→B message and its public CAIP-2 suffix accepted by the Wallet has injective correspondence with a DApp send; and
 - Wallet data sent immediately after pairing remains secret without `dapp_confirm`.
 
