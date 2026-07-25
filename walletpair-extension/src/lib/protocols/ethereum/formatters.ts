@@ -16,11 +16,25 @@ export function formatMethodName(m: string): string {
   }
 }
 
-/** Format a wei hex value as a human-readable ETH amount. */
-export function formatDisplayValue(wei: string | undefined, _chainRef?: string): string {
-  if (!wei || wei === '0x0' || wei === '0x') return '0 ETH';
+/** Native-currency symbol for an EVM chain (covers the built-in chains; ETH otherwise). */
+export function getNativeSymbol(chainRef: string | undefined): string {
+  switch (parseInt(chainRef ?? '1', 10)) {
+    case 56: return 'BNB';        // BSC
+    case 137: return 'POL';       // Polygon
+    case 100: return 'xDAI';      // Gnosis
+    case 43114: return 'AVAX';    // Avalanche
+    case 250: return 'FTM';       // Fantom
+    // Ethereum mainnet and ETH-native L2s (Optimism, Base, Arbitrum, Linea, Scroll, Zora, zkSync).
+    default: return 'ETH';
+  }
+}
+
+/** Format a wei hex value as a human-readable native-currency amount. */
+export function formatDisplayValue(wei: string | undefined, chainRef?: string): string {
+  const symbol = getNativeSymbol(chainRef);
+  if (!wei || wei === '0x0' || wei === '0x') return `0 ${symbol}`;
   const val = parseInt(wei, 16) / 1e18;
-  return `${val.toFixed(6)} ETH`;
+  return `${val.toFixed(6)} ${symbol}`;
 }
 
 /** Get the human-readable chain name for an EVM chain ID. */

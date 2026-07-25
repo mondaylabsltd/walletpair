@@ -35,12 +35,27 @@ const TELEGRAM_BOT_TOKEN_ENV: &str = "TELEGRAM_BOT_TOKEN";
 const TELEGRAM_CHAT_ID_ENV: &str = "TELEGRAM_CHAT_ID";
 const TELEGRAM_ALERT_STATE_FILE_ENV: &str = "TELEGRAM_ALERT_STATE_FILE";
 const TELEGRAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Server keepalive: a ping is sent this often so a silently dropped peer is
+/// detected (the send fails) and a `channel_left` is produced.
+const PING_INTERVAL: Duration = Duration::from_secs(30);
+/// Reject a WebSocket message larger than this. A valid sealed application frame
+/// is at most 65,556 base64url bytes plus the `@<caip-2>` suffix, so this leaves
+/// ample margin (relay.md Limits).
+const MAX_FRAME_BYTES: usize = 72 * 1024;
 
 #[derive(Clone, Default)]
 struct RelayState {
-    channels: Arc<Mutex<HashMap<String, broadcast::Sender<ChannelMessage>>>>,
+    channels: Arc<Mutex<HashMap<String, ChannelState>>>,
     next_connection_id: Arc<AtomicU64>,
     notifier: Option<TelegramNotifier>,
+}
+
+/// Per-channel relay state: the broadcast fan-out plus the current roster, so a
+/// late-connecting peer can be told about members who joined before it.
+struct ChannelState {
+    sender: broadcast::Sender<ChannelMessage>,
+    /// connection id -> that member's `channel_joined` text.
+    members: HashMap<u64, String>,
 }
 
 #[derive(Clone)]
@@ -61,6 +76,7 @@ enum AlertKind {
 }
 
 #[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConnectionParams {
     ch: String,
     name: String,
@@ -71,7 +87,8 @@ struct ConnectionParams {
 
 #[derive(Clone)]
 enum ChannelMessage {
-    Joined(Message),
+    Joined { sender_id: u64, message: Message },
+    Left { message: Message },
     Relay { sender_id: u64, message: Message },
 }
 
@@ -132,14 +149,50 @@ async fn websocket_handler(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    Ok(ws.on_upgrade(move |socket| relay_socket(socket, state, connection)))
+    Ok(ws
+        .max_message_size(MAX_FRAME_BYTES)
+        .on_upgrade(move |socket| relay_socket(socket, state, connection)))
 }
 
 async fn relay_socket(mut socket: WebSocket, state: RelayState, connection: ConnectionParams) {
-    let sender = state.channel_sender(&connection.ch).await;
-    let mut receiver = sender.subscribe();
     let connection_id = state.next_connection_id.fetch_add(1, Ordering::Relaxed);
-    let _ = sender.send(ChannelMessage::Joined(channel_joined_event(&connection)));
+    let own_join_text = channel_joined_event_text(&connection);
+
+    // Subscribe and register (atomically capturing the existing roster) before
+    // announcing ourselves, so no concurrent join is missed.
+    let (sender, mut receiver, roster) = state
+        .join_channel(&connection.ch, connection_id, own_join_text.clone())
+        .await;
+
+    // The joining connection MUST receive its own `channel_joined` first, then
+    // the roster of members already present, before any other channel event.
+    if socket
+        .send(Message::Text(own_join_text.clone().into()))
+        .await
+        .is_err()
+    {
+        state
+            .leave_channel(&connection.ch, connection_id, &connection.pubkey, &sender)
+            .await;
+        return;
+    }
+    for member_join in roster {
+        if socket.send(Message::Text(member_join.into())).await.is_err() {
+            state
+                .leave_channel(&connection.ch, connection_id, &connection.pubkey, &sender)
+                .await;
+            return;
+        }
+    }
+
+    // Announce ourselves to the rest of the channel.
+    let _ = sender.send(ChannelMessage::Joined {
+        sender_id: connection_id,
+        message: Message::Text(own_join_text.into()),
+    });
+
+    let mut ping_interval = tokio::time::interval(PING_INTERVAL);
+    ping_interval.tick().await; // consume the immediate first tick
 
     loop {
         tokio::select! {
@@ -168,7 +221,12 @@ async fn relay_socket(mut socket: WebSocket, state: RelayState, connection: Conn
             }
             outgoing = receiver.recv() => {
                 match outgoing {
-                    Ok(ChannelMessage::Joined(message)) => {
+                    Ok(ChannelMessage::Joined { sender_id, message }) => {
+                        if sender_id != connection_id && socket.send(message).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(ChannelMessage::Left { message }) => {
                         if socket.send(message).await.is_err() {
                             break;
                         }
@@ -192,29 +250,64 @@ async fn relay_socket(mut socket: WebSocket, state: RelayState, connection: Conn
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
+            _ = ping_interval.tick() => {
+                if socket.send(Message::Ping(Vec::<u8>::new().into())).await.is_err() {
+                    break;
+                }
+            }
         }
     }
 
     drop(receiver);
-    state.remove_channel_if_unused(&connection.ch).await;
+    state
+        .leave_channel(&connection.ch, connection_id, &connection.pubkey, &sender)
+        .await;
 }
 
 impl RelayState {
-    async fn channel_sender(&self, channel_id: &str) -> broadcast::Sender<ChannelMessage> {
+    /// Subscribe to a channel and register this connection, returning the sender,
+    /// a receiver, and the `channel_joined` texts of members already present.
+    async fn join_channel(
+        &self,
+        channel_id: &str,
+        connection_id: u64,
+        own_join: String,
+    ) -> (
+        broadcast::Sender<ChannelMessage>,
+        broadcast::Receiver<ChannelMessage>,
+        Vec<String>,
+    ) {
         let mut channels = self.channels.lock().await;
-        channels
+        let channel = channels
             .entry(channel_id.to_owned())
-            .or_insert_with(|| broadcast::channel(CHANNEL_CAPACITY).0)
-            .clone()
+            .or_insert_with(|| ChannelState {
+                sender: broadcast::channel(CHANNEL_CAPACITY).0,
+                members: HashMap::new(),
+            });
+        let receiver = channel.sender.subscribe();
+        let roster: Vec<String> = channel.members.values().cloned().collect();
+        channel.members.insert(connection_id, own_join);
+        (channel.sender.clone(), receiver, roster)
     }
 
-    async fn remove_channel_if_unused(&self, channel_id: &str) {
+    /// Announce this connection's departure with a `channel_left` event, remove
+    /// it from the roster, and drop the channel once it is empty.
+    async fn leave_channel(
+        &self,
+        channel_id: &str,
+        connection_id: u64,
+        pubkey: &str,
+        sender: &broadcast::Sender<ChannelMessage>,
+    ) {
+        let _ = sender.send(ChannelMessage::Left {
+            message: Message::Text(channel_left_event_text(channel_id, pubkey).into()),
+        });
         let mut channels = self.channels.lock().await;
-        if channels
-            .get(channel_id)
-            .is_some_and(|sender| sender.receiver_count() == 0)
-        {
-            channels.remove(channel_id);
+        if let Some(channel) = channels.get_mut(channel_id) {
+            channel.members.remove(&connection_id);
+            if channel.members.is_empty() {
+                channels.remove(channel_id);
+            }
         }
     }
 
@@ -393,7 +486,26 @@ fn is_valid_channel_id(channel_id: &str) -> bool {
 }
 
 fn is_valid_name(name: &str) -> bool {
-    is_non_empty_within(name, MAX_NAME_BYTES) && !name.chars().any(char::is_control)
+    is_non_empty_within(name, MAX_NAME_BYTES)
+        && !name
+            .chars()
+            .any(|c| c.is_control() || is_disallowed_format_char(c))
+}
+
+/// Unicode Cf format characters that could spoof the displayed name — bidi
+/// controls, zero-width characters, the BOM, and related invisibles. This covers
+/// the security-relevant subset of category Cf named in the relay spec.
+fn is_disallowed_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
 }
 
 fn is_valid_url(value: &str, allow_http: bool) -> bool {
@@ -425,10 +537,6 @@ fn is_non_empty_within(value: &str, max_bytes: usize) -> bool {
     !value.is_empty() && value.len() <= max_bytes
 }
 
-fn channel_joined_event(connection: &ConnectionParams) -> Message {
-    Message::Text(channel_joined_event_text(connection).into())
-}
-
 fn channel_joined_event_text(connection: &ConnectionParams) -> String {
     serde_json::json!({
         "type": "channel_joined",
@@ -437,6 +545,15 @@ fn channel_joined_event_text(connection: &ConnectionParams) -> String {
         "url": connection.url,
         "icon": connection.icon,
         "pubkey": connection.pubkey,
+    })
+    .to_string()
+}
+
+fn channel_left_event_text(channel_id: &str, pubkey: &str) -> String {
+    serde_json::json!({
+        "type": "channel_left",
+        "ch": channel_id,
+        "pubkey": pubkey,
     })
     .to_string()
 }
@@ -468,6 +585,10 @@ mod tests {
         let mut overlong_name = valid.clone();
         overlong_name.name = "n".repeat(MAX_NAME_BYTES + 1);
         assert!(!overlong_name.is_valid());
+
+        let mut format_char_name = valid.clone();
+        format_char_name.name = "good\u{202E}evil".to_owned();
+        assert!(!format_char_name.is_valid());
 
         let mut invalid_url = valid.clone();
         invalid_url.url = "not-a-url".to_owned();
@@ -505,6 +626,11 @@ mod tests {
         assert_eq!(
             next_text(&mut same_channel_peer).await,
             channel_joined_event_text(&peer_connection)
+        );
+        // The late joiner also receives a roster of members already present.
+        assert_eq!(
+            next_text(&mut same_channel_peer).await,
+            channel_joined_event_text(&sender_connection)
         );
 
         let (mut other_channel_peer, _) = connect_async(connection_url(address, &other_connection))
@@ -548,6 +674,47 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn rejects_connections_with_unexpected_query_parameters() {
+        let address = start_test_server().await;
+        let base = connection(CHANNEL_A, "Extra Param dApp");
+        let mut url = Url::parse(&format!("ws://{address}/v1")).unwrap();
+        url.query_pairs_mut()
+            .append_pair("ch", &base.ch)
+            .append_pair("name", &base.name)
+            .append_pair("url", &base.url)
+            .append_pair("icon", &base.icon)
+            .append_pair("pubkey", &base.pubkey)
+            .append_pair("extra", "1");
+        assert!(connect_async(url.to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn broadcasts_channel_left_when_a_peer_disconnects() {
+        let address = start_test_server().await;
+        let first = connection(CHANNEL_A, "First");
+        let second = connection(CHANNEL_A, "Second");
+
+        let (mut a, _) = connect_async(connection_url(address, &first)).await.unwrap();
+        assert_eq!(next_text(&mut a).await, channel_joined_event_text(&first));
+
+        let (mut b, _) = connect_async(connection_url(address, &second))
+            .await
+            .unwrap();
+        // `a` learns `b`; `b` receives its own join, then `a` via the roster.
+        assert_eq!(next_text(&mut a).await, channel_joined_event_text(&second));
+        assert_eq!(next_text(&mut b).await, channel_joined_event_text(&second));
+        assert_eq!(next_text(&mut b).await, channel_joined_event_text(&first));
+
+        // Dropping `a` produces a `channel_left` naming `a`'s pubkey.
+        drop(a);
+        let left: serde_json::Value =
+            serde_json::from_str(&next_text(&mut b).await).unwrap();
+        assert_eq!(left["type"], "channel_left");
+        assert_eq!(left["ch"], CHANNEL_A);
+        assert_eq!(left["pubkey"], PUBKEY);
     }
 
     #[tokio::test]

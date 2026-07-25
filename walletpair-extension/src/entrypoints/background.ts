@@ -114,6 +114,8 @@ interface PendingConfirmation {
   method: string;
   params: unknown;
   origin: string;
+  /** Active chain (decimal string) so the confirm UI shows the correct native symbol. */
+  chainRef: string;
   resolve: (v: RpcResponse) => void;
   windowId?: number;
   timeoutTimer?: ReturnType<typeof setTimeout>;
@@ -243,16 +245,26 @@ function attachSessionListeners() {
     updateState({ walletMeta: meta ? { name: meta.name, icon: meta.icon } : undefined });
   };
   const onEthereumEvent = (event: EthereumEvent) => handleEthereumEvent(sessionRef, event);
+  const onWalletLeft = () => {
+    // The pinned Wallet left the channel: surface an EIP-1193 disconnect and
+    // clear the connected-wallet state. The relay socket stays up for re-pairing.
+    connectedWallet = null;
+    saveConnectedWallet(null).catch((e) => console.warn('[WalletPair]', e));
+    updateState({ wallet: undefined });
+    broadcastEvent('disconnect', { code: 4900, message: 'Wallet disconnected' });
+  };
 
   sessionRef.on('phase', onPhase);
   sessionRef.on('sessionFingerprint', onFingerprint);
   sessionRef.on('walletJoined', onWalletJoined);
+  sessionRef.on('walletLeft', onWalletLeft);
   sessionRef.on('ethereumEvent', onEthereumEvent);
 
   cleanupSessionListeners = () => {
     sessionRef.off('phase', onPhase);
     sessionRef.off('sessionFingerprint', onFingerprint);
     sessionRef.off('walletJoined', onWalletJoined);
+    sessionRef.off('walletLeft', onWalletLeft);
     sessionRef.off('ethereumEvent', onEthereumEvent);
   };
 }
@@ -455,7 +467,7 @@ function requestUserConfirmation(
       }
     }, CONFIRM_TIMEOUT_MS);
 
-    pendingConfirmations.set(confirmId, { id: confirmId, method, params, origin, resolve, timeoutTimer });
+    pendingConfirmations.set(confirmId, { id: confirmId, method, params, origin, chainRef: String(activeChainId), resolve, timeoutTimer });
 
     chrome.windows.create({
       url: chrome.runtime.getURL(`/confirm.html?id=${confirmId}`),
@@ -851,7 +863,7 @@ export default defineBackground(() => {
         case 'get-confirmation': {
           const pending = pendingConfirmations.get(msg.id);
           if (pending) {
-            sendResponse({ method: pending.method, params: pending.params, origin: pending.origin });
+            sendResponse({ method: pending.method, params: pending.params, origin: pending.origin, chainRef: pending.chainRef });
           } else {
             sendResponse(null);
           }

@@ -12,6 +12,7 @@
   let method = $state('');
   let origin = $state('');
   let params = $state<any>(null);
+  let chainRef = $state('1');
   let confirmId = $state('');
   let loading = $state(true);
 
@@ -25,6 +26,7 @@
           method = data.method ?? '';
           origin = data.origin ?? '';
           params = data.params ?? null;
+          chainRef = data.chainRef ?? '1';
         }
         loading = false;
       });
@@ -79,7 +81,7 @@
           {#if params?.value && params.value !== '0x0' && params.value !== '0x'}
             <div class="detail-row">
               <span class="label">Value</span>
-              <span class="value accent">{formatValue(params.value)}</span>
+              <span class="value accent">{formatValue(params.value, chainRef)}</span>
             </div>
           {/if}
           {#if params?.data && params.data !== '0x'}

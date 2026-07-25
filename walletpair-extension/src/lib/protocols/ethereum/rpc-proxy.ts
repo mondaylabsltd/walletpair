@@ -43,6 +43,16 @@ const fallbackCache = new Map<number, { url: string; ts: number }>();
 const FALLBACK_CACHE_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * In-memory cache keyed by `${chainId}|${url}`: whether the endpoint's live
+ * `eth_chainId` was confirmed to equal the selected chain. Bounds the extra
+ * probe required by the spec to one round-trip per endpoint per TTL.
+ */
+const chainVerifyCache = new Map<string, { ok: boolean; ts: number }>();
+
+/** Chain-verification cache TTL: 10 minutes */
+const CHAIN_VERIFY_TTL_MS = 10 * 60 * 1000;
+
+/**
  * An error thrown by `rpcFetch`. `transient` marks failures where the endpoint
  * itself was unreachable (network/timeout/5xx/429) and a different endpoint
  * might succeed. Absent/false means the endpoint answered — a JSON-RPC error,
@@ -51,6 +61,8 @@ const FALLBACK_CACHE_TTL_MS = 10 * 60 * 1000;
 interface RpcError extends Error {
   code: number;
   transient?: boolean;
+  /** Set when the endpoint answered but served the wrong chain (unusable, not a transport failure). */
+  mismatch?: boolean;
 }
 
 /** True when the error means "try another endpoint", false when it is a real answer. */
@@ -90,11 +102,15 @@ export async function evmProxyRpcCall(
   let primaryError: RpcError | undefined;
   if (rpcUrl) {
     try {
-      return await rpcFetch(rpcUrl, method, params);
+      return await verifiedRpcFetch(rpcUrl, chainId, method, params);
     } catch (err) {
       if (!isTransient(err)) throw err;
-      primaryError = err as RpcError;
-      console.warn(`[RPC] Primary RPC unreachable for chain ${chainId}:`, primaryError.message);
+      // A wrong-chain endpoint must not masquerade as a transport error; leave
+      // primaryError unset so an all-endpoints-mismatch surfaces as 4901.
+      if (!(err as RpcError).mismatch) {
+        primaryError = err as RpcError;
+        console.warn(`[RPC] Primary RPC unusable for chain ${chainId}:`, primaryError.message);
+      }
     }
   }
 
@@ -102,10 +118,10 @@ export async function evmProxyRpcCall(
   const cached = fallbackCache.get(chainId);
   if (cached && Date.now() - cached.ts < FALLBACK_CACHE_TTL_MS) {
     try {
-      return await rpcFetch(cached.url, method, params);
+      return await verifiedRpcFetch(cached.url, chainId, method, params);
     } catch (err) {
       if (!isTransient(err)) throw err;
-      // Cached fallback unreachable — invalidate and discover new one
+      // Cached fallback unusable — invalidate and discover new one
       fallbackCache.delete(chainId);
     }
   }
@@ -114,7 +130,7 @@ export async function evmProxyRpcCall(
   const fallbackUrl = await discoverFallbackRpc(chainId);
   if (fallbackUrl) {
     try {
-      const result = await rpcFetch(fallbackUrl, method, params);
+      const result = await verifiedRpcFetch(fallbackUrl, chainId, method, params);
       // Cache the working URL
       fallbackCache.set(chainId, { url: fallbackUrl, ts: Date.now() });
       return result;
@@ -128,7 +144,9 @@ export async function evmProxyRpcCall(
   // Everything reachable failed. Surface the real transport error if we have
   // one, rather than a generic message that discards the original code.
   if (primaryError) throw primaryError;
-  throw Object.assign(new Error(`No RPC URL configured for chain ${chainId}`), { code: -32601 });
+  // No endpoint can serve this chain. Per ethereum.md this is a chain-availability
+  // failure (4901), not a "method not found" (-32601, which is not a WalletPair code).
+  throw Object.assign(new Error(`No usable RPC endpoint for chain ${chainId}`), { code: 4901 });
 }
 
 /**
@@ -172,6 +190,12 @@ export function isSafeRpcUrl(raw: string): boolean {
   }
 
   return true;
+}
+
+/** Clear all in-memory RPC caches (fallback + chain verification). Tests only. */
+export function __resetRpcProxyCaches(): void {
+  fallbackCache.clear();
+  chainVerifyCache.clear();
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────
@@ -234,8 +258,75 @@ async function rpcFetch(rpcUrl: string, method: string, params: unknown): Promis
 }
 
 /**
+ * Confirm an endpoint actually serves `chainId` before it answers a read.
+ *
+ * ethereum.md (Read-only RPC) requires the implementation to ensure the
+ * endpoint's `eth_chainId` matches the selected chain, and states that a
+ * liveness probe that discards the returned chain does NOT satisfy this. The
+ * result is cached per (chainId, url). Returns `true` only on a confirmed match
+ * and `false` on a confirmed mismatch (endpoint unusable for this chain);
+ * throws a *transient* RpcError when the endpoint is unreachable so the caller
+ * falls through to another endpoint rather than trusting an unverified one.
+ */
+async function verifyEndpointChain(rpcUrl: string, chainId: number): Promise<boolean> {
+  const key = `${chainId}|${rpcUrl}`;
+  const cached = chainVerifyCache.get(key);
+  if (cached && Date.now() - cached.ts < CHAIN_VERIFY_TTL_MS) return cached.ok;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FALLBACK_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] }),
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    // Unreachable → transient: let the caller try a different endpoint.
+    throw rpcError(err?.name === 'AbortError' ? 'chain verification timed out' : (err?.message ?? 'chain verification failed'), -32603, true);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!res.ok) {
+    if (res.status >= 500 || res.status === 429) throw rpcError(`chain verification HTTP ${res.status}`, -32603, true);
+    // A reachable endpoint that cannot answer eth_chainId is unusable for reads.
+    chainVerifyCache.set(key, { ok: false, ts: Date.now() });
+    return false;
+  }
+
+  let reported: unknown;
+  try {
+    reported = JSON.parse(await res.text())?.result;
+  } catch {
+    throw rpcError('chain verification returned invalid JSON', -32603, true);
+  }
+  const ok = typeof reported === 'string' && Number.parseInt(reported, 16) === chainId;
+  chainVerifyCache.set(key, { ok, ts: Date.now() });
+  return ok;
+}
+
+/**
+ * Verify the endpoint serves `chainId`, then execute the read. A confirmed
+ * chain mismatch is surfaced as a *transient* error so the caller falls through
+ * to the next endpoint; an endpoint that fails verification is never used.
+ */
+async function verifiedRpcFetch(rpcUrl: string, chainId: number, method: string, params: unknown): Promise<unknown> {
+  if (!(await verifyEndpointChain(rpcUrl, chainId))) {
+    // A wrong-chain endpoint is "chain unavailable" (4901), flagged so the caller
+    // keeps looking and does not surface it as a transport failure.
+    throw Object.assign(rpcError(`endpoint does not serve chain ${chainId}`, 4901, true), { mismatch: true });
+  }
+  return rpcFetch(rpcUrl, method, params);
+}
+
+/**
  * Fetch RPC list from ethereum-data API and find the first working one.
- * Returns the first URL that successfully responds to eth_chainId, or null.
+ * Returns the first URL whose live `eth_chainId` equals `chainId`, or null.
+ * A URL that answers but reports a different chain is rejected, so the registry
+ * (which is untrusted) cannot steer reads onto the wrong chain.
  */
 async function discoverFallbackRpc(chainId: number): Promise<string | null> {
   const apiUrl = `https://ethereum-data.awesometools.dev/chains/eip155-${chainId}.json`;
@@ -275,7 +366,11 @@ async function discoverFallbackRpc(chainId: number): Promise<string | null> {
           clearTimeout(timer);
           if (!res.ok) throw new Error('bad status');
           const json = await res.json();
-          if (json.error) throw new Error('rpc error');
+          if (json.error || typeof json.result !== 'string' || Number.parseInt(json.result, 16) !== chainId) {
+            throw new Error('wrong chain or rpc error');
+          }
+          // Pre-populate the verification cache so verifiedRpcFetch does not re-probe.
+          chainVerifyCache.set(`${chainId}|${url}`, { ok: true, ts: Date.now() });
           return url;
         } catch (err) {
           clearTimeout(timer);

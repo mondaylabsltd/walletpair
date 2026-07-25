@@ -20,6 +20,7 @@ import {
   buildPairingUri,
   buildRelayConnectionUrl,
   parseChannelJoined,
+  parseChannelLeft,
   type ParticipantMeta,
   type RelayIdentity,
   validateChannelId,
@@ -373,6 +374,16 @@ export class WalletPairSession {
       }
       this.emit('walletJoined', { meta: { ...this.pinnedWallet } });
       this.setPhase('connected');
+      return;
+    }
+
+    const left = parseChannelLeft(parsed);
+    if (left) {
+      // The pinned Wallet leaving means the DApp can no longer service requests.
+      if (left.ch === this.channelId && this.pinnedWallet && left.pubkey === this.pinnedWallet.pubkey) {
+        this.rejectPending(new ProviderRpcError(4900, 'Wallet left the channel'));
+        this.emit('walletLeft', { pubkey: left.pubkey });
+      }
       return;
     }
 

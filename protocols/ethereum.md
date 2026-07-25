@@ -1,5 +1,11 @@
 # Ethereum Protocol
 
+## Conventions
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD",
+"SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be
+interpreted as described in [RFC 2119](https://www.ietf.org/rfc/rfc2119.txt).
+
 ## Scope
 
 This protocol exposes an EIP-1193 Provider for EVM chains over an encrypted
@@ -99,8 +105,13 @@ A response contains exactly one of `result` or `error`:
 }
 ```
 
-`id` MUST be a unique 1–128 byte printable ASCII string among outstanding
-requests. The responder MUST copy it unchanged and send exactly one response.
+`id` MUST be a unique string of 1–128 printable-ASCII bytes (`0x20`–`0x7E`
+inclusive) among the DApp's outstanding requests. The responder MUST copy it
+unchanged and send exactly one response per request. A response whose `id`
+matches no outstanding request MUST be discarded without erroring the channel; a
+second response for an `id` whose response was already delivered MUST be
+discarded; and a DApp MUST NOT reuse an `id` while a request bearing it is still
+outstanding.
 `method` MUST be a non-empty string of at most 128 UTF-8 bytes. `params`,
 `result`, `error.data`, and event `data` MUST belong to the JSON data model.
 
@@ -113,15 +124,48 @@ recovered; otherwise it is discarded.
 
 Requests flow from DApp to Wallet, responses and events from Wallet to DApp. An
 implementation MAY answer account, chain, permission, or read-only methods
-locally; externally visible results and errors MUST remain identical.
+locally; externally visible results and errors MUST remain identical. A locally
+answered method MUST return exactly what the Wallet would have returned — in
+particular, a locally answered `wallet_getPermissions` or `eth_accounts` MUST
+reflect the permissions the Wallet has actually granted, not a value assumed by
+the DApp side.
 
 The response MUST reuse the request's CAIP-2 suffix. For ordinary RPC and
 signing methods, the suffix selects the request's chain context and any explicit
-chain ID in `params` MUST match it. For `wallet_switchEthereumChain`,
+chain ID in `params` MUST match it. `eth_chainId` and `net_version` always return
+the active chain; the Provider MUST send them with the active chain as the
+suffix, so the suffix and the returned chain agree. A request whose suffix names
+a chain the Wallet cannot service returns `4901`, or `4900` when no chain is
+serviceable. For `wallet_switchEthereumChain`,
 `wallet_addEthereumChain`, and multi-chain capability discovery, `params`
 identifies the target chain while the suffix identifies the currently active
 chain. A `chainChanged` event uses the new chain; other events use the chain to
 which their data belongs.
+
+### Request lifecycle
+
+The relay is best-effort: it MAY drop a frame and does not replay past
+application frames (see [relay](./relay.md)), so a response can be lost. To make
+delivery recoverable without duplicating effects, the request `id` acts as an
+idempotency key for the lifetime of the channel:
+
+- On a retry the DApp MUST reuse the original `id`. The Wallet MUST NOT execute a
+  state-changing request (`eth_sendTransaction`, `personal_sign`,
+  `eth_signTypedData*`, `wallet_sendCalls`) more than once for the same `id`: if
+  it already produced a result for that `id` it MUST return the same result, and
+  if the operation is still in progress it MUST return that in-progress state
+  rather than starting a second one. The Wallet retains this id→result mapping at
+  least until the channel is abandoned.
+- A DApp MUST NOT resubmit a state-changing request under a new `id` after a
+  timeout, since the first submission may have taken effect; it MUST reconcile
+  via the returned identifier (transaction hash or EIP-5792 bundle id) or surface
+  the indeterminate outcome to the user.
+- A DApp SHOULD apply a per-request timeout and, on timeout, retry with the same
+  `id` a bounded number of times before erroring. Read-only and idempotent
+  methods MAY be retried freely.
+- The sequence rule (see [encryption](./encryption.md)) drops a reordered frame
+  permanently, so per-request delivery is guaranteed only by this id-keyed retry,
+  not by the transport.
 
 ## Supported methods
 
@@ -140,7 +184,15 @@ separately and may depend on the selected chain endpoint.
 
 Accounts MUST NOT be exposed before user authorization. Permissions are scoped
 to the origin of the paired DApp `url`, not to an origin supplied in an RPC
-request.
+request. The paired `url` is a self-declared fingerprint field, not an
+authenticated web origin: the four-digit comparison authenticates only the QR
+the currently trusted page displays, and each channel uses fresh ephemeral keys
+with no cross-session cryptographic identity (see
+[encryption](./encryption.md#security-properties-and-limits)). Therefore each new
+pairing MUST obtain fresh, explicit user authorization; a Wallet MUST NOT
+silently grant or reuse a persisted per-origin authorization for a new channel on
+the basis of a matching `url`, `name`, or `icon` alone. A persisted per-origin
+grant is a UX convenience only and is never proof of DApp identity.
 
 ### Network and permissions
 
@@ -164,10 +216,10 @@ approval unless an existing permission policy already authorizes that action.
 | --- | --- |
 | `eth_sendTransaction` | Validates, authorizes, signs, and submits one transaction. |
 | `personal_sign` | Signs `[data, address]` using the EIP-191 personal-message prefix. |
-| `eth_signTypedData` | Signs EIP-712 typed data using `[address, typedData]`. |
-| `eth_signTypedData_v1` | Supports the legacy v1 typed-data format. |
-| `eth_signTypedData_v3` | Supports the legacy v3 typed-data format. |
-| `eth_signTypedData_v4` | Supports the v4 typed-data format, including arrays. |
+| `eth_signTypedData` | Legacy V1: params `[typedData, address]`, where `typedData` is the array-of-`{type,name,value}` form. |
+| `eth_signTypedData_v1` | Alias of the legacy V1 method above; params `[typedData, address]`. |
+| `eth_signTypedData_v3` | Params `[address, typedData]`, where `typedData` is the EIP-712 payload as a JSON **string**; V3 omits arrays and nested structs. |
+| `eth_signTypedData_v4` | Params `[address, typedData]`, where `typedData` is the EIP-712 payload as a JSON **string**; supports arrays and nested structs. |
 | `wallet_sendCalls` | Submits an EIP-5792 call bundle. |
 | `wallet_getCallsStatus` | Returns the EIP-5792 status of a submitted bundle. |
 
@@ -176,10 +228,15 @@ can discover chain-specific call capabilities. `wallet_showCallsStatus` is
 OPTIONAL. Status information MUST be returned only for bundles visible to the
 paired DApp.
 
-The suffixed typed-data methods are ecosystem compatibility methods, not
-separate finalized EIPs. Versions v1 and v3 lack later security improvements;
-DApps SHOULD use v4. A Wallet MUST use the exact requested version and MUST NOT
-silently fall back to another signing algorithm.
+The typed-data methods are ecosystem compatibility methods, not separate
+finalized EIPs; the parameter orders and payload encodings above match the
+established MetaMask ecosystem methods, which a Wallet MUST follow exactly. Note
+that the unsuffixed and `_v1` order (`[typedData, address]`) is the reverse of
+the `_v3`/`_v4` order (`[address, typedData]`), and that `_v3`/`_v4` pass the
+payload as a JSON string while the legacy form passes the array object. Versions
+V1 and V3 lack later security improvements; DApps SHOULD use `_v4`. A Wallet MUST
+use the exact requested version and parameter shape and MUST NOT silently fall
+back to another signing algorithm or reorder parameters.
 
 Every signing or sending request MUST use an authorized account. The Wallet
 MUST validate the complete request and obtain user approval according to its
@@ -219,13 +276,25 @@ eth_getLogs
 ```
 
 Read calls without an explicit chain target use the active chain. They MAY be
-answered by a trusted RPC endpoint instead of crossing the WalletPair channel.
-The implementation MUST ensure that endpoint's `eth_chainId` matches the
-selected chain. An implementation MAY add other read methods through an
+answered by a selected RPC endpoint instead of crossing the WalletPair channel. A
+"selected" endpoint is one the implementation or user configured, or one
+discovered from an untrusted source and admitted only after the checks below;
+either way it is relied on for liveness only, not for data integrity — a read
+result may be wrong or stale, so security decisions MUST NOT depend on it (see
+Security requirements). Before an endpoint answers any read call, the
+implementation MUST confirm that a live `eth_chainId` query to that endpoint
+returns the selected chain; this probe result MAY be cached per endpoint and
+chain, but the cache SHOULD NOT exceed a few minutes and MUST be re-checked when
+the configured endpoint set changes. An endpoint
+whose reported `eth_chainId` differs from the selected chain, or that fails the
+probe, MUST NOT be used. A liveness check that discards the returned chain does
+not satisfy this requirement. An implementation MAY add other read methods through an
 explicit allowlist. It MUST NOT infer safety from an `eth_` prefix or blindly
 forward unknown methods.
 
-`eth_sendRawTransaction` is not read-only. Filter creation, subscriptions,
+`eth_sendRawTransaction` is not read-only: in the base protocol it is unsupported
+and returns `4200`, and it MUST NOT be answered from the read-only RPC path or
+signed on the DApp's behalf. Filter creation, subscriptions,
 debug, trace, admin, mining, and transaction-pool methods are outside the base
 protocol. `eth_subscribe` and `eth_unsubscribe` MAY be implemented as an
 extension when the selected RPC transport supports subscriptions.
@@ -286,8 +355,20 @@ error codes SHOULD be preserved when they accurately describe the failure. An
 unsupported or unknown method MUST return `4200`; it MUST NOT be forwarded
 speculatively.
 
-If a valid response would exceed the encryption protocol's 64 KiB plaintext
-limit, the responder returns `-32005` (`Limit exceeded`) instead.
+When a valid response the Wallet generates would exceed the encryption protocol's
+64 KiB plaintext limit, the responder returns `-32005` (`Limit exceeded`) instead
+of the oversized response. This is the same EIP-1474 `Limit exceeded` code, so a
+`-32005` a read proxy receives verbatim from an upstream node (for example, rate
+limiting) is likewise surfaced as `-32005`; both tell the DApp to reduce scope or
+retry. A wallet-state method that can return an unbounded result (for example
+`wallet_getCallsStatus` with many receipts) SHOULD support pagination so a
+legitimate response can fit. A *request* whose plaintext would exceed 64 KiB
+cannot be transmitted at all: it fails locally at the sender's encryption layer
+and never reaches the Wallet.
+
+A read that cannot be serviced because no endpoint for the selected chain is
+available returns `4901`, or `4900` when no chain is serviceable; such a failure
+MUST NOT be reported as `-32601`, which is not a WalletPair error code.
 
 ## Security requirements
 
