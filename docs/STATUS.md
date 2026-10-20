@@ -120,7 +120,7 @@ Against the live `wss://relay.peerconnect.dev` (behind Cloudflare), from this ma
 
 Decided (2026-10-20): default relay `wss://relay.peerconnect.dev`; TRON dApps should show WalletPair by name (done with `WalletPairAdapter`).
 
-1. **Publish `@walletpair/tronwallet-adapter`** (the npm scope `@walletpair` needs an owner), and **propose it upstream** to tronweb3/tronwallet-adapter, so dApps get it with the library's adapter bundle.
+1. **Publish `@walletpair/tronwallet-adapter`** (the npm scope `@walletpair` needs an owner). Contributing it upstream to tronweb3/tronwallet-adapter is deferred (owner, 2026-10-20); until then dApps add the package themselves.
 2. **Publish PeerConnect** (npm, and a reachable repository), so the vendored copy becomes a dependency and CI can run the relay tests.
 3. **v1 retirement:** what to do with `relay.walletpair.org`, the v0.1.1 extension release and the `walletpair-sdk` npm package.
 4. **Next protocol features**, if wanted: Solana `signIn` and v1 transactions, TRON TIP-712.
