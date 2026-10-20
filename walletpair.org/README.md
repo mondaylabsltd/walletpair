@@ -1,10 +1,6 @@
 # WalletPair Website
 
-The WalletPair documentation site and interactive protocol playground.
-
-- Production website: [https://walletpair.org](https://walletpair.org)
-- Production WebSocket relay: `wss://relay.walletpair.org/v1`
-- Relay health check: [https://relay.walletpair.org/healthz](https://relay.walletpair.org/healthz)
+The WalletPair website and documentation: [walletpair.org](https://walletpair.org). The Protocol pages are rendered at build time from the repository's [`spec/`](../spec/), so the site always shows the specification as committed.
 
 ## Development
 
@@ -15,17 +11,16 @@ pnpm install
 pnpm dev
 ```
 
-Vite prints the local development URL after startup. The playground defaults
-to the production relay; change it to a local `ws://` endpoint when developing
-the relay locally.
+Vite prints the local development URL after startup.
 
 ## Verification
 
 ```sh
 pnpm check
-pnpm test:unit -- --run
 pnpm build
 ```
+
+To serve the built Worker in the Cloudflare runtime locally: `npx wrangler dev --port 8787`.
 
 The production build uses SvelteKit with the Cloudflare adapter. `pnpm build`
 generates the Cloudflare Worker output and then verifies the committed Wrangler

@@ -1,208 +1,78 @@
-# WalletPair Browser Extension
+# WalletPair browser extension
 
-WalletPair is a Chrome and Firefox EIP-1193 provider that connects browser
-dApps to a mobile Wallet over an end-to-end encrypted WebSocket channel.
+The DApp side of [WalletPair](../spec/README.md) for every site in the browser: EVM, TRON and Solana dApps use the wallet on your phone, unchanged, over an end-to-end encrypted [PeerConnect](./vendor/peerconnect/README.md) link. Chrome (MV3) and Firefox 128+ (MV2).
 
-The extension implements the WalletPair protocols directly and does not depend
-on `walletpair-sdk`. The protocol specifications are the source of truth:
-
-- [Relay protocol](../protocols/relay.md)
-- [Encryption protocol](../protocols/encryption.md)
-- [Ethereum protocol](../protocols/ethereum.md)
-
-Official services:
-
-- Website and documentation: [https://walletpair.org](https://walletpair.org)
-- Default production relay: `wss://relay.walletpair.org/v1`
-
-## Features
-
-- EIP-1193 provider exposed as `window.walletpair` and, when available,
-  `window.ethereum`
-- EIP-6963 provider discovery
-- QR pairing with a four-digit DApp verification code
-- Per-channel ephemeral X25519 keys and HKDF-SHA256 directional keys
-- JSON-only MessagePack payloads encrypted with ChaCha20-Poly1305
-- CAIP-2 authenticated chain context and persistent replay counters
-- Automatic WebSocket and MV3 service-worker recovery
-- Per-origin account permissions
-- Expandable request activity for pending, successful, rejected, and failed
-  requests
-- Chrome side panel and Firefox-compatible builds
+| Network | What pages see | Specification |
+|---|---|---|
+| EVM | EIP-1193 provider, announced with EIP-6963; `window.ethereum` when no other wallet took it | [evm.md](../spec/networks/evm.md) §3 |
+| TRON | TIP-1193 provider announced with TIP-6963, a `tronWeb` signing object; `window.tron`, `window.tronLink`, `window.tronWeb` when no other wallet took them | [tron.md](../spec/networks/tron.md) §3 |
+| Solana | A Wallet Standard wallet | [solana.md](../spec/networks/solana.md) §3 |
 
 ## Architecture
 
 ```text
-dApp
-  │ EIP-1193 / EIP-6963
-  ▼
-provider.content.ts (MAIN world)
-  │ window.postMessage
-  ▼
-content.ts (ISOLATED world)
-  │ chrome.runtime.Port
-  ▼
-background.ts (session owner)
-  │ X25519 + HKDF + MessagePack + ChaCha20-Poly1305
-  ▼
-WalletPair relay ───────── encrypted frames ───────── Mobile Wallet
+page (MAIN world)  lib/inpage/   evm.ts · tron.ts · solana.ts
+                                       │ bridge.ts: window messages
+content script     entrypoints/content.ts
+                                       │ runtime port (the browser supplies the page's origin)
+background         entrypoints/background.ts
+                     lib/background/router.ts    per-site approval, local answers,
+                                                 EVM node reads, forwarding, cancellation
+                     lib/background/session.ts   one PeerConnect room with the Wallet
+                     lib/walletpair/             protocol messages, client, network checks
+                                       │ vendor/peerconnect (WebAssembly)
+                             PeerConnect relay ── phone Wallet
 ```
 
-The relay can see channel metadata, public keys, CAIP-2 suffixes, timing, and
-ciphertext sizes. It cannot derive the shared secret or read application
-payloads.
+`lib/walletpair/` is the shared protocol code: message parsing and field rules (`protocol.ts`), the DApp-side client (`client.ts`), a Wallet's receive steps (`dispatch.ts`), and one module per network with its chains, accounts and input checks (`networks/`).
 
-## Pairing and Session Lifecycle
+## Session lifecycle
 
-1. The extension creates a channel and ephemeral X25519 key pair.
-2. It connects to the relay with the required `ch`, `name`, `url`, `icon`, and
-   `pubkey` query fields.
-3. The Wallet scans the `walletpair:` URI and independently computes the
-   four-digit DApp verification code.
-4. The extension pins the first eligible Wallet `channel_joined` event. Later
-   participants and frames that do not authenticate with that Wallet's key are
-   ignored.
-5. Ethereum request and response objects are encoded as MessagePack, encrypted,
-   and transported as `<sealed>@<caip-2>` frames.
+- **Pairing.** The first site that asks for accounts, or *Pair Wallet* in the side panel, creates a PeerConnect room and shows `walletpair:<invite>` as a QR code. `walletpair_connect` for all three networks is queued at once, carrying the requesting site's origin, so the phone shows its prompt as soon as it has scanned.
+- **Sites.** A site sees a network's accounts only after it is granted that network. Everything the user approved on the phone is granted to the site the phone's prompt named; any other site waits for *Allow* in the side panel. Grants are cleared when the session ends.
+- **Calls.** Each Wallet function is checked locally first (the Wallet checks again), then sent with the site's `origin`. There are no timeouts: a call waits while the phone is offline, and is cancelled (`walletpair_cancel`) when its page closes or navigates.
+- **Restarts.** The room record is stored, and every start of the background (the browser stopping the MV3 service worker, a browser restart) restores it, cancels calls left pending, and asks the Wallet for its current state again.
+- **Ending.** *Disconnect wallet* closes the room. The Wallet is told the next time it is reachable; the extension keeps trying for up to seven days.
 
-### Persisted reconnect state
+## Storage (`chrome.storage.local`)
 
-The background service worker stores the minimum state needed to recover the
-same encrypted channel in `chrome.storage.local`:
+| Key | Contents |
+|---|---|
+| `room` | The PeerConnect room record: a secret (it holds the room's keys) |
+| `closingRooms` | Records of rooms being closed, until the Wallet acknowledges |
+| `session` | The Wallet's name and the session state, so pages get answers while reconnecting |
+| `pendingIds` | Ids of calls waiting for the Wallet, cancelled after a restart |
+| `sites` | Origin → granted networks |
+| `settings` | Relay URL for new pairings, EVM RPC endpoints |
+| `activityLog` | The last 50 calls |
 
-| Data | Stored values |
-| --- | --- |
-| DApp channel | Relay URL, channel ID, `name`, `url`, `icon`, public key, and ephemeral private key |
-| Pinned Wallet | `name`, `url`, `icon`, and X25519 public key |
-| Encryption state | Independent send and receive sequence numbers |
-| Connected account | Address, active chain, protocol, and Wallet display metadata |
-| Lifetime | Timestamp used by the 24-hour session limit |
+## Settings
 
-The private key and counters must be persisted together: reusing a traffic key
-after resetting its sequence would risk nonce reuse. If counter persistence or
-snapshot validation fails, the extension abandons the channel and requires a
-fresh pairing.
-
-### Automatic reconnect
-
-- An unexpected WebSocket close retains the snapshot and starts bounded
-  exponential backoff from 1 second to 30 seconds.
-- A protocol-valid encrypted keepalive runs while connected.
-- A persistent browser alarm restores the session if the MV3 service worker was
-  suspended and later restarted.
-- Reconnect reuses the saved channel, DApp key pair, pinned Wallet identity, and
-  directional counters. It does not accept a different Wallet.
-
-### Explicit disconnect
-
-When the user selects **Disconnect**, the extension:
-
-1. Cancels scheduled and in-flight reconnect attempts.
-2. Closes the socket and erases in-memory channel and traffic keys.
-3. Waits for queued counter writes to finish.
-4. Atomically removes `sessionState`, `connectedWallet`, and `connectedAt` before
-   reporting success.
-
-Relay settings and per-origin permissions are retained because they are user
-configuration, not credentials for the closed channel.
-
-## Ethereum Behavior
-
-Handled locally:
-
-```text
-eth_chainId
-net_version
-eth_accounts
-wallet_getPermissions
-```
-
-Forwarded over the encrypted channel:
-
-```text
-eth_requestAccounts
-wallet_switchEthereumChain
-wallet_addEthereumChain
-wallet_requestPermissions
-eth_sendTransaction
-personal_sign
-eth_signTypedData
-eth_signTypedData_v1
-eth_signTypedData_v3
-eth_signTypedData_v4
-wallet_sendCalls
-wallet_getCallsStatus
-wallet_getCapabilities
-```
-
-Explicitly allowlisted read-only Ethereum RPC methods are sent to the configured
-RPC endpoint. Unknown methods are rejected instead of being forwarded
-speculatively. See [the Ethereum protocol](../protocols/ethereum.md) for the
-wire objects, validation rules, supported read methods, and events.
+The relay for new pairings is a PeerConnect relay URL (`ws://` or `wss://`). The default in `lib/constants.ts` is a placeholder until the project chooses its relay. A paired session stays on the relay it was created on.
 
 ## Development
 
-Requirements: Node.js, pnpm, and a Chromium- or Firefox-based browser.
-
-```bash
+```sh
 pnpm install
-pnpm dev              # Chrome development mode
-pnpm dev:firefox      # Firefox development mode
-pnpm check            # TypeScript and Svelte diagnostics
-pnpm test             # Unit and protocol interoperability tests
-pnpm test:e2e         # Browser provider integration tests
+pnpm dev                 # Chrome, with reload
+pnpm dev:firefox
+pnpm build               # .output/chrome-mv3
+pnpm build:firefox       # .output/firefox-mv2
+pnpm check               # svelte-check and TypeScript
 ```
 
-Production builds:
+## Tests
 
-```bash
-pnpm build            # .output/chrome-mv3/
-pnpm build:firefox    # .output/firefox-mv2/
-pnpm zip
-pnpm zip:firefox
-```
+| Command | What runs |
+|---|---|
+| `pnpm test` | Unit, property and conformance tests (vitest): the spec's test vectors, the client against the reference Wallet (`test/wallet/`) in memory, the page providers, fast-check properties of every parser and check |
+| `PEERCONNECT_RELAY_BIN=… pnpm test:integration` | The extension's session and router against the reference Wallet over the real PeerConnect client and a real relay |
+| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e` | Chrome with the built extension; a test dApp using viem, TronWeb's wallet adapter and Solana's wallet adapter; the reference Wallet as the phone |
+| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:firefox` | The same core flows in the installed Firefox |
+| `npx tsx test/vectors/generate.ts` | Regenerates `spec/test-vectors/{evm,tron,solana}.json` with viem, TronWeb and web3.js |
 
-### Load the Chrome build
+`PEERCONNECT_RELAY_BIN` is a `peerconnect-relay` binary (`cargo build --release -p peerconnect-relay` in PeerConnect); `PEERCONNECT_RELAY=ws://…` uses a running relay instead. Without either, the relay tests are skipped.
 
-1. Run `pnpm build`.
-2. Open `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Select **Load unpacked** and choose `.output/chrome-mv3/`.
+## License
 
-Reload the unpacked extension after rebuilding when testing background or UI
-changes.
-
-## Source Layout
-
-```text
-src/
-├── entrypoints/
-│   ├── provider.content.ts   # EIP-1193 provider in the page world
-│   ├── content.ts            # Isolated bridge
-│   ├── background.ts         # Session, permissions, RPC routing, reconnect
-│   ├── popup/                # Popup UI and shared visual theme
-│   └── sidepanel/            # Side-panel entrypoint
-├── components/               # Pairing, connected state, activity, settings
-└── lib/
-    ├── walletpair/           # Relay, crypto, MessagePack, Ethereum, session
-    ├── protocols/ethereum/   # Supported method sets and helpers
-    ├── storage.ts            # Ordered persistent state operations
-    └── provider-factory.ts   # EIP-1193/EIP-6963 provider implementation
-```
-
-## Security Notes
-
-- The four-digit comparison authenticates the scanned DApp fields to the Wallet
-  under the assumptions documented in the encryption protocol. It is a short
-  human check, not cryptographic-strength authentication.
-- The DApp intentionally trusts the first eligible Wallet participant; the
-  protocol does not authenticate Wallet identity to the DApp.
-- The relay can drop, delay, replay, reorder, or inject frames. AEAD and sequence
-  checks detect forgery and replay but cannot prevent denial of service.
-- Reconnection requires storing the channel's ephemeral private key in extension
-  local storage. It is removed on explicit disconnect or session expiry but is
-  not protected by hardware-backed key storage.
-
-The encryption design also has a [ProVerif model](../formal-verification/README.md)
-covering DApp authentication to the Wallet, accepted-message correspondence,
-and Wallet message secrecy under the documented idealizations.
+[MIT](../LICENSE)
