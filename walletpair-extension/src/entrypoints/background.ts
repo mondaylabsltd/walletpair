@@ -30,6 +30,13 @@ import type { BackgroundMessage, ContentMessage, ExtensionState, UiMessage } fro
 import { CallError } from '@/lib/walletpair/client';
 import { ErrorCode, rpcError, type RpcError } from '@/lib/walletpair/protocol';
 
+/** What the activity log keeps of a value: its JSON, cut to 2 KB. */
+function clip(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  const text = JSON.stringify(value) ?? '';
+  return text.length > 2048 ? `${text.slice(0, 2048)}…` : value;
+}
+
 export default defineBackground(() => {
   const session = new SessionManager({
     peer: {
@@ -54,7 +61,11 @@ export default defineBackground(() => {
   const router = new Router({
     session,
     sites: { getSites, grantSite, revokeSite },
-    activity: { add: addActivityEntry, update: updateActivity },
+    // Best effort: a full storage must not fail a call already sent to the Wallet.
+    activity: {
+      add: (entry) => addActivityEntry({ ...entry, params: clip(entry.params) }).catch(() => {}),
+      update: (id, change) => updateActivity(id, { ...change, result: clip(change.result) }).catch(() => {}),
+    },
     rpc: async (chain, method, params) =>
       evmProxyRpcCall(chain.slice('eip155:'.length), method, params, (await getSettings()).rpcUrls),
     surface: () => void updateBadge(true),
@@ -184,6 +195,8 @@ export default defineBackground(() => {
       if (tabId !== undefined) browser.sidePanel?.open({ tabId }).catch(() => {});
       return false;
     }
+    // Everything else changes the session: only the extension's own pages may ask.
+    if (!sender.url?.startsWith(browser.runtime.getURL('/'))) return false;
     void (async () => {
       try {
         await handleUi(message);

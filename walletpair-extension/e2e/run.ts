@@ -25,26 +25,48 @@ declare const dapp: Dapp;
 async function main(): Promise<void> {
   const { server, siteA, siteB, port } = await serveDapp();
   const relay = await startRelay();
+  let diagnose: (() => Promise<unknown>) | undefined;
   const browser: Browser = await puppeteer.launch({
     headless: process.env.HEADLESS !== '0',
     pipe: true,
     enableExtensions: [extensionPath],
+    protocolTimeout: 60_000,
   });
+  // Console output of the extension and the pages, printed if a step fails.
+  const logs: string[] = [];
+  const record = (source: string) => (message: { type(): string; text(): string }) => logs.push(`[${source}] ${message.type()}: ${message.text()}`);
 
   try {
     const worker = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('/background.js'));
     const extensionId = new URL(worker.url()).host;
+    (await worker.worker())?.on('console', record('background'));
     console.log(`Chrome ${await browser.version()}, extension ${extensionId}, relay ${relay.url}`);
 
     // The side panel, opened as a tab so the test can read and click it.
     const panel = await browser.newPage();
     await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-    const extState = () => panel.evaluate(() => chrome.runtime.sendMessage({ action: 'get-state' }));
+    panel.on('console', record('panel'));
+    const extState = () =>
+      Promise.race([
+        panel.evaluate(() => chrome.runtime.sendMessage({ action: 'get-state' })),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('the background did not answer get-state within 10 s')), 10_000)),
+      ]);
     await panel.evaluate((url) => chrome.storage.local.set({ settings: { relayUrl: url } }), relay.url);
 
     const phoneA = phone();
     let device: WalletDevice | undefined;
+    diagnose = async () => ({
+      extension: await extState().catch((e: Error) => e.message),
+      phone: device && {
+        conn: device.conn.state,
+        reason: device.conn.reason,
+        paired: device.conn.room.paired,
+        received: device.wallet.received.map((r) => `${r.method} ${r.id.slice(0, 8)}`),
+        approved: device.store.approved,
+      },
+    });
     const pageA = await browser.newPage();
+    pageA.on('console', record('page A'));
     await pageA.goto(`${siteA}/dapp.html`);
     await pageA.waitForFunction(() => 'dapp' in window);
 
@@ -246,6 +268,11 @@ async function main(): Promise<void> {
     console.log(`\npersonal_sign round trip, dApp page → extension → relay → Wallet → back, 20 sequential calls:`);
     console.log(`  p50 ${at(0.5)} ms, p95 ${at(0.95)} ms, max ${sorted.at(-1)!.toFixed(1)} ms`);
     console.log(`\nAll ${results.length} steps passed.`);
+  } catch (error) {
+    console.log(`\n--- console output (${logs.length} lines) ---\n${logs.slice(-60).join('\n')}`);
+    console.log('--- extension state ---');
+    console.log(JSON.stringify(await diagnose?.().catch((e: Error) => e.message), null, 1));
+    throw error;
   } finally {
     await browser.close();
     relay.stop();

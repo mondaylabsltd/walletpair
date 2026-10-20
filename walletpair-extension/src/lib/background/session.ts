@@ -71,7 +71,8 @@ export class SessionManager extends EventTarget {
   #client: WalletPairClient | undefined;
   #asking: { namespaces: string[]; result: Promise<Asked> } | undefined;
   #closing = new Map<string, PeerConnection>();
-  #restoring: Promise<void> | undefined;
+  /** Restore, pair and end run one at a time: each may open or close the connection. */
+  #queue: Promise<unknown> = Promise.resolve();
 
   constructor(deps: SessionDeps) {
     super();
@@ -82,10 +83,15 @@ export class SessionManager extends EventTarget {
     return this.#client;
   }
 
+  #serial<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.#queue.then(operation);
+    this.#queue = run.catch(() => {});
+    return run;
+  }
+
   /** Restores the saved session and finishes closing rooms. Runs on every worker start. */
   restore(): Promise<void> {
-    this.#restoring ??= this.#restore().finally(() => (this.#restoring = undefined));
-    return this.#restoring;
+    return this.#serial(() => this.#restore());
   }
 
   async #restore(): Promise<void> {
@@ -117,13 +123,15 @@ export class SessionManager extends EventTarget {
   }
 
   /** Creates a room; the Wallet is asked for every namespace as soon as it joins. */
-  async pair(origin?: string): Promise<void> {
-    await this.restore();
-    if (this.#conn) return;
-    const room = this.#deps.peer.create(await this.#deps.relayUrl());
-    await this.#deps.store.saveRoom(room.toString());
-    this.#open(room);
-    this.ask(NAMESPACES, origin).catch(() => {});
+  pair(origin?: string): Promise<void> {
+    return this.#serial(async () => {
+      await this.#restore();
+      if (this.#conn) return;
+      const room = this.#deps.peer.create(await this.#deps.relayUrl());
+      await this.#deps.store.saveRoom(room.toString());
+      this.#open(room);
+      this.ask(NAMESPACES, origin).catch(() => {});
+    });
   }
 
   /**
@@ -160,15 +168,17 @@ export class SessionManager extends EventTarget {
   }
 
   /** Ends the session for both sides (core §2.4); the Wallet is told when it is next reachable. */
-  async end(): Promise<void> {
-    await this.restore();
-    const conn = this.#conn;
-    if (!conn) return;
-    conn.close();
-    const id = conn.room.id;
-    await this.#deps.store.setClosingRoom(id, { record: conn.room.toString(), since: (this.#deps.now ?? Date.now)() });
-    this.#finishClosing(id, conn);
-    await this.#forget();
+  end(): Promise<void> {
+    return this.#serial(async () => {
+      await this.#restore();
+      const conn = this.#conn;
+      if (!conn) return;
+      conn.close();
+      const id = conn.room.id;
+      await this.#deps.store.setClosingRoom(id, { record: conn.room.toString(), since: (this.#deps.now ?? Date.now)() });
+      this.#finishClosing(id, conn);
+      await this.#forget();
+    });
   }
 
   #open(room: PeerRoom): void {

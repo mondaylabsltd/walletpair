@@ -58,8 +58,9 @@ describe('messages', () => {
     );
     fc.assert(
       fc.property(request, (r) => {
+        // Compared as JSON text: JSON has no -0, so it comes back as 0.
         const parsed = parseRequest(encode(r as Request));
-        expect(parsed).toEqual({ kind: 'request', request: r });
+        expect(JSON.stringify(parsed)).toBe(JSON.stringify({ kind: 'request', request: r }));
       }),
       RUNS,
     );

@@ -95,6 +95,14 @@ export class ReferenceWallet {
     transport.addEventListener('message', (event) => {
       void this.#receive((event as MessageEvent<Uint8Array>).data);
     });
+    // A closed room ends the session: forget its approval and records (core §2.4).
+    transport.addEventListener('state', () => {
+      // Leaving (the app stopping) keeps the session; only a close ends it.
+      if (transport.state !== 'closed' || (transport as { reason?: string }).reason === 'left') return;
+      for (const cancel of [...this.#waiting.values()]) cancel();
+      this.store.approved = [];
+      this.store.records.clear();
+    });
     // After a restart, queued events may have been lost (core §4.3).
     if (this.store.approved.length) this.#sendState();
   }
