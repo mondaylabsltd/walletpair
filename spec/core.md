@@ -67,9 +67,9 @@ The DApp side sends requests. The Wallet sends responses and events. A Wallet ig
 | Member | Rules |
 |---|---|
 | `id` | String of 1 to 128 printable ASCII characters (`0x20`–`0x7E`). Unique for the life of the session. A DApp side SHOULD use a random UUID: once restarted, it cannot know which ids it used before. |
-| `method` | String of 1 to 128 characters: a function name (§5 and the network specifications). |
+| `method` | String of 1 to 128 printable ASCII characters: a function name (§5 and the network specifications). |
 | `params` | The function's input, an array or an object as the function defines. Omitted when the function takes none. |
-| `origin` | Optional. The web origin (`scheme://host[:port]`, at most 2,048 characters) the request comes from, when one DApp side serves several sites, as a browser extension does. The Wallet shows it to the user. The DApp side asserts it; nobody verifies it. |
+| `origin` | Optional. The `https:` or `http:` web origin the request comes from, serialized as browsers do (`scheme://host[:port]`, no path, at most 2,048 characters), when one DApp side serves several sites, as a browser extension does. The Wallet shows it to the user. The DApp side asserts it; nobody verifies it. |
 
 ### 3.2 Response (Wallet → DApp side)
 
@@ -100,7 +100,7 @@ A Wallet handles each message in this order, and stops at the first step that ap
 1. Not a JSON object, or over 1 MiB: ignore it.
 2. `id` missing or invalid: ignore it, since there is no `id` to answer.
 3. `method` missing or invalid, or `params` present but neither an array nor an object, or `origin` invalid: answer `-32600`.
-4. An `id` already received in this session: follow §6.
+4. An `id` the Wallet has recorded in this session (§6): send the recorded response again, or nothing while the first request is in progress.
 5. Not yet approved (§4), and `method` is not `walletpair_connect` or `walletpair_cancel`: answer `4100`.
 6. `method` unknown or not supported: answer `4200`.
 7. `method` belongs to a namespace that is not approved: answer `4100`.
@@ -123,7 +123,7 @@ Input:
 
 | Member | Rules |
 |---|---|
-| `name` | Required. 1 to 128 characters. |
+| `name` | Required. A display name (§4.4). |
 | `url` | Optional. An `https:` URL (`http:` is allowed for `localhost`), at most 2,048 characters. |
 | `icon` | Optional. An `https:` URL, or a `data:image/` URL, at most 65,536 characters. |
 | `namespaces` | Required. 1 to 16 distinct namespace names. |
@@ -140,7 +140,7 @@ Output:
 }
 ```
 
-`wallet.name` (1 to 128 characters) is required and `wallet.icon` follows the rules for `icon` above. `state` is the session state (§4.2).
+`wallet.name` is a required display name and `wallet.icon` follows the rules for `icon` above. `state` is the session state (§4.2).
 
 Errors: `4001` if the user declines; `4200` if the Wallet serves none of the requested namespaces.
 
@@ -174,7 +174,11 @@ Whenever the session state changes, the Wallet sends a `state` event whose `data
 - When a function changes the state (switching chains, for example), the Wallet sends the `state` event before the function's response. PeerConnect delivers in order, so the DApp side has the new state when the call returns.
 - After a restart, a Wallet sends a `state` event with the current state, since events it had queued before may have been lost (PeerConnect §3.4).
 
-### 4.4 States
+### 4.4 Display names
+
+`name` and `wallet.name` are shown to people, so they are restricted: 1 to 128 Unicode characters, no leading or trailing white space, no control characters (category Cc), and none of the bidirectional formatting characters U+061C, U+200E, U+200F, U+202A–U+202E and U+2066–U+2069, which can make one name look like another.
+
+### 4.5 States
 
 Wallet, for each session:
 
@@ -229,7 +233,7 @@ So a request can arrive twice, and a response can be lost. WalletPair handles bo
 - **The Wallet never acts twice.** For every function with an effect, which is every function a network specification does not mark as read-only, the Wallet records the request `id` and its response for the life of the session, durably. It makes the record durable *before* the effect can no longer be undone wherever it can: a transaction's hash, for example, is known before the transaction is broadcast. When an `id` it has recorded arrives again, it sends the recorded response again; if the first request is still in progress, it sends nothing more.
 - **The DApp side asks again.** When its PeerConnect connection returns to `connected` after a break, a DApp side SHOULD send every request still waiting for an answer again, unchanged and with the same `id`. A Wallet that restarted and lost the response answers from its record. A DApp side MUST NOT send a request again under a new `id`, since the first one may have taken effect.
 - **A DApp side that restarts** has lost its pending calls, and ignores the responses that arrive for them. It sends `walletpair_connect` to learn the current state, and cancels what it can (§5).
-- **Read-only functions** are simply performed again.
+- **Read-only functions, `walletpair_connect` and `walletpair_cancel`** are not recorded; repeating them is harmless, so they are simply performed again.
 
 There are no other timeouts in WalletPair. A Wallet MAY answer `4001` to a request the user leaves unanswered. A DApp side MAY give up on a call after a time of its choosing, and then cancels it (§5).
 

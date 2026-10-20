@@ -7,7 +7,7 @@ export default defineConfig({
 		noExternal: ['lucide-svelte']
 	},
 	server: {
-		// The Protocol page renders ../SPEC.md, which lives outside this project.
-		fs: { allow: ['../SPEC.md'] }
+		// The Protocol pages render ../spec, which lives outside this project.
+		fs: { allow: ['../spec'] }
 	}
 });

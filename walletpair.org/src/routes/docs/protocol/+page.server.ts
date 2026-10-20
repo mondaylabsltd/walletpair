@@ -1,9 +1,8 @@
-import { marked } from 'marked';
-import spec from '../../../../../SPEC.md?raw';
+import { renderSpec, specPages } from '$lib/spec';
 
-// Rendered once at build time from the repository's SPEC.md, the single source of the protocol.
 export const prerender = true;
 
 export function load() {
-	return { html: marked.parse(spec, { async: false }) };
+	const page = specPages[0];
+	return { title: page.title, html: renderSpec(page) };
 }

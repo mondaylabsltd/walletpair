@@ -6,7 +6,12 @@
 <aside class="sidebar">
 	<nav>
 		{#each docsNav as item}
-			<a href={item.href} class="sidebar-link" class:active={page.url.pathname === item.href}>
+			<a
+				href={item.href}
+				class="sidebar-link"
+				class:indent={item.indent}
+				class:active={page.url.pathname === item.href}
+			>
 				{item.title}
 			</a>
 		{/each}
@@ -45,6 +50,10 @@
 	.sidebar-link:hover {
 		color: var(--color-text);
 		background: var(--color-surface);
+	}
+
+	.sidebar-link.indent {
+		padding-left: var(--space-6);
 	}
 
 	.sidebar-link.active {
