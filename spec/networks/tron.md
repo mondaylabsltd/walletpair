@@ -20,7 +20,7 @@ The TIP-1193 form of a chain ID is the same number as `0x` and 8 lowercase hexad
 
 CAIP-2 earlier wrote TRON chains in hexadecimal (`tron:0x2b6653dc`); that form is deprecated, and WalletPair uses only the decimal form.
 
-**Encodings.** Byte strings are hexadecimal without a `0x` prefix, as in TRON's own transaction JSON (`raw_data_hex`, `txID`, `signature`). A signature is 65 bytes, `r ‖ s ‖ v`, with `v` 27 or 28 (`1b` or `1c`).
+**Encodings.** Byte strings are hexadecimal without a `0x` prefix, as in TRON's own transaction JSON (`raw_data_hex`, `txID`, `signature`). Senders write lowercase digits; receivers accept either case. A signature is 65 bytes, `r ‖ s ‖ v`, with `v` 27 or 28 (`1b` or `1c`).
 
 ## 2. Functions
 
