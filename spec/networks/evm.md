@@ -8,7 +8,7 @@ This network specification adds EVM chains to [WalletPair Core](../core.md). It 
 |---|---|
 | Namespace | `eip155` |
 | Chain | `eip155:` followed by the EIP-155 chain ID in decimal, without leading zeros (CAIP-2): `eip155:1`, `eip155:137`. Pattern: `eip155:[1-9][0-9]{0,31}`. |
-| Account | `0x` followed by 40 lowercase hexadecimal digits. DApp sides compare addresses in function inputs without regard to case. |
+| Account | `0x` followed by 40 lowercase hexadecimal digits. Addresses in function inputs may use any case (EIP-55 included) and are compared without regard to case. |
 
 Function inputs and outputs use Ethereum's JSON-RPC encoding (EIP-1474): byte strings are `0x`-prefixed hexadecimal with two digits per byte, and quantities are `0x`-prefixed hexadecimal without leading zeros (`0x0` for zero). Where a function names a chain by its EIP-155 chain ID, it uses that quantity form: `0x1` is `eip155:1`.
 

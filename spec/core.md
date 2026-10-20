@@ -38,7 +38,7 @@ walletpair:wss://relay.example.com#q3V0…
 
 The Wallet removes the prefix and joins the room with the rest. A Wallet MUST reject a URI whose remainder is not a valid PeerConnect v1 invite; this is how a future incompatible version will be told apart (§9).
 
-Until the room is paired, the invite is a bearer credential (PeerConnect §8.3). The DApp side shows it only on its own screen and does not log or transmit it.
+Until the room is paired, the invite is a bearer credential (PeerConnect §8.3). The DApp side shows it only on its own screen, or lets the user copy it, and never logs or sends it anywhere itself.
 
 ### 2.3 Messages on the wire
 
@@ -124,8 +124,8 @@ Input:
 | Member | Rules |
 |---|---|
 | `name` | Required. A display name (§4.4). |
-| `url` | Optional. An `https:` URL (`http:` is allowed for `localhost`), at most 2,048 characters. |
-| `icon` | Optional. An `https:` URL, or a `data:image/` URL, at most 65,536 characters. |
+| `url` | Optional. An `https:` URL (`http:` is allowed for `localhost` and `127.0.0.1`), at most 2,048 characters. |
+| `icon` | Optional. An `https:` URL, or a base64 `data:` URL of a PNG, JPEG, WebP, GIF or SVG image (`data:image/png;base64,…`), at most 65,536 characters. |
 | `namespaces` | Required. 1 to 16 distinct namespace names. |
 
 Output:
