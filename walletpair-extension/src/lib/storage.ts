@@ -1,3 +1,4 @@
+import { browser } from 'wxt/browser';
 import { DEFAULT_RELAY_URL, STORAGE_KEYS } from './constants';
 import type { ActivityEntry, ExtensionSettings } from './types';
 import type { SessionState, WalletInfo } from './walletpair/protocol';
@@ -8,12 +9,12 @@ const defaults: ExtensionSettings = {
 };
 
 async function read<T>(key: string, fallback: T): Promise<T> {
-  const result = await chrome.storage.local.get(key);
+  const result = await browser.storage.local.get(key);
   return (result[key] as T | undefined) ?? fallback;
 }
 
 function write(key: string, value: unknown): Promise<void> {
-  return value === undefined ? chrome.storage.local.remove(key) : chrome.storage.local.set({ [key]: value });
+  return value === undefined ? browser.storage.local.remove(key) : browser.storage.local.set({ [key]: value });
 }
 
 // Read-modify-write updates of one key run one at a time, so concurrent

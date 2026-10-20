@@ -3,6 +3,7 @@
  * (window messages) and the background (a runtime port). The background learns
  * the page's origin from the port, never from the page.
  */
+import { browser, type Browser } from 'wxt/browser';
 import { MSG_CHANNEL } from '@/lib/constants';
 import type { BackgroundMessage, ContentMessage, PageMessage, PageMessageBody } from '@/lib/types';
 
@@ -17,15 +18,15 @@ export default defineContentScript({
     // WalletPair serves web pages only.
     const web = location.protocol === 'https:' || location.protocol === 'http:';
 
-    let port: chrome.runtime.Port | null = null;
+    let port: Browser.runtime.Port | null = null;
     let gone = false;
     /** Calls sent to the background and not yet answered. */
     const inFlight = new Set<string>();
 
-    function connect(): chrome.runtime.Port | null {
+    function connect(): Browser.runtime.Port | null {
       if (port || gone) return port;
       try {
-        port = chrome.runtime.connect({ name: 'walletpair-content' });
+        port = browser.runtime.connect({ name: 'walletpair-content' });
       } catch {
         // The extension was updated or removed; this page must be reloaded.
         gone = true;
@@ -44,7 +45,7 @@ export default defineContentScript({
         // The background restarted; it cancels what it had sent the Wallet.
         for (const id of inFlight) fail(id, 4900, 'WalletPair restarted, please try again');
         inFlight.clear();
-        if (!chrome.runtime?.id) gone = true;
+        if (!browser.runtime?.id) gone = true;
         else setTimeout(() => send({ kind: 'hello' }), 250);
       });
       return port;
@@ -79,7 +80,7 @@ export default defineContentScript({
 
     // Sent synchronously from a page's click, so the background may open its panel.
     window.addEventListener('walletpair:open-panel', () => {
-      chrome.runtime.sendMessage({ action: 'open-panel' }).catch(() => {});
+      browser.runtime.sendMessage({ action: 'open-panel' }).catch(() => {});
     });
 
     // The page script may have greeted before this script was listening.

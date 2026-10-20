@@ -70,6 +70,8 @@ export interface ExtensionState {
   sites: { origin: string; namespaces: string[] }[];
   approvals: SiteApproval[];
   pending: PendingCall[];
+  /** The last action that failed, for the side panel to show. */
+  error?: string;
 }
 
 /** Side panel → background. */

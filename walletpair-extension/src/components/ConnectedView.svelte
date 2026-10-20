@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { browser } from 'wxt/browser';
   import type { ActivityEntry, ExtensionState } from '@/lib/types';
   import ActivityLog from './ActivityLog.svelte';
   import SigningToast from './SigningToast.svelte';
@@ -14,7 +15,7 @@
   let copied = $state<string | undefined>(undefined);
 
   function updateCurrentOrigin() {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    browser.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const url = tabs[0]?.url;
       if (!url) return;
       try {
@@ -29,23 +30,23 @@
     updateCurrentOrigin();
     const onTabActivated = () => updateCurrentOrigin();
     const onWindowFocused = (windowId: number) => {
-      if (windowId !== chrome.windows.WINDOW_ID_NONE) updateCurrentOrigin();
+      if (windowId !== browser.windows.WINDOW_ID_NONE) updateCurrentOrigin();
     };
     const onTabUpdated = (_tabId: number, info: { url?: string }) => {
       if (info.url) updateCurrentOrigin();
     };
-    chrome.tabs.onActivated.addListener(onTabActivated);
-    chrome.windows?.onFocusChanged.addListener(onWindowFocused);
-    chrome.tabs.onUpdated.addListener(onTabUpdated);
+    browser.tabs.onActivated.addListener(onTabActivated);
+    browser.windows?.onFocusChanged.addListener(onWindowFocused);
+    browser.tabs.onUpdated.addListener(onTabUpdated);
 
     const load = () => getActivityLog().then((a) => (activity = a));
     load();
     const timer = setInterval(load, 2000);
     return () => {
       clearInterval(timer);
-      chrome.tabs.onActivated.removeListener(onTabActivated);
-      chrome.windows?.onFocusChanged.removeListener(onWindowFocused);
-      chrome.tabs.onUpdated.removeListener(onTabUpdated);
+      browser.tabs.onActivated.removeListener(onTabActivated);
+      browser.windows?.onFocusChanged.removeListener(onWindowFocused);
+      browser.tabs.onUpdated.removeListener(onTabUpdated);
     };
   });
 

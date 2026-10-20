@@ -8,88 +8,22 @@
 // Needs `wxt build` first (pnpm test:e2e does it). HEADLESS=0 shows the browser.
 
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
-import * as esbuild from 'esbuild';
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { TronWeb, utils as tronUtils } from 'tronweb';
 import { keccak256, verifyMessage, verifyTypedData } from 'viem';
 import { base58Encode } from '../src/lib/walletpair/codec';
 import { startRelay } from '../test/relay';
 import { WalletDevice } from '../test/wallet/device';
-import type { Prompts } from '../test/wallet/wallet';
+import { here, phone, results, serveDapp, step, waitFor, type Dapp } from './harness';
 
-const here = dirname(fileURLToPath(import.meta.url));
 const extensionPath = join(here, '..', '.output', 'chrome-mv3');
 
-type Dapp = Record<string, (...args: never[]) => unknown>;
 declare const dapp: Dapp;
 
-const results: { step: string; ms: number }[] = [];
-async function step<T>(name: string, run: () => Promise<T>): Promise<T> {
-  const started = performance.now();
-  try {
-    const value = await run();
-    const ms = performance.now() - started;
-    results.push({ step: name, ms });
-    console.log(`  ✓ ${name} (${ms.toFixed(0)} ms)`);
-    return value;
-  } catch (error) {
-    console.log(`  ✗ ${name}`);
-    throw error;
-  }
-}
-
-async function waitFor<T>(what: string, poll: () => Promise<T | undefined> | T | undefined, ms = 20_000): Promise<T> {
-  const deadline = Date.now() + ms;
-  for (;;) {
-    const value = await poll();
-    if (value !== undefined && value !== false) return value;
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-}
-
-/** Scriptable phone: approves by default; `hold()` keeps the next request waiting. */
-function phone() {
-  const origins: (string | undefined)[] = [];
-  let holding = false;
-  const prompts: Prompts = {
-    connect: async (_, offered, origin) => {
-      origins.push(origin);
-      return offered;
-    },
-    approve: () => (holding ? new Promise<boolean>(() => {}) : Promise.resolve(true)),
-  };
-  return { prompts, origins, hold: (on: boolean) => (holding = on) };
-}
-
 async function main(): Promise<void> {
-  // The test dApp, bundled for the browser.
-  const bundle = await esbuild.build({
-    entryPoints: [join(here, 'dapp.ts')],
-    bundle: true,
-    format: 'iife',
-    platform: 'browser',
-    target: 'es2022',
-    write: false,
-    define: { 'process.env.NODE_ENV': '"production"', global: 'globalThis' },
-    logLevel: 'error',
-  });
-  const script = bundle.outputFiles[0].contents;
-  const html = await readFile(join(here, 'dapp.html'));
-  const server = createServer((request, response) => {
-    if (request.url === '/dapp.js') response.writeHead(200, { 'content-type': 'text/javascript' }).end(script);
-    else response.writeHead(200, { 'content-type': 'text/html' }).end(html);
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const port = (server.address() as { port: number }).port;
-  const siteA = `http://127.0.0.1:${port}`;
-  const siteB = `http://localhost:${port}`;
-
+  const { server, siteA, siteB, port } = await serveDapp();
   const relay = await startRelay();
   const browser: Browser = await puppeteer.launch({
     headless: process.env.HEADLESS !== '0',
@@ -166,7 +100,7 @@ async function main(): Promise<void> {
         const times: number[] = [];
         for (let i = 0; i < 20; i++) {
           const started = performance.now();
-          await dapp.evmSign(`latency ${i}` as never);
+          await dapp.evmSign(`latency ${i}`);
           times.push(performance.now() - started);
         }
         return times;
@@ -208,7 +142,7 @@ async function main(): Promise<void> {
         raw_data,
         raw_data_hex: tronUtils.transaction.txPbToRawDataHex(pb).toLowerCase(),
       };
-      const signed = (await pageA.evaluate((t) => dapp.tronSignTransaction(t as never), tx)) as { signature: string[]; txID: string };
+      const signed = (await pageA.evaluate((t) => dapp.tronSignTransaction(t), tx)) as { signature: string[]; txID: string };
       assert.equal(signed.signature.length, 1);
       assert.equal(TronWeb.address.fromHex(tronUtils.crypto.ecRecover(signed.txID, signed.signature[0])), tronAddress);
     });
@@ -274,7 +208,7 @@ async function main(): Promise<void> {
         // The first call may meet the old port; the provider's caller retries as a user would.
         for (let i = 0; ; i++) {
           try {
-            return await dapp.evmSign('after restart' as never);
+            return await dapp.evmSign('after restart');
           } catch (error) {
             if (i === 3) throw error;
             await new Promise((r) => setTimeout(r, 300));

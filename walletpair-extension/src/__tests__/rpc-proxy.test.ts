@@ -8,18 +8,20 @@ async function proxyRpcCall(chainId: number, method: string, params: unknown) {
   return evmProxyRpcCall(String(chainId), method, params, (await getSettings()).rpcUrls);
 }
 
-// ── Mock chrome.storage.local (needed by getSettings) ──────────────────
+// ── Mock chrome.storage.local (needed by getSettings), before the imports run ──
 
-const store: Record<string, unknown> = {};
-
-vi.stubGlobal('chrome', {
-  storage: {
-    local: {
-      get: vi.fn(async (key: string) => ({ [key]: store[key] })),
-      set: vi.fn(async (items: Record<string, unknown>) => Object.assign(store, items)),
-      remove: vi.fn(async (key: string) => { delete store[key]; }),
+const store = vi.hoisted(() => {
+  const store: Record<string, unknown> = {};
+  (globalThis as Record<string, unknown>).chrome = {
+    storage: {
+      local: {
+        get: async (key: string) => ({ [key]: store[key] }),
+        set: async (items: Record<string, unknown>) => void Object.assign(store, items),
+        remove: async (key: string) => void delete store[key],
+      },
     },
-  },
+  };
+  return store;
 });
 
 // ── Mock global fetch ──────────────────────────────────────────────────

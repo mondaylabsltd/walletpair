@@ -20,22 +20,25 @@ import {
 import { DEFAULT_RELAY_URL } from '../constants';
 import type { ActivityEntry } from '../types';
 
-const store: Record<string, unknown> = {};
-
-vi.stubGlobal('chrome', {
-  storage: {
-    local: {
-      get: vi.fn(async (key: string) => ({ [key]: structuredClone(store[key]) })),
-      set: vi.fn(async (items: Record<string, unknown>) => {
-        // Writes land after a delay, as real storage does, so lost updates would show.
-        await new Promise((resolve) => setTimeout(resolve, 1));
-        Object.assign(store, structuredClone(items));
-      }),
-      remove: vi.fn(async (keys: string | string[]) => {
-        for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
-      }),
+// Installed before the imports run: wxt/browser picks the API object when it loads.
+const store = vi.hoisted(() => {
+  const store: Record<string, unknown> = {};
+  (globalThis as Record<string, unknown>).chrome = {
+    storage: {
+      local: {
+        get: async (key: string) => ({ [key]: structuredClone(store[key]) }),
+        set: async (items: Record<string, unknown>) => {
+          // Writes land after a delay, as real storage does, so lost updates would show.
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          Object.assign(store, structuredClone(items));
+        },
+        remove: async (keys: string | string[]) => {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
+        },
+      },
     },
-  },
+  };
+  return store;
 });
 
 beforeEach(() => {
