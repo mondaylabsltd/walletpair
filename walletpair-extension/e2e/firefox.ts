@@ -85,13 +85,6 @@ async function main(): Promise<void> {
       const signature = (await page.evaluate(() => dapp.tronSignMessage('hello firefox'))) as string;
       assert.equal(await new TronWeb({ fullHost: 'http://127.0.0.1:9' }).trx.verifyMessageV2('hello firefox', signature), address);
     });
-    await step('TRON: WalletPairAdapter is listed as WalletPair and signs', async () => {
-      const { name, address } = (await page.evaluate(() => dapp.walletPairTronConnect())) as { name: string; address: string };
-      assert.equal(name, 'WalletPair');
-      assert.equal(address, device!.tron.accounts[0]);
-      const signature = (await page.evaluate(() => dapp.walletPairTronSignMessage('hello walletpair'))) as string;
-      assert.equal(await new TronWeb({ fullHost: 'http://127.0.0.1:9' }).trx.verifyMessageV2('hello walletpair', signature), address);
-    });
     await step('Solana: wallet adapter connects and signs', async () => {
       const address = (await page.evaluate(() => dapp.solanaConnect())) as string;
       assert.equal(address, device!.solana.accounts[0]);

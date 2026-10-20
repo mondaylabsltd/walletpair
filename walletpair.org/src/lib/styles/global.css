@@ -91,7 +91,6 @@ code {
 	/* Max widths */
 	--max-w-content: 720px;
 	--max-w-wide: 1120px;
-	--max-w-playground: 1280px;
 }
 
 /* ── Utility ── */

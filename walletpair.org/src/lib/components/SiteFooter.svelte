@@ -2,7 +2,7 @@
 	<div class="footer-inner">
 		<span class="copyright">WalletPair Protocol</span>
 		<nav class="footer-nav">
-			<a href="https://github.com/atshelchin/walletpair" target="_blank" rel="noopener">GitHub</a>
+			<a href="https://github.com/mondaylabsltd/walletpair" target="_blank" rel="noopener">GitHub</a>
 			<span class="sep">·</span>
 			<a href="/docs">Docs</a>
 			<span class="sep">·</span>

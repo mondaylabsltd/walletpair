@@ -37,15 +37,13 @@ Owner instructions (2026-10-20): WalletPair stops running its own relay and tran
 | `46d4475`, `0610564` | Website and READMEs for v2. |
 | `7893b91` | Fixed a race that could lose `walletpair_connect`; background hardening. |
 | `4b172c3`, `75ab250` | CI checks vectors are reproducible; benchmark; spec wording. |
-| (follow-up) | Owner's decisions: default relay `wss://relay.peerconnect.dev`; TRON dApps should show the name WalletPair → `walletpair-tron-adapter/`. |
+| (follow-up) | Owner's decisions: default relay `wss://relay.peerconnect.dev`. A TRON adapter (`walletpair-tron-adapter/`) was added to show WalletPair by name in TRON's wallet adapters, then removed at the owner's request. |
 
 **Specification** (`spec/`): `core.md` (pairing URI, messages and limits, receive procedure, `walletpair_connect`, session state and the `state` event, state tables, `walletpair_cancel`, restarts and repeated requests, errors, security, evolution); `networks/evm.md`, `networks/tron.md`, `networks/solana.md`; `test-vectors/` (core 65 cases; EVM 36, TRON 18, Solana 20 input cases plus signing vectors).
 
 **Extension**: background (`lib/background/session.ts`, `router.ts`), page providers (`lib/inpage/`), shared protocol code (`lib/walletpair/`), side panel (pairing, per-network state, site approvals, connected sites, pending calls, activity). Tests: `src/**/__tests__`, `test/` (reference Wallet, session, vectors, properties, providers, session manager, integration, benchmark), `e2e/` (Chrome, Firefox).
 
 **Website**: Overview, Install (Chrome and Firefox), Protocol pages rendered from `spec/` at build time.
-
-**TRON adapter** (`walletpair-tron-adapter/`, `@walletpair/tronwallet-adapter`): a `@tronweb3/tronwallet-adapter` adapter named WalletPair, written to that library's conventions so it can be contributed upstream.
 
 ## 3. Decisions
 
@@ -68,7 +66,8 @@ Owner instructions (2026-10-20): WalletPair stops running its own relay and tran
 | EVM: dropped `eth_sign`, typed data before v4, permission methods (except a local `wallet_revokePermissions`). | Blind signing and legacy formats; wagmi falls back on 4200. | Old dApps using them fail. |
 | TRON hex is lowercase when sent, either case accepted. | The vectors exposed TronWeb writing `1C`. | — |
 | Default relay `wss://relay.peerconnect.dev`. | Owner's choice; the integration suite and the full Chrome run pass against it. | — |
-| A WalletPair adapter for `@tronweb3/tronwallet-adapter`, plus `eth_chainId` and `wallet_revokePermissions` on the TIP-1193 provider. | Owner wants the name WalletPair shown. That library hard-codes each wallet's name in its adapter and has no generic TIP-6963 adapter, so only an adapter of our own can show it. The adapter answers `network()` from `eth_chainId` instead of reading block 0 from a node. | dApps must add it to their list until it is published and, ideally, included upstream. |
+| `eth_chainId` and `wallet_revokePermissions` on the TIP-1193 provider. | TIP-1193 names `eth_chainId` as the way to read the chain; revoking gives TRON sites a real disconnect, as on EVM. | — |
+| No WalletPair adapter for `@tronweb3/tronwallet-adapter`. | One was written and tested, then removed at the owner's request. That library hard-codes each wallet's name in its adapter, so without one WalletPair cannot appear there under its own name. | dApps on that library reach WalletPair through `window.tronLink` and label it "TronLink". |
 | Keep the `window.tronLink` fallback. | dApps that list only TronLinkAdapter still work with WalletPair; removing it would make WalletPair unusable there. | Those dApps label it "TronLink". |
 | Vendor the PeerConnect JS build into the extension. | PeerConnect is unpublished; a pinned, tested build works offline and in CI. | Manual updates (documented); replace with a package once published. |
 | Firefox stays MV2 (persistent background) with WXT's `browser` API. | A persistent page keeps the PeerConnect connection; MV3 event pages would suspend. | MV2 may need migrating later. |
@@ -82,9 +81,8 @@ Owner instructions (2026-10-20): WalletPair stops running its own relay and tran
 | Conformance vectors | Core 65 cases; EVM 36, TRON 18, Solana 20 input cases; signing vectors from viem, TronWeb 6, web3.js 1.x and Node's Ed25519, reproduced byte for byte by the reference Wallet (written on `@noble`), including a v0 transaction where it is the second signer. CI regenerates them and fails on any difference. |
 | Property tests (fast-check) | Every parser and check: never throws on arbitrary input (thousands of cases each); round trips of messages and encodings; random web3.js transactions parse with the right signers and every truncation is rejected; a client fed random messages stays consistent. |
 | Integration (real relay) | The extension's SessionManager and Router over the vendored PeerConnect and `peerconnect-relay`: pairing, sites, calls on three networks, a service-worker restart from storage, a phone away and back, chain changes, ending. 4/4. |
-| Chrome 148 end to end | Built extension, test dApp with viem, `@tronweb3` TronLinkAdapter and WalletPairAdapter, Solana's StandardWalletAdapter; reference Wallet as the phone over a real relay. 22 steps including site approval by clicking in the side panel, cancellation when a page closes, a real service-worker stop, Disconnect. 5 consecutive passes after the race fix (2 of 4 failed before it). Also 22/22 against the live `wss://relay.peerconnect.dev`. |
-| Firefox 155 end to end | Background starts, providers injected, pairing, a signature on each network (TRON through both adapters), Disconnect from the popup. 7/7. |
-| TRON adapter | 7 unit tests (happy-dom, a fake TIP-6963 provider); type-checks and builds; used by both browser runs against the real extension. |
+| Chrome 148 end to end | Built extension, test dApp with viem, `@tronweb3` TronLinkAdapter, Solana's StandardWalletAdapter; reference Wallet as the phone over a real relay. 21 steps including site approval by clicking in the side panel, cancellation when a page closes, a real service-worker stop, Disconnect. 5 consecutive passes after the race fix (2 of 4 failed before it). Also passed in full against the live `wss://relay.peerconnect.dev`. |
+| Firefox 155 end to end | Background starts, providers injected, pairing, a signature on each network, Disconnect from the popup. 6/6. |
 | Builds | Chrome MV3 and Firefox MV2 build; svelte-check clean. |
 | Website | svelte-check clean; build; served by workerd (`wrangler dev`): all pages 200, unknown pages 404. |
 | PeerConnect build | Its own JS suite passes on the vendored build, including interop with its Rust client. |
@@ -107,7 +105,7 @@ Against the live `wss://relay.peerconnect.dev` (behind Cloudflare), from this ma
 - **PeerConnect** is a draft ("wire format may still change"), not independently audited, unpublished, and vendored here. The default relay is operated by PeerConnect; WalletPair depends on it staying up (users can choose another in Settings).
 - **CI** runs unit, property and conformance tests and the builds, but not the integration or browser tests: they need a PeerConnect relay, whose source is not reachable from CI.
 - **No mobile Wallet app** exists yet; only the reference Wallet used in tests.
-- **TRON:** the signing object does not build, query or broadcast, so dApps that use an injected `tronWeb` for everything (rather than their own TronWeb plus an adapter) do not work; `adapter.network()` (reads block 0) is not supported; `multiSign` needs `Permission_id` already set; TronLink's legacy `postMessage` events are not emitted; dApps that use tronwallet-adapter show WalletPair under its own name only once they add `WalletPairAdapter` (unpublished yet); with only TronLinkAdapter they show it as "TronLink"; with TronLink installed, WalletPair leaves the TRON globals to it and is reachable through TIP-6963 and its adapter only.
+- **TRON:** the signing object does not build, query or broadcast, so dApps that use an injected `tronWeb` for everything (rather than their own TronWeb plus an adapter) do not work; `adapter.network()` (reads block 0) is not supported; `multiSign` needs `Permission_id` already set; TronLink's legacy `postMessage` events are not emitted; dApps that use tronwallet-adapter show WalletPair as "TronLink" (through the `window.tronLink` fallback); with TronLink installed, WalletPair leaves the TRON globals to it and is reachable through TIP-6963 and its adapter only.
 - **Solana:** no v1 transactions, `signIn`, off-chain messages or `signAndSendAllTransactions`; three clusters only.
 - **EVM:** read-only calls go to public RPC endpoints (they learn addresses and calls).
 - **Extension memory:** PeerConnect keeps unsent messages in memory; if the browser stops the service worker while the phone is away, queued calls are lost (and cancelled on restart). Chrome keeps the worker alive while the WebSocket is active.
@@ -118,12 +116,11 @@ Against the live `wss://relay.peerconnect.dev` (behind Cloudflare), from this ma
 
 ## 6. For the owner to decide
 
-Decided (2026-10-20): default relay `wss://relay.peerconnect.dev`; TRON dApps should show WalletPair by name (done with `WalletPairAdapter`).
+Decided (2026-10-20): default relay `wss://relay.peerconnect.dev`; no TRON adapter package in this repository.
 
-1. **Publish `@walletpair/tronwallet-adapter`** (the npm scope `@walletpair` needs an owner). Contributing it upstream to tronweb3/tronwallet-adapter is deferred (owner, 2026-10-20); until then dApps add the package themselves.
-2. **Publish PeerConnect** (npm, and a reachable repository), so the vendored copy becomes a dependency and CI can run the relay tests.
-3. **v1 retirement:** what to do with `relay.walletpair.org`, the v0.1.1 extension release and the `walletpair-sdk` npm package.
-4. **Next protocol features**, if wanted: Solana `signIn` and v1 transactions, TRON TIP-712.
-5. **Push the branch and release** extension 0.2.0 (external actions I have not taken).
+1. **Publish PeerConnect** (npm, and a reachable repository), so the vendored copy becomes a dependency and CI can run the relay tests.
+2. **v1 retirement:** what to do with `relay.walletpair.org`, the v0.1.1 extension release and the `walletpair-sdk` npm package.
+3. **Next protocol features**, if wanted: Solana `signIn` and v1 transactions, TRON TIP-712.
+4. **Release** extension 0.2.0 (external actions I have not taken).
 
 One side effect to report: while testing the website I ran `pkill -f "wrangler dev"`, which matched by command line. A `workerd` of your vela-wallet project was left without its parent afterwards (PID 41802); it may have been that command. I stopped only my own processes by PID after that.

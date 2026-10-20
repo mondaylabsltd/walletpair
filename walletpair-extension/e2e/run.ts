@@ -130,7 +130,7 @@ async function main(): Promise<void> {
       })) as number[];
     });
 
-    console.log('TRON (TronLinkAdapter compatibility, then WalletPairAdapter)');
+    console.log('TRON (TronLinkAdapter)');
     const tronAddress = await step('adapter connects; granted by the phone prompt', async () => {
       const address = (await pageA.evaluate(() => dapp.tronConnect())) as string;
       assert.equal(address, device!.tron.accounts[0]);
@@ -172,19 +172,6 @@ async function main(): Promise<void> {
     };
     await step('signTransaction (TronWeb-built transfer, signature recovers the owner)', async () => {
       signedByOwner((await pageA.evaluate((t) => dapp.tronSignTransaction(t), tronTransfer())) as { signature: string[]; txID: string });
-    });
-    await step('WalletPairAdapter: listed as WalletPair; connects, signs, reports the network', async () => {
-      const { name, address, network } = (await pageA.evaluate(() => dapp.walletPairTronConnect())) as {
-        name: string;
-        address: string;
-        network: { networkType: string; chainId: string };
-      };
-      assert.equal(name, 'WalletPair');
-      assert.equal(address, tronAddress);
-      assert.deepEqual([network.networkType, network.chainId], ['Nile', '0xcd8690dc']);
-      const signature = (await pageA.evaluate(() => dapp.walletPairTronSignMessage('hello walletpair'))) as string;
-      assert.equal(await new TronWeb({ fullHost: 'http://127.0.0.1:9' }).trx.verifyMessageV2('hello walletpair', signature), tronAddress);
-      signedByOwner((await pageA.evaluate((t) => dapp.walletPairTronSignTransaction(t), tronTransfer())) as { signature: string[]; txID: string });
     });
 
     console.log('Solana (wallet adapter over the Wallet Standard)');

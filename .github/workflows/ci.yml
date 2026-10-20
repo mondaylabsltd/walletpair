@@ -43,28 +43,6 @@ jobs:
       - name: Build Firefox
         run: pnpm build:firefox
 
-  tron-adapter:
-    name: TRON adapter (check + test + build)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: walletpair-tron-adapter
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: walletpair-tron-adapter/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: pnpm test
-      - run: pnpm build
-
   website:
     name: Website (check + build)
     runs-on: ubuntu-latest

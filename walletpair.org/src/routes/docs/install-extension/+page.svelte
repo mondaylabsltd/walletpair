@@ -2,7 +2,7 @@
 	import CodeBlock from '$lib/components/CodeBlock.svelte';
 	import { Globe, Download, FolderOpen, Puzzle } from 'lucide-svelte';
 
-	const cloneCode = `git clone https://github.com/atshelchin/walletpair.git
+	const cloneCode = `git clone https://github.com/mondaylabsltd/walletpair.git
 cd walletpair/walletpair-extension
 pnpm install
 pnpm build`;
@@ -29,7 +29,7 @@ pnpm build`;
 		</div>
 		<p>
 			Go to the
-			<a href="https://github.com/atshelchin/walletpair/releases" target="_blank" rel="noopener">
+			<a href="https://github.com/mondaylabsltd/walletpair/releases" target="_blank" rel="noopener">
 				GitHub Releases
 			</a>
 			page and download the latest <code>walletpair-extension-chrome-mv3.zip</code>.

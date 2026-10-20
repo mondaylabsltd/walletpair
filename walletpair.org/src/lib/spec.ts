@@ -2,7 +2,7 @@
 // (imported from +page.server.ts files that are prerendered).
 import { Marked, type Tokens } from 'marked';
 
-const REPOSITORY = 'https://github.com/atshelchin/walletpair/blob/main/';
+const REPOSITORY = 'https://github.com/mondaylabsltd/walletpair/blob/main/';
 
 export interface SpecPage {
 	slug: string;

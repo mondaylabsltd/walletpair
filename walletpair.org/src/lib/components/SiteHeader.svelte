@@ -23,7 +23,7 @@
 				</a>
 			{/each}
 			<a
-				href="https://github.com/atshelchin/walletpair"
+				href="https://github.com/mondaylabsltd/walletpair"
 				class="nav-link"
 				target="_blank"
 				rel="noopener"
@@ -60,7 +60,7 @@
 				</a>
 			{/each}
 			<a
-				href="https://github.com/atshelchin/walletpair"
+				href="https://github.com/mondaylabsltd/walletpair"
 				class="nav-link"
 				target="_blank"
 				rel="noopener"
