@@ -1,5 +1,6 @@
 packages:
-  - .
+  - walletpair-extension
+  - walletpair.org
 
 onlyBuiltDependencies:
   - workerd

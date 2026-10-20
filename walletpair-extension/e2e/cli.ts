@@ -108,7 +108,7 @@ async function main(): Promise<void> {
       wallet = new CliWallet(['--state', state, uri]);
       const accounts = await connecting;
       assert.equal(accounts[0].toLowerCase(), wallet.account('eip155'));
-      assert.ok(wallet.output.some((l) => l.includes(`for ${siteA}`)), 'the terminal shows the requesting site');
+      assert.ok(wallet.output.some((l) => l.includes(`Connect from ${siteA}`)), 'the terminal shows the requesting site');
       return accounts[0] as `0x${string}`;
     });
 
@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     await step('personal_sign approved in the terminal', async () => {
       const signature = (await page.evaluate(() => dapp.evmSign('hello from the CLI'))) as `0x${string}`;
       assert.ok(await verifyMessage({ address: evmAddress, message: 'hello from the CLI', signature }));
-      assert.ok(wallet!.output.some((l) => l.includes('"hello from the CLI"')), 'the terminal shows the message as text');
+      assert.ok(wallet!.output.some((l) => l.includes('Message: hello from the CLI')), 'the terminal shows the message as text');
     });
     await step('typed data for another chain is refused before any prompt (4901)', async () => {
       // The CLI wallet starts on Sepolia; the test dApp's domain names chain 1.
@@ -179,7 +179,8 @@ async function main(): Promise<void> {
       const tx = { visible: false, txID: tronUtils.transaction.txPbToTxID(pb).replace(/^0x/, ''), raw_data, raw_data_hex: tronUtils.transaction.txPbToRawDataHex(pb).toLowerCase() };
       const signed = (await page.evaluate((t) => dapp.tronSignTransaction(t), tx)) as { signature: string[]; txID: string };
       assert.equal(TronWeb.address.fromHex(tronUtils.crypto.ecRecover(signed.txID, signed.signature[0])), tronAddress);
-      assert.ok(wallet!.output.some((l) => l.includes(`TransferContract (TRX), owner ${tronAddress}`)));
+      assert.ok(wallet!.output.some((l) => l.includes('Contract: TRX transfer (TransferContract)')));
+      assert.ok(wallet!.output.some((l) => l.includes(`Owner: ${tronAddress}`)));
     });
 
     console.log('Solana');

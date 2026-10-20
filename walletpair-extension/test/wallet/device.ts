@@ -2,10 +2,10 @@
 // walletpair: URI, keeps its room record and Wallet store, and can restart.
 
 import { connect, Room, type Connection } from '../../vendor/peerconnect/index.js';
-import { evmSigner } from './evm';
-import { solanaSigner } from './solana';
-import { tronSigner } from './tron';
-import { ReferenceWallet, emptyStore, type Prompts, type WalletStore } from './wallet';
+import { evmSigner } from '../../src/wallet/evm';
+import { solanaSigner } from '../../src/wallet/solana';
+import { tronSigner } from '../../src/wallet/tron';
+import { ReferenceWallet, emptyStore, type Prompts, type WalletStore } from '../../src/wallet/wallet';
 
 export class WalletDevice {
   record: string;

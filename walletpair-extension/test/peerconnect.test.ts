@@ -13,7 +13,7 @@ import { CallError, WalletPairClient } from '../src/lib/walletpair/client';
 import { namespaceRules } from '../src/lib/walletpair/networks';
 import { relayAvailable, startRelay, until } from './relay';
 import { WalletDevice } from './wallet/device';
-import type { Prompts } from './wallet/wallet';
+import type { Prompts } from '../src/wallet/wallet';
 
 const ORIGIN = 'https://app.example';
 

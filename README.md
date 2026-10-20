@@ -33,6 +33,10 @@ Wallet → DApp    {"event":"state","data":{"eip155":{"chain":"eip155:137",…},
 
 Join the room from the QR code with a PeerConnect client, answer the functions of the networks you support, and send the `state` event. Check your implementation against [`spec/test-vectors/`](./spec/test-vectors/): the message cases, which inputs each function accepts, and the exact signatures to expect for fixed keys.
 
+## Development
+
+The extension and the website form one pnpm workspace: `pnpm install` at the repository root installs both. The website's demo wallet uses the extension's protocol code and reference Wallet.
+
 ## Testing
 
 See [the extension's README](./walletpair-extension/README.md#tests): unit, property and conformance tests run without anything else; integration and browser tests need a PeerConnect relay binary.

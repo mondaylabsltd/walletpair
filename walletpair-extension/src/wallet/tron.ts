@@ -4,9 +4,9 @@
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
-import { bytesToHex, hexToBytes } from '../../src/lib/walletpair/codec';
-import { TRON_NETWORKS, tron, tronAccount } from '../../src/lib/walletpair/networks/tron';
-import { parseTronRaw } from '../../src/lib/walletpair/networks/tron-transaction';
+import { bytesToHex, hexToBytes } from '../lib/walletpair/codec';
+import { TRON_NETWORKS, tron, tronAccount } from '../lib/walletpair/networks/tron';
+import { parseTronRaw } from '../lib/walletpair/networks/tron-transaction';
 import { WalletError, type Signer } from './wallet';
 
 export const TRON_TEST_KEY = 'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';

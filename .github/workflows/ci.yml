@@ -30,7 +30,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: walletpair-extension/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - name: Type / Svelte check
         run: pnpm check
@@ -59,7 +59,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: walletpair.org/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - name: Type / Svelte check
         run: pnpm check

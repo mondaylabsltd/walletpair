@@ -2,8 +2,8 @@
 
 import { keccak256, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { chainIdOf, chainOf, evm } from '../../src/lib/walletpair/networks/evm';
-import type { Json } from '../../src/lib/walletpair/protocol';
+import { chainIdOf, chainOf, evm } from '../lib/walletpair/networks/evm';
+import type { Json } from '../lib/walletpair/protocol';
 import { WalletError, type Signer } from './wallet';
 
 export const EVM_TEST_KEY: Hex = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';

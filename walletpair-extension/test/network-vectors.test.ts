@@ -9,10 +9,10 @@ import tronVectors from '../../spec/test-vectors/tron.json';
 import { bytesToHex, hexToBytes } from '../src/lib/walletpair/codec';
 import { evm, solana, tron, type Network } from '../src/lib/walletpair/networks';
 import type { Params } from '../src/lib/walletpair/protocol';
-import { evmSigner } from './wallet/evm';
-import { solanaSigner } from './wallet/solana';
-import { tronMessageDigest, tronSigner } from './wallet/tron';
-import type { PerformContext, Signer } from './wallet/wallet';
+import { evmSigner } from '../src/wallet/evm';
+import { solanaSigner } from '../src/wallet/solana';
+import { tronMessageDigest, tronSigner } from '../src/wallet/tron';
+import type { PerformContext, Signer } from '../src/wallet/wallet';
 
 interface Vectors {
   state: { chain: string; accounts: string[] };

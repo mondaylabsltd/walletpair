@@ -16,7 +16,8 @@
 		"gen": "wrangler types"
 	},
 	"dependencies": {
-		"lucide-svelte": "^1.0.1"
+		"lucide-svelte": "^1.0.1",
+		"walletpair-extension": "workspace:*"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^2.0.4",

@@ -10,10 +10,10 @@ import { CallError, WalletPairClient } from '../src/lib/walletpair/client';
 import { base64Decode, base64Encode, bytesToHex } from '../src/lib/walletpair/codec';
 import { namespaceRules } from '../src/lib/walletpair/networks';
 import { memoryPair, settle, type MemoryTransport } from './memory-transport';
-import { evmSigner } from './wallet/evm';
-import { solanaSigner } from './wallet/solana';
-import { tronSigner } from './wallet/tron';
-import { ReferenceWallet, emptyStore, type Prompts, type WalletStore } from './wallet/wallet';
+import { evmSigner } from '../src/wallet/evm';
+import { solanaSigner } from '../src/wallet/solana';
+import { tronSigner } from '../src/wallet/tron';
+import { ReferenceWallet, emptyStore, type Prompts, type WalletStore } from '../src/wallet/wallet';
 
 const DAPP = { name: 'Test DApp', url: 'https://app.example' };
 const ALL = ['eip155', 'tron', 'solana'];

@@ -9,8 +9,8 @@ import { connect, Room } from '../vendor/peerconnect/index.js';
 import { WalletPairClient } from '../src/lib/walletpair/client';
 import { namespaceRules } from '../src/lib/walletpair/networks';
 import { startRelay } from './relay';
-import { evmSigner } from './wallet/evm';
-import { ReferenceWallet } from './wallet/wallet';
+import { evmSigner } from '../src/wallet/evm';
+import { ReferenceWallet } from '../src/wallet/wallet';
 
 const approveAll = { connect: async (_: unknown, offered: string[]) => offered, approve: async () => true };
 

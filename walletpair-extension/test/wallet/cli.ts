@@ -18,15 +18,12 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { connect, Room, type Connection } from '../../vendor/peerconnect/index.js';
-import { base64Decode, bytesToHex, hexToBytes, isUtf8 } from '../../src/lib/walletpair/codec';
-import { tronAccount } from '../../src/lib/walletpair/networks/tron';
-import { parseTronRaw } from '../../src/lib/walletpair/networks/tron-transaction';
-import { parseTransaction } from '../../src/lib/walletpair/networks/solana-transaction';
-import type { Request, Response } from '../../src/lib/walletpair/protocol';
-import { evmSigner } from './evm';
-import { solanaSigner } from './solana';
-import { tronSigner } from './tron';
-import { ReferenceWallet, type Prompts, type WalletStore } from './wallet';
+import type { Response } from '../../src/lib/walletpair/protocol';
+import { describeConnect, describeRequest, type Description } from '../../src/wallet/describe';
+import { evmSigner } from '../../src/wallet/evm';
+import { solanaSigner } from '../../src/wallet/solana';
+import { tronSigner } from '../../src/wallet/tron';
+import { ReferenceWallet, type Prompts, type WalletStore } from '../../src/wallet/wallet';
 
 interface SavedState {
   record: string;
@@ -119,51 +116,15 @@ const signers = [
 
 // ── What the user is asked ──
 
-const text = (bytes: Uint8Array) => (isUtf8(bytes) ? JSON.stringify(new TextDecoder().decode(bytes)) : `0x${bytesToHex(bytes)}`);
-const TRON_CONTRACTS: Record<number, string> = { 1: 'TransferContract (TRX)', 2: 'TransferAssetContract (TRC-10)', 31: 'TriggerSmartContract' };
-
-function describe(request: Request): string {
-  const p = request.params as any;
-  const from = request.origin ? ` from ${request.origin}` : '';
-  const head = `→ ${request.method}${from}`;
-  try {
-    switch (request.method) {
-      case 'personal_sign':
-        return `${head}\n  account ${p[1]}\n  message ${text(hexToBytes(p[0].slice(2))!)}`;
-      case 'eth_signTypedData_v4': {
-        const typed = JSON.parse(p[1]);
-        return `${head}\n  account ${p[0]}\n  ${typed.primaryType} on ${JSON.stringify(typed.domain)}\n  ${JSON.stringify(typed.message)}`;
-      }
-      case 'eth_sendTransaction':
-        return `${head}\n  ${JSON.stringify(p[0])}\n  (signed, not broadcast)`;
-      case 'tron_signMessage':
-        return `${head}\n  account ${p.account}\n  message ${text(hexToBytes(p.message)!)}`;
-      case 'tron_signTransaction': {
-        const tx = parseTronRaw(hexToBytes(p.transaction)!);
-        const owner = tx?.contract.owner ? tronAccount(tx.contract.owner) : 'unknown';
-        const expires = tx?.expiration ? new Date(Number(tx.expiration)).toISOString() : 'unknown';
-        return `${head}\n  ${TRON_CONTRACTS[tx?.contract.type ?? -1] ?? `contract type ${tx?.contract.type}`}, owner ${owner}${owner === p.account ? '' : ' (multi-signature)'}\n  expires ${expires}`;
-      }
-      case 'solana_signTransactions':
-      case 'solana_signAndSendTransaction': {
-        const list: string[] = p.transactions ?? [p.transaction];
-        const parsed = list.map((t) => parseTransaction(base64Decode(t)!));
-        const versions = parsed.map((t) => `${t?.version === 0 ? 'v0' : t?.version} (${t?.numRequiredSignatures} signer(s))`).join(', ');
-        return `${head}\n  account ${p.account}${p.chain ? ` on ${p.chain}` : ''}\n  ${list.length} transaction(s): ${versions}`;
-      }
-      case 'solana_signMessage':
-        return `${head}\n  account ${p.account}\n  message ${text(base64Decode(p.message)!)}`;
-      default:
-        return `${head}\n  ${JSON.stringify(p)}`;
-    }
-  } catch {
-    return `${head}\n  ${JSON.stringify(p)}`;
-  }
+/** A description as terminal lines. */
+function show(description: Description): string {
+  const head = `→ ${description.title}${description.origin ? ` from ${description.origin}` : ''}`;
+  return [head, ...description.fields.map(([label, value]) => `  ${label}: ${value.replace(/\n\s*/g, ' ')}`)].join('\n');
 }
 
 const prompts: Prompts = {
   connect: async (params, offered, origin) => {
-    const question = `→ walletpair_connect from "${params.name}"${params.url ? ` (${params.url})` : ''}${origin ? `, for ${origin}` : ''}\n  namespaces: ${offered.join(', ')}`;
+    const question = show(describeConnect(params, offered, origin));
     if (autoApprove) {
       console.log(`${question}\n  approved (--yes)`);
       return offered;
@@ -171,7 +132,7 @@ const prompts: Prompts = {
     return (await ask(question)) ? offered : [];
   },
   approve: async (request) => {
-    const question = describe(request);
+    const question = show(describeRequest(request));
     if (autoApprove) {
       console.log(`${question}\n  approved (--yes)`);
       return true;

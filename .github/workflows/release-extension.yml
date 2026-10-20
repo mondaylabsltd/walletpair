@@ -31,7 +31,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: walletpair-extension/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         working-directory: walletpair-extension

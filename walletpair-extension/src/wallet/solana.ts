@@ -2,10 +2,10 @@
 // with @noble/curves; tests check its output with @solana/web3.js.
 
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { base58Encode, base64Decode, base64Encode, hexToBytes } from '../../src/lib/walletpair/codec';
-import { solana } from '../../src/lib/walletpair/networks/solana';
-import { parseTransaction, signerIndex } from '../../src/lib/walletpair/networks/solana-transaction';
-import type { Json } from '../../src/lib/walletpair/protocol';
+import { base58Encode, base64Decode, base64Encode, hexToBytes } from '../lib/walletpair/codec';
+import { solana } from '../lib/walletpair/networks/solana';
+import { parseTransaction, signerIndex } from '../lib/walletpair/networks/solana-transaction';
+import type { Json } from '../lib/walletpair/protocol';
 import { WalletError, type Signer } from './wallet';
 
 export const SOLANA_TEST_SEED = '0101010101010101010101010101010101010101010101010101010101010101';

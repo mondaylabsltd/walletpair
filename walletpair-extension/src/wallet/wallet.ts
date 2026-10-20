@@ -1,9 +1,11 @@
-// A reference Wallet for tests: the Wallet side of spec/core.md, with
-// scriptable user prompts and per-network signers that sign for real.
+// A reference Wallet: the Wallet side of spec/core.md, with per-network
+// signers that sign for real and prompts supplied by whoever runs it (the
+// tests, the CLI wallet, the website's demo wallet). It is not part of the
+// extension's bundle.
 
-import type { Transport } from '../../src/lib/walletpair/client';
-import { dispose } from '../../src/lib/walletpair/dispatch';
-import type { Network } from '../../src/lib/walletpair/networks/types';
+import type { Transport } from '../lib/walletpair/client';
+import { dispose } from '../lib/walletpair/dispatch';
+import type { Network } from '../lib/walletpair/networks/types';
 import {
   ErrorCode,
   encode,
@@ -17,7 +19,7 @@ import {
   type Response,
   type RpcError,
   type SessionState,
-} from '../../src/lib/walletpair/protocol';
+} from '../lib/walletpair/protocol';
 
 /** Thrown by a signer to answer with an error. */
 export class WalletError extends Error {

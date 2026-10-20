@@ -6,7 +6,7 @@ import { createServer, type Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
-import type { Prompts } from '../test/wallet/wallet';
+import type { Prompts } from '../src/wallet/wallet';
 
 export const here = dirname(fileURLToPath(import.meta.url));
 

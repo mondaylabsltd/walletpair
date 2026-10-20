@@ -4,6 +4,12 @@
   "private": true,
   "version": "0.2.0",
   "type": "module",
+  "exports": {
+    "./walletpair/*": "./src/lib/walletpair/*.ts",
+    "./wallet/*": "./src/wallet/*.ts",
+    "./display": "./src/lib/display.ts",
+    "./peerconnect": "./vendor/peerconnect/index.js"
+  },
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
@@ -39,7 +45,7 @@
     "@wxt-dev/module-svelte": "^2.0.4",
     "esbuild": "^0.28.2",
     "fast-check": "^4.10.2",
-    "puppeteer": "^25.0.4",
+    "puppeteer": "25.0.4",
     "svelte": "^5.53.7",
     "svelte-check": "^4.4.4",
     "tronweb": "^6.5.1",

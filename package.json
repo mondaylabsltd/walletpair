@@ -1,0 +1,6 @@
+{
+  "name": "walletpair",
+  "private": true,
+  "description": "WalletPair: the specification, the browser extension and the website",
+  "packageManager": "pnpm@10.34.7"
+}
