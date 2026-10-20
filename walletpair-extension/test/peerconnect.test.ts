@@ -5,17 +5,15 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verifyMessage } from 'viem';
-import { connect, Room, type Connection } from '../vendor/peerconnect/index.js';
+import { connect, Room } from '../vendor/peerconnect/index.js';
 import { SessionManager, type PeerConnection, type PeerRoom, type SessionDeps } from '../src/lib/background/session';
 import { Router } from '../src/lib/background/router';
 import type { Sites } from '../src/lib/storage';
 import { CallError, WalletPairClient } from '../src/lib/walletpair/client';
 import { namespaceRules } from '../src/lib/walletpair/networks';
 import { relayAvailable, startRelay, until } from './relay';
-import { evmSigner } from './wallet/evm';
-import { solanaSigner } from './wallet/solana';
-import { tronSigner } from './wallet/tron';
-import { ReferenceWallet, emptyStore, type Prompts, type WalletStore } from './wallet/wallet';
+import { WalletDevice } from './wallet/device';
+import type { Prompts } from './wallet/wallet';
 
 const ORIGIN = 'https://app.example';
 
@@ -41,40 +39,12 @@ function memoryStore() {
   const siteStore = {
     getSites: async () => sites,
     grantSite: async (origin: string, ns: string) => void (sites = { ...sites, [origin]: [...new Set([...(sites[origin] ?? []), ns])] }),
-    revokeSite: async (origin: string) => void (({ [origin]: _, ...rest } = sites), (sites = rest)),
+    revokeSite: async (origin: string) => {
+      const { [origin]: _, ...rest } = sites;
+      sites = rest;
+    },
   };
   return { data, store, siteStore };
-}
-
-/** A Wallet process: joins from the URI, keeps its record and store, can restart. */
-class WalletDevice {
-  record: string;
-  store: WalletStore = emptyStore();
-  conn!: Connection;
-  wallet!: ReferenceWallet;
-  readonly signers = [evmSigner(), tronSigner(), solanaSigner()];
-
-  constructor(
-    uri: string,
-    readonly prompts: Prompts,
-  ) {
-    expect(uri.startsWith('walletpair:')).toBe(true);
-    const room = Room.join(uri.slice('walletpair:'.length));
-    // A joiner saves its record before its first handshake (PeerConnect §3.4).
-    this.record = room.toString();
-    this.start(room);
-  }
-
-  start(room: Room | string = this.record): void {
-    this.conn = connect(room);
-    this.conn.addEventListener('paired', () => (this.record = this.conn.room.toString()));
-    this.wallet = new ReferenceWallet(this.conn, { name: 'Reference Wallet', signers: this.signers, prompts: this.prompts, store: this.store });
-  }
-
-  restart(): void {
-    this.conn.leave();
-    this.start();
-  }
 }
 
 const approveAll: Prompts = { connect: async (_, offered) => offered, approve: async () => true };
@@ -180,7 +150,7 @@ describe.skipIf(!relayAvailable)('over a real PeerConnect relay', { timeout: 60_
     expect(await verifyMessage({ address, message: 'hi', signature: again })).toBe(true);
 
     // The Wallet restarts; requests made while it is away are delivered when it is back.
-    device.conn.leave();
+    device.stop();
     await until(session, ['change'], () => !session.online);
     const queued = router.handle({ op: 'call', method: 'personal_sign', params: ['0x6869', address] }, ORIGIN, 3);
     device.start();
