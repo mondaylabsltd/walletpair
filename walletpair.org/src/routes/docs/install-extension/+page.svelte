@@ -85,15 +85,10 @@ pnpm build`;
 
 <h2 id="next">Next Steps</h2>
 
-<ul>
-	<li>
-		<a href="/docs/getting-started">Getting Started</a> — implement the protocol and connect your first
-		dApp
-	</li>
-	<li>
-		<a href="/playground">Playground</a> — test the full flow in your browser
-	</li>
-</ul>
+<p>
+	Open any dApp and choose WalletPair as your wallet, then scan the QR code with your mobile Wallet.
+	To see what crosses the link, read the <a href="/docs/protocol">Protocol</a>.
+</p>
 
 <style>
 	.install-steps {

@@ -1,64 +1,57 @@
 <script lang="ts">
 	import FeatureCard from '$lib/components/FeatureCard.svelte';
 	import SequenceDiagram from '$lib/components/SequenceDiagram.svelte';
-	import {
-		Braces,
-		Lock,
-		ArrowLeftRight,
-		Diamond,
-		ShieldCheck,
-		Settings,
-		Download
-	} from 'lucide-svelte';
+	import { Braces, Lock, Inbox, ServerOff, KeyRound, Plug, Download } from 'lucide-svelte';
 
 	const features = [
 		{
 			icon: Braces,
-			title: 'Zero Registration',
-			description: 'No API keys, project IDs, or accounts. Deploy a relay and start pairing.'
+			title: 'Just Functions',
+			description: 'Nine functions and two events, each with a name, an input and an output.'
+		},
+		{
+			icon: ServerOff,
+			title: 'No Servers to Run',
+			description: 'WalletPair is only messages. PeerConnect relays carry them and store nothing.'
 		},
 		{
 			icon: Lock,
 			title: 'End-to-End Encrypted',
-			description: 'ChaCha20-Poly1305 AEAD. The relay routes only opaque bytes it cannot read.'
+			description: 'A Noise handshake pins both sides. Relays see sizes and timing, never contents.'
 		},
 		{
-			icon: ArrowLeftRight,
-			title: 'One Simple Transport',
-			description: 'A single WebSocket relay. Any stateless relay works — switch by re-pairing.'
+			icon: Inbox,
+			title: 'Nothing Lost',
+			description: 'Requests wait while the Wallet is offline and arrive once, in order.'
 		},
 		{
-			icon: Diamond,
-			title: 'Multi-Network',
-			description:
-				'Encrypted frames carry authenticated CAIP-2 routing metadata; the current application protocol is EVM.'
+			icon: KeyRound,
+			title: 'Zero Registration',
+			description: 'No API keys, project IDs or accounts. Scan a QR code and go.'
 		},
 		{
-			icon: ShieldCheck,
-			title: 'Formally Verified',
-			description: 'The encryption model is checked in ProVerif against an active relay attacker.'
-		},
-		{
-			icon: Settings,
-			title: 'Self-Hostable',
-			description: 'One Rust binary. No vendor lock-in. Your infrastructure, your rules.'
+			icon: Plug,
+			title: 'Works with Any dApp',
+			description: 'The extension is a standard EIP-1193 provider, discovered through EIP-6963.'
 		}
 	];
 
-	const dappCode = `1. Generate a fresh X25519 key pair and a 32-byte channel ID.
-2. Connect to /v1 with ch, name, url, icon, and pubkey query fields.
-3. Display walletpair:?ch=…&pubkey=…&relay=…&name=…&url=…&icon=… as QR.
-4. Show SHA-256-derived 4-digit pairing code.
-5. After the first eligible channel_joined event, derive directional traffic keys.
-6. Send an EIP-1193 request as MessagePack in:
-   base64url(seq || ciphertext || tag)@eip155:1`;
+	const dappCode = `// Show the invite as a QR code
+walletpair:wss://relay.example.com#q3V0…
 
-	const walletCode = `1. Parse every required pairing URI field exactly once.
-2. Recompute and compare the four-digit dApp pairing code.
-3. Generate a fresh X25519 key pair and connect to the specified relay.
-4. Derive the wallet-to-dApp and dApp-to-wallet traffic keys.
-5. Validate and approve EIP-1193 requests before responding.
-6. Preserve sequence counters; pair again if they cannot be recovered safely.`;
+// Then call functions
+→ {"id":"1","method":"walletpair_connect",
+   "params":[{"name":"Example dApp"}]}
+← {"id":"1","result":{"wallet":{"name":"Example Wallet"},
+   "eip155":{"accounts":["0xd8da…6045"],"chainId":"0x1"}}}`;
+
+	const walletCode = `// Answer each call after asking the user
+→ {"id":"2","method":"personal_sign",
+   "params":["0x68656c6c6f","0xd8da…6045"]}
+← {"id":"2","result":"0x5d5f…1b"}
+
+// Tell the dApp when something changes
+← {"event":"chainChanged","data":"0x89"}`;
 </script>
 
 <!-- Hero -->
@@ -66,14 +59,13 @@
 	<h1 class="hero-title">WalletPair</h1>
 	<p class="hero-sub">
 		Connect dApps to wallets.<br />
-		No registration. No middleman. Just crypto.
+		A few functions over an end-to-end encrypted link. No registration.
 	</p>
 	<div class="hero-actions">
-		<a href="/docs/getting-started" class="btn btn-primary">Get Started</a>
-		<a href="/docs/install-extension" class="btn btn-ghost"
+		<a href="/docs/install-extension" class="btn btn-primary"
 			><Download size={16} strokeWidth={1.5} /> Install Extension</a
 		>
-		<a href="/playground" class="btn btn-ghost">Try the Playground →</a>
+		<a href="/docs/protocol" class="btn btn-ghost">Read the Protocol →</a>
 	</div>
 </section>
 
@@ -81,7 +73,7 @@
 <section class="section">
 	<h2 class="section-title">Why WalletPair</h2>
 	<div class="features-grid">
-		{#each features as f}
+		{#each features as f (f.title)}
 			<FeatureCard title={f.title} description={f.description} icon={f.icon} />
 		{/each}
 	</div>
@@ -91,9 +83,8 @@
 <section class="section">
 	<h2 class="section-title">How It Works</h2>
 	<p class="section-desc">
-		The dApp creates a channel, displays a QR code. The wallet scans it. After a cryptographic
-		pairing-code comparison, they communicate over an end-to-end encrypted session. The relay never
-		sees your data.
+		The dApp shows a QR code and the Wallet scans it. PeerConnect pairs them and encrypts everything
+		between them. From then on the dApp calls functions and the Wallet answers.
 	</p>
 	<SequenceDiagram />
 </section>
@@ -105,22 +96,20 @@
 		<div class="path-card">
 			<h3 class="path-title">For dApp Developers</h3>
 			<ul class="path-list">
-				<li>Create a pairing URI and display it as a QR code</li>
-				<li>Send EIP-1193 request envelopes over encrypted <code>eip155</code> frames</li>
-				<li>Adapt the resulting provider to your application stack</li>
+				<li>With the extension installed, your dApp needs no changes</li>
+				<li>Or show the invite yourself and call the functions directly</li>
 			</ul>
 			<pre class="code-block"><code>{dappCode}</code></pre>
-			<a href="/docs/dapp-integration" class="path-link">Read the dApp guide →</a>
+			<a href="/docs" class="path-link">Read the overview →</a>
 		</div>
 		<div class="path-card">
 			<h3 class="path-title">For Wallet Developers</h3>
 			<ul class="path-list">
-				<li>Scan a pairing QR code and join the session</li>
-				<li>Handle incoming EIP-1193 requests — approve or reject</li>
-				<li>Push events like accountsChanged and chainChanged</li>
+				<li>Scan the QR code and join the room with PeerConnect</li>
+				<li>Answer nine functions and send two events</li>
 			</ul>
 			<pre class="code-block"><code>{walletCode}</code></pre>
-			<a href="/docs/wallet-integration" class="path-link">Read the wallet guide →</a>
+			<a href="/docs/protocol" class="path-link">Read the protocol →</a>
 		</div>
 	</div>
 </section>

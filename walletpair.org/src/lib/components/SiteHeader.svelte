@@ -3,7 +3,7 @@
 
 	const nav = [
 		{ href: '/docs', label: 'Docs' },
-		{ href: '/playground', label: 'Playground' }
+		{ href: '/docs/protocol', label: 'Protocol' }
 	];
 
 	let mobileOpen = $state(false);
@@ -18,11 +18,7 @@
 
 		<nav class="nav-desktop">
 			{#each nav as item}
-				<a
-					href={item.href}
-					class="nav-link"
-					class:active={page.url.pathname.startsWith(item.href)}
-				>
+				<a href={item.href} class="nav-link" class:active={page.url.pathname.startsWith(item.href)}>
 					{item.label}
 				</a>
 			{/each}
