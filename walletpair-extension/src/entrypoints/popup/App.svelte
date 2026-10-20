@@ -4,43 +4,27 @@
   import QrPairing from '@/components/QrPairing.svelte';
   import ConnectedView from '@/components/ConnectedView.svelte';
   import SettingsView from '@/components/SettingsView.svelte';
+  import SiteApprovals from '@/components/SiteApprovals.svelte';
   import { Settings, Info } from 'lucide-svelte';
 
-  // Named `extState` (not `state`) to avoid colliding with the `$state` rune,
-  // which Svelte would otherwise read as a store subscription (`$state`).
-  let extState = $state<ExtensionState>({ phase: 'idle' });
-  let loading = $state(false);
+  // Named `ext` rather than `state`, which Svelte reserves for the $state rune.
+  let ext = $state<ExtensionState | undefined>(undefined);
+  let busy = $state(false);
   let page = $state<'main' | 'settings'>('main');
 
-  // Fetch initial state
   $effect(() => {
-    getExtensionState().then((s) => {
-      extState = s;
-    });
-    const unsub = onStateUpdate((s) => {
-      // Don't interrupt loading transition — startPairing handles its own state
-      if (!loading) {
-        extState = s;
-      }
-    });
-    return unsub;
+    getExtensionState().then((s) => (ext = s));
+    return onStateUpdate((s) => (ext = s));
   });
 
-  async function startPairing() {
-    loading = true;
-    const [s] = await Promise.all([
-      sendToBackground<ExtensionState>({ action: 'start-pairing' }),
-      new Promise((r) => setTimeout(r, 800)), // smooth transition before showing QR
-    ]);
-    extState = s;
-    loading = false;
+  async function act(action: 'pair' | 'reconnect' | 'disconnect') {
+    busy = true;
+    try {
+      ext = await sendToBackground({ action });
+    } finally {
+      busy = false;
+    }
   }
-
-  async function disconnect() {
-    await sendToBackground({ action: 'disconnect' });
-    extState = { phase: 'idle' };
-  }
-
 </script>
 
 <div class="popup">
@@ -59,48 +43,45 @@
   <main class="content">
     {#if page === 'settings'}
       <SettingsView onBack={() => (page = 'main')} />
-    {:else if extState.phase === 'idle' || extState.phase === 'error'}
-      <div class="idle-view animate-in">
-        <!-- Decorative glow -->
-        <div class="hero-glow"></div>
-
-        <div class="hero-text">
-          <h2 class="title">Connect Your Wallet</h2>
-          <p class="subtitle">
-            Pair with your mobile wallet to use dApps on this browser
-          </p>
-        </div>
-        {#if extState.error}
-          <div class="error-banner">
-            <Info size={14} strokeWidth={2} />
-            <span>{extState.error}</span>
+    {:else if ext}
+      <SiteApprovals approvals={ext.approvals} />
+      {#if ext.phase === 'idle'}
+        <div class="idle-view animate-in">
+          <div class="hero-glow"></div>
+          <div class="hero-text">
+            <h2 class="title">Connect Your Wallet</h2>
+            <p class="subtitle">Pair with your mobile wallet to use EVM, TRON and Solana apps in this browser</p>
           </div>
-        {/if}
-        <button class="btn-primary" onclick={startPairing} disabled={loading}>
-          {#if loading}
-            <span class="spinner"></span>
-          {:else}
-            Pair Wallet
-          {/if}
-        </button>
-      </div>
-    {:else if extState.phase === 'pairing'}
-      <div class="animate-slide">
-        <QrPairing uri={extState.pairingUri ?? ''} fingerprint={extState.sessionFingerprint} onCancel={disconnect} />
-      </div>
-    {:else if extState.phase === 'connected'}
-      <div class="animate-scale">
-        <ConnectedView wallet={extState.wallet} onDisconnect={disconnect} signingInProgress={extState.signingInProgress} />
-      </div>
-    {:else if extState.phase === 'disconnected'}
-      <div class="disconnected-view">
-        <div class="status-badge orange">
-          <span class="status-dot orange"></span>
-          Reconnecting...
+          <button class="btn-primary" onclick={() => act('pair')} disabled={busy}>
+            {#if busy}<span class="spinner"></span>{:else}Pair Wallet{/if}
+          </button>
         </div>
-        <p class="subtitle">Connection lost. Attempting to reconnect...</p>
-        <button class="btn-secondary" onclick={disconnect}>Cancel</button>
-      </div>
+      {:else if ext.phase === 'pairing'}
+        <div class="animate-slide">
+          <QrPairing uri={ext.uri ?? ''} onCancel={() => act('disconnect')} />
+        </div>
+      {:else if ext.phase === 'waiting'}
+        <div class="disconnected-view">
+          {#if ext.declined}
+            <div class="error-banner">
+              <Info size={14} strokeWidth={2} />
+              <span>The wallet declined the connection.</span>
+            </div>
+            <button class="btn-primary" onclick={() => act('reconnect')} disabled={busy}>Ask again</button>
+          {:else}
+            <div class="status-badge orange">
+              <span class="status-dot orange"></span>
+              {ext.online ? 'Approve in your wallet' : 'Waiting for your wallet'}
+            </div>
+            <p class="subtitle">Confirm the connection on your phone to continue.</p>
+          {/if}
+          <button class="btn-secondary" onclick={() => act('disconnect')} disabled={busy}>Disconnect</button>
+        </div>
+      {:else}
+        <div class="animate-scale">
+          <ConnectedView {ext} onDisconnect={() => act('disconnect')} />
+        </div>
+      {/if}
     {/if}
   </main>
 </div>

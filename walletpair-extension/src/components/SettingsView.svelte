@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getSettings, saveSettings } from '@/lib/storage';
+  import { getSettings, isRelayUrl, saveSettings } from '@/lib/storage';
   import { DEFAULT_RELAY_URL } from '@/lib/constants';
   import { ArrowLeft, Info } from 'lucide-svelte';
 
@@ -7,6 +7,7 @@
 
   let relayUrl = $state(DEFAULT_RELAY_URL);
   let saved = $state(false);
+  let valid = $derived(isRelayUrl(relayUrl));
 
   $effect(() => {
     getSettings().then((s) => {
@@ -15,6 +16,7 @@
   });
 
   async function save() {
+    if (!valid) return;
     await saveSettings({ relayUrl });
     saved = true;
     setTimeout(() => (saved = false), 2000);
@@ -38,23 +40,28 @@
       <span style="flex-shrink: 0; margin-top: 1px; display: flex;">
         <Info size={14} strokeWidth={2} color="var(--accent)" />
       </span>
-      <p>WalletPair is a transparent bridge. Signing and transaction confirmations happen in your wallet, not here.</p>
+      <p>WalletPair passes requests to your wallet; you confirm every signature and transaction there. Messages travel end-to-end encrypted through a PeerConnect relay, which cannot read them.</p>
     </div>
 
     <section class="section">
-      <h3 class="section-label">Relay Server</h3>
+      <h3 class="section-label">PeerConnect relay</h3>
       <input
         type="url"
         class="input"
         bind:value={relayUrl}
-        placeholder="wss://relay.walletpair.org/v1"
+        placeholder="wss://relay.example.com"
       />
+      {#if !valid}
+        <p class="hint">A ws:// or wss:// URL with a host and no path ending in "/".</p>
+      {:else}
+        <p class="hint">Used for new pairings. A paired wallet stays on its relay.</p>
+      {/if}
       {#if relayUrl !== DEFAULT_RELAY_URL}
         <button class="btn-reset" onclick={resetRelay}>Reset to default</button>
       {/if}
     </section>
 
-    <button class="btn-save" onclick={save}>
+    <button class="btn-save" onclick={save} disabled={!valid}>
       {saved ? 'Saved!' : 'Save'}
     </button>
   </div>
@@ -168,5 +175,10 @@
   .btn-save:hover {
     background: var(--accent-hover);
     box-shadow: 0 4px 16px rgba(37, 99, 235, 0.3);
+  }
+  .hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 6px;
   }
 </style>

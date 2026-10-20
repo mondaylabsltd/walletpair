@@ -1,94 +1,104 @@
-/** EIP-1193 request arguments */
-export interface EIP1193Request {
-  method: string;
-  params?: unknown[] | Record<string, unknown>;
-}
+import type { NamespaceState, Params, RpcError, SessionState, WalletInfo } from './walletpair/protocol';
 
-export interface RpcErrorInfo {
-  code: number;
-  message: string;
-  data?: unknown;
-}
+/** What one site may see: the approved namespaces it was granted. */
+export type SiteState = Record<string, NamespaceState>;
 
-/** Wallet connection info stored in extension */
-export interface ConnectedWallet {
-  address: string;
-  chainId: number;
-  name?: string;
-  icon?: string;
-  /** Protocol name: 'ethereum', 'solana', etc. Defaults to 'ethereum'. */
-  protocolName?: string;
-  /** Chain reference string for the protocol. E.g., '1' for Ethereum mainnet. */
-  chainRef?: string;
-}
+/** A call from a page provider to the background, through the content script. */
+export type PageCall =
+  /** Accounts for a namespace; `silent` never prompts and answers null when not granted. */
+  | { op: 'connect'; namespace: string; silent?: boolean }
+  /** A Wallet function (spec/networks/*.md §2). */
+  | { op: 'call'; method: string; params?: Params }
+  /** A read-only EVM node method. */
+  | { op: 'rpc'; method: string; params?: unknown }
+  /** The site stops seeing a namespace's accounts. The session is unchanged. */
+  | { op: 'disconnect'; namespace: string };
 
-/** Per-origin permission record */
-export interface OriginPermission {
+/** Window messages between page providers and the content script (`channel: MSG_CHANNEL`). */
+export type PageMessage =
+  | { channel: string; type: 'hello' }
+  | { channel: string; type: 'call'; id: string; call: PageCall }
+  | { channel: string; type: 'result'; id: string; result?: unknown; error?: RpcError }
+  | { channel: string; type: 'state'; state: SiteState; live: boolean };
+
+/** A page message without its channel tag. */
+export type PageMessageBody = PageMessage extends infer M ? (M extends PageMessage ? Omit<M, 'channel'> : never) : never;
+
+/** Port messages, content script → background. */
+export type ContentMessage = { kind: 'hello' } | { kind: 'call'; id: string; call: PageCall };
+
+/** Port messages, background → content script. */
+export type BackgroundMessage =
+  | { kind: 'result'; id: string; result?: unknown; error?: RpcError }
+  | { kind: 'state'; state: SiteState; live: boolean };
+
+export type Phase =
+  /** No session. */
+  | 'idle'
+  /** Waiting for a Wallet to scan the invite. */
+  | 'pairing'
+  /** Paired; the Wallet has not approved (yet, or declined). */
+  | 'waiting'
+  /** Approved: the session state has at least one namespace. */
+  | 'ready';
+
+export interface SiteApproval {
+  id: string;
   origin: string;
-  granted: boolean;
-  grantedAt: number; // timestamp
+  namespace: string;
 }
 
-/** Extension settings */
+export interface PendingCall {
+  id: string;
+  method: string;
+  origin: string;
+}
+
+/** What the side panel shows. */
+export interface ExtensionState {
+  phase: Phase;
+  /** The `walletpair:` URI while pairing. */
+  uri?: string;
+  /** Whether the Wallet is reachable right now. */
+  online: boolean;
+  /** Another browser or profile opened this session and took it over. */
+  replaced: boolean;
+  wallet?: WalletInfo;
+  state: SessionState;
+  /** Why the Wallet did not approve, when it did not. */
+  declined: boolean;
+  sites: { origin: string; namespaces: string[] }[];
+  approvals: SiteApproval[];
+  pending: PendingCall[];
+  /** The last action that failed, for the side panel to show. */
+  error?: string;
+}
+
+/** Side panel → background. */
+export type UiMessage =
+  | { action: 'get-state' }
+  | { action: 'pair' }
+  | { action: 'reconnect' }
+  | { action: 'disconnect' }
+  | { action: 'approve-site'; id: string; allow: boolean }
+  | { action: 'revoke-site'; origin: string }
+  | { action: 'open-panel' };
+
 export interface ExtensionSettings {
+  /** PeerConnect relay for new sessions. */
   relayUrl: string;
-  autoConnect: boolean;
-  /** @deprecated No longer used — the bridge is chain-agnostic. Kept for backward compat. */
-  enabledChains?: string[];
-  /** Custom RPC URLs per chain (for read-only method proxying) */
+  /** User-configured EVM RPC endpoints by chain ID. */
   rpcUrls: Record<number, string>;
 }
 
-/** Message types between injected script <-> content script */
-export type InjectMessage =
-  | { type: 'wp-request'; id: string; payload: EIP1193Request }
-  | { type: 'wp-response'; id: string; result?: unknown; error?: RpcErrorInfo }
-  | { type: 'wp-event'; event: string; data: unknown }
-  | { type: 'wp-provider-ready' };
-
-/** Pending tx/sign confirmation details sent to the confirm popup */
-export interface PendingConfirmationInfo {
-  id: string;
-  method: string;
-  params: unknown;
-  origin: string;
-}
-
-/** Message types between content script <-> background */
-export type BackgroundMessage =
-  | { action: 'rpc-request'; id: string; payload: EIP1193Request; origin: string }
-  | { action: 'rpc-response'; id: string; result?: unknown; error?: RpcErrorInfo }
-  | { action: 'get-state' }
-  | { action: 'start-pairing' }
-  | { action: 'disconnect' }
-  | { action: 'get-pairing-uri' }
-  | { action: 'get-permissions' }
-  | { action: 'revoke-permission'; origin: string }
-  | { action: 'get-confirmation'; id: string }
-  | { action: 'approve-confirmation'; id: string }
-  | { action: 'reject-confirmation'; id: string }
-  | { action: 'open-panel' };
-
-/** State shared from background to popup/content */
-export interface ExtensionState {
-  phase: 'idle' | 'pairing' | 'connected' | 'disconnected' | 'error';
-  pairingUri?: string;
-  sessionFingerprint?: string;
-  wallet?: ConnectedWallet;
-  walletMeta?: { name?: string; icon?: string };
-  error?: string;
-  signingInProgress?: { method: string; origin: string };
-}
-
-/** Activity log entry for request tracking */
 export interface ActivityEntry {
   id: string;
   timestamp: number;
   origin: string;
   method: string;
-  category: 'read' | 'sign' | 'tx' | 'auth' | 'local';
+  namespace: string;
   status: 'pending' | 'success' | 'rejected' | 'error';
   params?: unknown;
   result?: unknown;
-  error?: RpcErrorInfo;
+  error?: RpcError;
 }

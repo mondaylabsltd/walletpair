@@ -1,11 +1,13 @@
 /**
- * MAIN world content script - injects EIP-1193 provider + EIP-6963 into the page.
- * Also injects as window.ethereum for legacy dApps.
- *
- * This runs in the page's JS context, NOT the extension's isolated world.
- * Communication with extension is via window.postMessage only.
+ * Runs in the page (MAIN world) and offers WalletPair the way each network's
+ * applications look for wallets: EIP-1193/EIP-6963 for EVM, TIP-1193/TIP-6963
+ * and tronWeb for TRON, the Wallet Standard for Solana. Everything goes to the
+ * extension through the content script (content.ts).
  */
-import { createProvider, PROVIDER_INFO } from '../lib/provider-factory.js';
+import { createBridge } from '@/lib/inpage/bridge';
+import { installEvmProvider } from '@/lib/inpage/evm';
+import { installSolanaWallet } from '@/lib/inpage/solana';
+import { installTron } from '@/lib/inpage/tron';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -13,59 +15,12 @@ export default defineContentScript({
   runAt: 'document_start',
 
   main() {
-    const MSG_CHANNEL = 'walletpair-ext';
-
-    const { provider, handleMessage } = createProvider(
-      (message, targetOrigin) => window.postMessage(message, targetOrigin),
-      // Fires synchronously inside the dApp's click handler. Dispatching a
-      // CustomEvent reaches the isolated-world content script in the same call
-      // stack, so user activation is preserved long enough to open the side
-      // panel from the service worker.
-      () => window.dispatchEvent(new CustomEvent('walletpair:open-panel')),
-    );
-
-    // --- Listen for responses and events from content script bridge ---
-    window.addEventListener('message', (event) => {
-      if (event.source !== window) return;
-      handleMessage(event.data);
+    const bridge = createBridge();
+    const walletpair = Object.freeze({
+      ethereum: installEvmProvider(bridge),
+      tron: installTron(bridge),
+      solana: installSolanaWallet(bridge),
     });
-
-    // --- EIP-6963: Announce provider ---
-    const detail = Object.freeze({ info: PROVIDER_INFO, provider });
-
-    function announceProvider() {
-      window.dispatchEvent(
-        new CustomEvent('eip6963:announceProvider', { detail }),
-      );
-    }
-
-    window.addEventListener('eip6963:requestProvider', announceProvider);
-    announceProvider();
-
-    // --- window.ethereum injection (legacy support) ---
-    const existingProvider = (window as any).ethereum;
-
-    if (!existingProvider) {
-      Object.defineProperty(window, 'ethereum', {
-        value: provider,
-        writable: false,
-        configurable: true,
-      });
-    } else {
-      if (!existingProvider.providers) {
-        (existingProvider as any).providers = [existingProvider];
-      }
-      (existingProvider as any).providers.push(provider);
-    }
-
-    // Always set window.walletpair for direct access
-    Object.defineProperty(window, 'walletpair', {
-      value: provider,
-      writable: false,
-      configurable: false,
-    });
-
-    // Notify content script bridge that provider is ready
-    window.postMessage({ type: 'wp-provider-ready', channel: MSG_CHANNEL }, '*');
+    Object.defineProperty(window, 'walletpair', { value: walletpair, configurable: true });
   },
 });

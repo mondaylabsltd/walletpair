@@ -1,134 +1,139 @@
 <script lang="ts">
-  import type { ConnectedWallet, ActivityEntry } from '@/lib/types';
+  import { browser } from 'wxt/browser';
+  import type { ActivityEntry, ExtensionState } from '@/lib/types';
   import ActivityLog from './ActivityLog.svelte';
   import SigningToast from './SigningToast.svelte';
-  import { getActivityLog, clearActivityLog } from '@/lib/storage';
-  import { Copy, Check } from 'lucide-svelte';
+  import { clearActivityLog, getActivityLog } from '@/lib/storage';
+  import { sendToBackground } from '@/lib/messaging';
+  import { chainName, hostOf, NAMESPACE_NAMES, shortAddress } from '@/lib/display';
+  import { Copy, Check, X } from 'lucide-svelte';
 
-  let {
-    wallet,
-    onDisconnect,
-    signingInProgress,
-  }: {
-    wallet?: ConnectedWallet | null;
-    onDisconnect: () => void;
-    signingInProgress?: { method: string; origin: string };
-  } = $props();
+  let { ext, onDisconnect }: { ext: ExtensionState; onDisconnect: () => void } = $props();
 
   let activity = $state<ActivityEntry[]>([]);
   let currentOrigin = $state<string | undefined>(undefined);
+  let copied = $state<string | undefined>(undefined);
 
   function updateCurrentOrigin() {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    browser.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const url = tabs[0]?.url;
-      if (url) {
-        try { currentOrigin = new URL(url).origin; } catch { /* ignore */ }
+      if (!url) return;
+      try {
+        currentOrigin = new URL(url).origin;
+      } catch {
+        // Not a web page.
       }
     });
   }
 
   $effect(() => {
     updateCurrentOrigin();
-
-    // Re-query origin when user switches tabs or windows
     const onTabActivated = () => updateCurrentOrigin();
     const onWindowFocused = (windowId: number) => {
-      if (windowId !== chrome.windows.WINDOW_ID_NONE) updateCurrentOrigin();
+      if (windowId !== browser.windows.WINDOW_ID_NONE) updateCurrentOrigin();
     };
-    // Also catches in-tab navigations (e.g. SPA route changes)
     const onTabUpdated = (_tabId: number, info: { url?: string }) => {
       if (info.url) updateCurrentOrigin();
     };
+    browser.tabs.onActivated.addListener(onTabActivated);
+    browser.windows?.onFocusChanged.addListener(onWindowFocused);
+    browser.tabs.onUpdated.addListener(onTabUpdated);
 
-    chrome.tabs.onActivated.addListener(onTabActivated);
-    chrome.windows.onFocusChanged.addListener(onWindowFocused);
-    chrome.tabs.onUpdated.addListener(onTabUpdated);
-
-    const load = () => getActivityLog().then(a => { activity = a; });
+    const load = () => getActivityLog().then((a) => (activity = a));
     load();
     const timer = setInterval(load, 2000);
-
     return () => {
       clearInterval(timer);
-      chrome.tabs.onActivated.removeListener(onTabActivated);
-      chrome.windows.onFocusChanged.removeListener(onWindowFocused);
-      chrome.tabs.onUpdated.removeListener(onTabUpdated);
+      browser.tabs.onActivated.removeListener(onTabActivated);
+      browser.windows?.onFocusChanged.removeListener(onWindowFocused);
+      browser.tabs.onUpdated.removeListener(onTabUpdated);
     };
   });
 
-  async function handleClearActivity() {
+  let networks = $derived(Object.entries(ext.state));
+
+  async function clearActivity() {
     await clearActivityLog();
     activity = [];
   }
 
-  let address = $derived(wallet?.address ?? '');
-  let shortAddress = $derived(
-    address ? `${address.slice(0, 6)}...${address.slice(-4)}` : 'Unknown',
-  );
-  let chainName = $derived(getChainName(wallet?.chainId ?? 1));
-  let copied = $state(false);
-
-  function getChainName(id: number): string {
-    const chains: Record<number, string> = {
-      1: 'Ethereum',
-      10: 'Optimism',
-      56: 'BNB Chain',
-      100: 'Gnosis',
-      137: 'Polygon',
-      42161: 'Arbitrum',
-      8453: 'Base',
-      43114: 'Avalanche',
-      250: 'Fantom',
-    };
-    return chains[id] ?? `Chain ${id}`;
+  function copy(address: string) {
+    navigator.clipboard.writeText(address);
+    copied = address;
+    setTimeout(() => (copied = undefined), 2000);
   }
 
-  function copyAddress() {
-    if (!address) return;
-    navigator.clipboard.writeText(address);
-    copied = true;
-    setTimeout(() => (copied = false), 2000);
+  function revoke(origin: string) {
+    sendToBackground({ action: 'revoke-site', origin });
   }
 </script>
 
 <div class="connected">
   <div class="wallet-card">
     <div class="wallet-avatar">
-      {#if wallet?.icon}
-        <img src={wallet.icon} alt="" class="wallet-icon" />
+      {#if ext.wallet?.icon}
+        <img src={ext.wallet.icon} alt="" class="wallet-icon" />
       {:else}
-        <div class="avatar-fallback">
-          {address ? address.slice(2, 4).toUpperCase() : 'WP'}
-        </div>
+        <div class="avatar-fallback">{(ext.wallet?.name ?? 'W').slice(0, 1).toUpperCase()}</div>
       {/if}
     </div>
-
     <div class="wallet-info">
       <div class="wallet-heading">
-        <span class="wallet-name">{wallet?.name || 'Wallet'}</span>
-        <span class="status-badge green">
-          <span class="status-dot green"></span>
-          Connected
-        </span>
-      </div>
-      <button class="address-btn" onclick={copyAddress} title="Copy address">
-        <span class="address">{shortAddress}</span>
-        {#if copied}
-          <Check size={12} strokeWidth={2} color="var(--green)" />
+        <span class="wallet-name">{ext.wallet?.name ?? 'Wallet'}</span>
+        {#if ext.online}
+          <span class="status-badge green"><span class="status-dot green"></span>Online</span>
         {:else}
-          <Copy size={12} strokeWidth={1.5} />
+          <span class="status-badge orange"><span class="status-dot orange"></span>Offline</span>
         {/if}
-      </button>
+      </div>
+      {#if ext.replaced}
+        <span class="note">This session is open in another browser.</span>
+      {:else if !ext.online}
+        <span class="note">Requests are delivered when the wallet is back.</span>
+      {/if}
     </div>
-
-    <div class="chain-badge">{chainName}</div>
   </div>
 
-  <SigningToast method={signingInProgress?.method} origin={signingInProgress?.origin} />
-  <ActivityLog entries={activity} filterOrigin={currentOrigin} onClear={handleClearActivity} />
+  <div class="networks">
+    {#each networks as [namespace, value] (namespace)}
+      <div class="network-row">
+        <span class="network-name">{NAMESPACE_NAMES[namespace] ?? namespace}</span>
+        <span class="chain-badge">{chainName(value.chain)}</span>
+        <button class="address-btn" onclick={() => copy(value.accounts[0])} title="Copy address">
+          <span class="address">{shortAddress(value.accounts[0])}</span>
+          {#if copied === value.accounts[0]}
+            <Check size={12} strokeWidth={2} color="var(--green)" />
+          {:else}
+            <Copy size={12} strokeWidth={1.5} />
+          {/if}
+        </button>
+      </div>
+    {/each}
+  </div>
+
+  {#each ext.pending as call (call.id)}
+    <SigningToast method={call.method} origin={call.origin} />
+  {/each}
+
+  {#if ext.sites.length}
+    <div class="sites">
+      <h4 class="sites-title">Connected sites</h4>
+      {#each ext.sites as site (site.origin)}
+        <div class="site-row">
+          <span class="site-host" title={site.origin}>{hostOf(site.origin)}</span>
+          <span class="site-namespaces">{site.namespaces.map((ns) => NAMESPACE_NAMES[ns] ?? ns).join(' · ')}</span>
+          <button class="site-revoke" onclick={() => revoke(site.origin)} title="Disconnect this site">
+            <X size={13} strokeWidth={1.8} />
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  <ActivityLog entries={activity} filterOrigin={currentOrigin} onClear={clearActivity} />
 
   <div class="actions">
-    <button class="btn-disconnect" onclick={onDisconnect}>Disconnect</button>
+    <button class="btn-disconnect" onclick={onDisconnect}>Disconnect wallet</button>
   </div>
 </div>
 
@@ -277,6 +282,81 @@
 
   .address-btn:hover {
     color: var(--accent);
+  }
+
+
+  .status-badge.orange {
+    background: var(--orange-dim);
+    color: var(--orange);
+  }
+  .status-dot.orange {
+    background: var(--orange);
+  }
+
+  .note {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .networks,
+  .sites {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .network-row,
+  .site-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+  }
+
+  .network-name {
+    font-size: 12px;
+    font-weight: 600;
+    width: 52px;
+    flex-shrink: 0;
+  }
+
+  .network-row .address-btn {
+    margin-left: auto;
+  }
+
+  .sites-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+
+  .site-host {
+    font-size: 12px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .site-namespaces {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .site-revoke {
+    background: none;
+    color: var(--text-dim);
+    padding: 2px;
+    display: flex;
+  }
+  .site-revoke:hover {
+    color: var(--red);
   }
 
   @keyframes fadeInScale {

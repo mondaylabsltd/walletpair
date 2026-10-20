@@ -1,191 +1,135 @@
-import { STORAGE_KEYS, DEFAULT_RELAY_URL } from './constants';
-import type { ConnectedWallet, ExtensionSettings, OriginPermission, ActivityEntry } from './types';
+import { browser } from 'wxt/browser';
+import { DEFAULT_RELAY_URL, STORAGE_KEYS } from './constants';
+import type { ActivityEntry, ExtensionSettings } from './types';
+import type { SessionState, WalletInfo } from './walletpair/protocol';
 
 const defaults: ExtensionSettings = {
   relayUrl: DEFAULT_RELAY_URL,
-  autoConnect: true,
   rpcUrls: {},
 };
 
-// Keep connection-state mutations ordered. In particular, an explicit
-// disconnect must run after every previously-started snapshot/account write so
-// an older async write cannot recreate a session after it has been cleared.
-let connectionStateMutex: Promise<void> = Promise.resolve();
-
-function withConnectionStateLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = connectionStateMutex;
-  let release: () => void;
-  connectionStateMutex = new Promise<void>((resolve) => { release = resolve; });
-  return previous.then(fn).finally(() => release!());
+async function read<T>(key: string, fallback: T): Promise<T> {
+  const result = await browser.storage.local.get(key);
+  return (result[key] as T | undefined) ?? fallback;
 }
 
-/** Get extension settings from chrome.storage.local */
+function write(key: string, value: unknown): Promise<void> {
+  return value === undefined ? browser.storage.local.remove(key) : browser.storage.local.set({ [key]: value });
+}
+
+// Read-modify-write updates of one key run one at a time, so concurrent
+// updates (two sites approved at once, say) cannot lose each other's writes.
+const locks = new Map<string, Promise<void>>();
+
+function update<T>(key: string, fallback: T, change: (value: T) => T | undefined): Promise<void> {
+  const previous = locks.get(key) ?? Promise.resolve();
+  const next = previous.then(async () => write(key, change(await read(key, fallback))));
+  locks.set(key, next.catch(() => {}));
+  return next;
+}
+
+// ── Settings ──
+
 export async function getSettings(): Promise<ExtensionSettings> {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
-  return { ...defaults, ...result[STORAGE_KEYS.SETTINGS] };
+  return { ...defaults, ...(await read<Partial<ExtensionSettings>>(STORAGE_KEYS.SETTINGS, {})) };
 }
 
-/** Save extension settings */
-export async function saveSettings(settings: Partial<ExtensionSettings>): Promise<void> {
-  const current = await getSettings();
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.SETTINGS]: { ...current, ...settings },
+export function saveSettings(settings: Partial<ExtensionSettings>): Promise<void> {
+  return update<Partial<ExtensionSettings>>(STORAGE_KEYS.SETTINGS, {}, (current) => ({ ...current, ...settings }));
+}
+
+/** A PeerConnect relay URL: `ws://` or `wss://`, a host, no query, fragment or trailing slash. */
+export function isRelayUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === 'wss:' || url.protocol === 'ws:') &&
+      url.host !== '' &&
+      !url.search &&
+      !url.hash &&
+      !value.endsWith('/') &&
+      !value.includes('#')
+    );
+  } catch {
+    return false;
+  }
+}
+
+// ── Session ──
+
+export const getRoom = (): Promise<string | undefined> => read<string | undefined>(STORAGE_KEYS.ROOM, undefined);
+export const saveRoom = (record: string | undefined): Promise<void> => update(STORAGE_KEYS.ROOM, undefined, () => record);
+
+export interface ClosingRoom {
+  record: string;
+  /** When closing started, to stop trying after a while (PeerConnect §5.5). */
+  since: number;
+}
+
+/** Rooms being closed, by room id. */
+export const getClosingRooms = (): Promise<Record<string, ClosingRoom>> =>
+  read<Record<string, ClosingRoom>>(STORAGE_KEYS.CLOSING, {});
+
+export function setClosingRoom(id: string, room: ClosingRoom | undefined): Promise<void> {
+  return update<Record<string, ClosingRoom>>(STORAGE_KEYS.CLOSING, {}, ({ [id]: _, ...others }) => {
+    const rooms = room ? { ...others, [id]: room } : others;
+    return Object.keys(rooms).length ? rooms : undefined;
   });
 }
 
-/** Get saved session state (for reconnection) */
-export async function getSessionState(): Promise<string | null> {
-  await connectionStateMutex;
-  const result = await chrome.storage.local.get(STORAGE_KEYS.SESSION_STATE);
-  return result[STORAGE_KEYS.SESSION_STATE] ?? null;
+export interface SessionCache {
+  wallet?: WalletInfo;
+  state: SessionState;
 }
 
-/** Save session state */
-export function saveSessionState(state: string | null): Promise<void> {
-  return withConnectionStateLock(async () => {
-    if (state) {
-      await chrome.storage.local.set({ [STORAGE_KEYS.SESSION_STATE]: state });
-    } else {
-      await chrome.storage.local.remove(STORAGE_KEYS.SESSION_STATE);
-    }
+export const getSessionCache = (): Promise<SessionCache | undefined> =>
+  read<SessionCache | undefined>(STORAGE_KEYS.SESSION, undefined);
+export const saveSessionCache = (cache: SessionCache | undefined): Promise<void> =>
+  update(STORAGE_KEYS.SESSION, undefined, () => cache);
+
+export const getPendingIds = (): Promise<string[]> => read<string[]>(STORAGE_KEYS.PENDING, []);
+export const savePendingIds = (ids: string[]): Promise<void> =>
+  update<string[]>(STORAGE_KEYS.PENDING, [], () => (ids.length ? ids : undefined));
+
+// ── Sites ──
+
+/** origin → namespaces the user let the site use. */
+export type Sites = Record<string, string[]>;
+
+export const getSites = (): Promise<Sites> => read<Sites>(STORAGE_KEYS.SITES, {});
+
+export function grantSite(origin: string, namespace: string): Promise<void> {
+  return update<Sites>(STORAGE_KEYS.SITES, {}, (sites) => {
+    const granted = sites[origin] ?? [];
+    return granted.includes(namespace) ? sites : { ...sites, [origin]: [...granted, namespace] };
   });
 }
 
-/** Get connected wallet info */
-export async function getConnectedWallet(): Promise<ConnectedWallet | null> {
-  await connectionStateMutex;
-  const result = await chrome.storage.local.get(STORAGE_KEYS.CONNECTED_WALLET);
-  return result[STORAGE_KEYS.CONNECTED_WALLET] ?? null;
-}
-
-/** Save connected wallet info */
-export function saveConnectedWallet(wallet: ConnectedWallet | null): Promise<void> {
-  return withConnectionStateLock(async () => {
-    if (wallet) {
-      await chrome.storage.local.set({ [STORAGE_KEYS.CONNECTED_WALLET]: wallet });
-    } else {
-      await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_WALLET);
-    }
+/** Revokes one namespace, or every namespace when none is given. */
+export function revokeSite(origin: string, namespace?: string): Promise<void> {
+  return update<Sites>(STORAGE_KEYS.SITES, {}, (sites) => {
+    const { [origin]: granted = [], ...others } = sites;
+    const kept = namespace ? granted.filter((ns) => ns !== namespace) : [];
+    return kept.length ? { ...others, [origin]: kept } : others;
   });
 }
 
-// ── Per-origin permissions ──────────────────────────────────────────────
+export const clearSites = (): Promise<void> => update<Sites>(STORAGE_KEYS.SITES, {}, () => undefined);
 
-// Fix #5: Serialize concurrent read-modify-write operations to prevent data loss
-let permissionMutex: Promise<void> = Promise.resolve();
+// ── Activity ──
 
-function withPermissionLock<T>(fn: () => Promise<T>): Promise<T> {
-  const prev = permissionMutex;
-  let resolve: () => void;
-  permissionMutex = new Promise<void>((r) => { resolve = r; });
-  return prev.then(fn).finally(() => resolve!());
-}
-
-/** Get all origin permissions */
-export async function getPermissions(): Promise<Record<string, OriginPermission>> {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.PERMISSIONS);
-  return result[STORAGE_KEYS.PERMISSIONS] ?? {};
-}
-
-/** Grant permission for an origin */
-export function grantPermission(origin: string): Promise<void> {
-  return withPermissionLock(async () => {
-    const perms = await getPermissions();
-    perms[origin] = { origin, granted: true, grantedAt: Date.now() };
-    await chrome.storage.local.set({ [STORAGE_KEYS.PERMISSIONS]: perms });
-  });
-}
-
-/** Revoke permission for an origin */
-export function revokePermission(origin: string): Promise<void> {
-  return withPermissionLock(async () => {
-    const perms = await getPermissions();
-    delete perms[origin];
-    await chrome.storage.local.set({ [STORAGE_KEYS.PERMISSIONS]: perms });
-  });
-}
-
-/** Check if an origin is permitted */
-export async function isPermitted(origin: string): Promise<boolean> {
-  const perms = await getPermissions();
-  return perms[origin]?.granted === true;
-}
-
-// ── Session timestamp ─────────────────────────────────────────────────
-
-/** Save the timestamp when the session entered connected state */
-export function saveConnectedAt(ts: number | null): Promise<void> {
-  return withConnectionStateLock(async () => {
-    if (ts) {
-      await chrome.storage.local.set({ [STORAGE_KEYS.CONNECTED_AT]: ts });
-    } else {
-      await chrome.storage.local.remove(STORAGE_KEYS.CONNECTED_AT);
-    }
-  });
-}
-
-/** Get the timestamp when the session entered connected state */
-export async function getConnectedAt(): Promise<number | null> {
-  await connectionStateMutex;
-  const result = await chrome.storage.local.get(STORAGE_KEYS.CONNECTED_AT);
-  return result[STORAGE_KEYS.CONNECTED_AT] ?? null;
-}
-
-/** Atomically remove every value that can restore the previous connection. */
-export function clearConnectionState(): Promise<void> {
-  return withConnectionStateLock(() => chrome.storage.local.remove([
-    STORAGE_KEYS.SESSION_STATE,
-    STORAGE_KEYS.CONNECTED_WALLET,
-    STORAGE_KEYS.CONNECTED_AT,
-  ]));
-}
-
-// ── Activity Log ─────────────────────────────────────────────────────
-
-const ACTIVITY_KEY = 'activityLog';
 const MAX_ACTIVITY = 50;
 
-// Fix #5: Serialize activity log mutations to prevent data loss
-let activityMutex: Promise<void> = Promise.resolve();
-
-function withActivityLock<T>(fn: () => Promise<T>): Promise<T> {
-  const prev = activityMutex;
-  let resolve: () => void;
-  activityMutex = new Promise<void>((r) => { resolve = r; });
-  return prev.then(fn).finally(() => resolve!());
-}
-
-export async function getActivityLog(): Promise<ActivityEntry[]> {
-  const result = await chrome.storage.local.get(ACTIVITY_KEY);
-  return result[ACTIVITY_KEY] ?? [];
-}
+export const getActivityLog = (): Promise<ActivityEntry[]> => read<ActivityEntry[]>(STORAGE_KEYS.ACTIVITY, []);
 
 export function addActivityEntry(entry: ActivityEntry): Promise<void> {
-  return withActivityLock(async () => {
-    const log = await getActivityLog();
-    log.unshift(entry); // newest first
-    if (log.length > MAX_ACTIVITY) log.length = MAX_ACTIVITY;
-    await chrome.storage.local.set({ [ACTIVITY_KEY]: log });
-  });
+  return update<ActivityEntry[]>(STORAGE_KEYS.ACTIVITY, [], (log) => [entry, ...log].slice(0, MAX_ACTIVITY));
 }
 
-export function updateActivityStatus(
-  id: string,
-  status: ActivityEntry['status'],
-  response?: { result?: unknown; error?: { code: number; message: string } },
-): Promise<void> {
-  return withActivityLock(async () => {
-    const log = await getActivityLog();
-    const entry = log.find(e => e.id === id);
-    if (entry) {
-      entry.status = status;
-      if (response?.result !== undefined) entry.result = response.result;
-      if (response?.error) entry.error = response.error;
-      await chrome.storage.local.set({ [ACTIVITY_KEY]: log });
-    }
-  });
+export function updateActivity(id: string, change: Partial<ActivityEntry>): Promise<void> {
+  return update<ActivityEntry[]>(STORAGE_KEYS.ACTIVITY, [], (log) =>
+    log.map((entry) => (entry.id === id ? { ...entry, ...change } : entry)),
+  );
 }
 
-export async function clearActivityLog(): Promise<void> {
-  await chrome.storage.local.remove(ACTIVITY_KEY);
-}
+export const clearActivityLog = (): Promise<void> => update(STORAGE_KEYS.ACTIVITY, [], () => undefined);

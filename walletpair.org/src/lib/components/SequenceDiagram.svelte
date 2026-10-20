@@ -6,25 +6,26 @@
 		<span class="diagram-title">protocol flow</span>
 	</div>
 	<pre class="diagram"><code
-			>{` dApp                          Relay                         Wallet
+			>{` dApp                    PeerConnect relay                 Wallet
   │                              │                              │
-  │── connect /v1 (metadata) ──>│                              │
-  │<─ channel_joined (self) ────│                              │
+  │  ┌────────────────────────────────────────────────────────┐ │
+  │  │ dApp shows walletpair:<invite> · Wallet scans it       │ │
+  │  └────────────────────────────────────────────────────────┘ │
   │                              │                              │
-  │   ┌─────────────────────────────────────────────────────┐   │
-  │   │ dApp displays QR + code · wallet scans and compares │   │
-  │   └─────────────────────────────────────────────────────┘   │
+  │  ┌────────────────────────────────────────────────────────┐ │
+  │  │ PeerConnect pairs them and encrypts end to end         │ │
+  │  └────────────────────────────────────────────────────────┘ │
   │                              │                              │
-  │                              │ <── connect /v1 (metadata) ──│
-  │<─ channel_joined (wallet) ── │ ──> channel_joined (wallet) ─│
+  │── walletpair_connect ───────>│─────────────────────────────>│
+  │<─────────────────────────────│<────── accounts and chains ──│
   │                              │                              │
-  │   ┌─────────────────────────────────────────────────────┐   │
-  │   │  Derive directional traffic keys and pin peer key    │   │
-  │   └─────────────────────────────────────────────────────┘   │
+  │── personal_sign ────────────>│─────────────────────────────>│
+  │<─────────────────────────────│<──────────────── signature ──│
   │                              │                              │
-  │── sealed@eip155:1 ─────────>│ ─── sealed@eip155:1 ─────────>│
-  │                              │ <─── sealed@eip155:1 ─────────│
-  │<─ sealed@eip155:1 ──────────│                              │`}</code
+  │── solana_signTransactions ──>│─────────────────────────────>│
+  │<─────────────────────────────│<────── signed transactions ──│
+  │                              │                              │
+  │<─────────────────────────────│<────────────── state event ──│`}</code
 		></pre>
 </div>
 

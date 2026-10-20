@@ -10,7 +10,7 @@
 	<title>WalletPair — Connect dApps to Wallets</title>
 	<meta
 		name="description"
-		content="Minimal, self-sovereign protocol for connecting dApps to wallets. No registration, end-to-end encrypted, transport agnostic."
+		content="Connect dApps to wallets with a few functions over an end-to-end encrypted link. No registration, no servers to run."
 	/>
 </svelte:head>
 

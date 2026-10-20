@@ -1,24 +1,14 @@
 <script lang="ts">
+  import { hostOf, methodName } from '@/lib/display';
+
   let { method = '', origin = '' }: { method?: string; origin?: string } = $props();
-
-  function formatMethod(m: string): string {
-    if (m.includes('signTypedData')) return 'Sign Typed Data';
-    if (m.includes('personal_sign')) return 'Sign Message';
-    if (m.includes('sendTransaction')) return 'Send Transaction';
-    if (m.includes('signTransaction')) return 'Sign Transaction';
-    return m;
-  }
-
-  function shortOrigin(o: string): string {
-    try { return new URL(o).hostname; } catch { return o; }
-  }
 </script>
 
 {#if method}
   <div class="toast">
     <span class="toast-dot"></span>
     <span class="toast-text">
-      <strong>{formatMethod(method)}</strong> · confirm in wallet
+      <strong>{methodName(method)}</strong> · {hostOf(origin)} · confirm in wallet
     </span>
   </div>
 {/if}

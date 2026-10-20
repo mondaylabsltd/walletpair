@@ -1,19 +1,27 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { READ_ONLY_METHODS, proxyRpcCall, DEFAULT_RPC } from '../lib/rpc-proxy';
-import { isSafeRpcUrl, __resetRpcProxyCaches } from '../lib/protocols/ethereum/rpc-proxy';
+import { READ_ONLY_METHODS } from '../lib/evm/read-methods';
+import { DEFAULT_RPC, evmProxyRpcCall, isSafeRpcUrl, __resetRpcProxyCaches } from '../lib/evm/rpc-proxy';
+import { getSettings } from '../lib/storage';
 
-// ── Mock chrome.storage.local (needed by getSettings) ──────────────────
+/** What the background does for a page's read: user-configured endpoints first. */
+async function proxyRpcCall(chainId: number, method: string, params: unknown) {
+  return evmProxyRpcCall(String(chainId), method, params, (await getSettings()).rpcUrls);
+}
 
-const store: Record<string, unknown> = {};
+// ── Mock chrome.storage.local (needed by getSettings), before the imports run ──
 
-vi.stubGlobal('chrome', {
-  storage: {
-    local: {
-      get: vi.fn(async (key: string) => ({ [key]: store[key] })),
-      set: vi.fn(async (items: Record<string, unknown>) => Object.assign(store, items)),
-      remove: vi.fn(async (key: string) => { delete store[key]; }),
+const store = vi.hoisted(() => {
+  const store: Record<string, unknown> = {};
+  (globalThis as Record<string, unknown>).chrome = {
+    storage: {
+      local: {
+        get: async (key: string) => ({ [key]: store[key] }),
+        set: async (items: Record<string, unknown>) => void Object.assign(store, items),
+        remove: async (key: string) => void delete store[key],
+      },
     },
-  },
+  };
+  return store;
 });
 
 // ── Mock global fetch ──────────────────────────────────────────────────

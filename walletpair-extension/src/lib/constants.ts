@@ -1,24 +1,34 @@
-/** Default WalletPair relay server */
-export const DEFAULT_RELAY_URL = 'wss://relay.walletpair.org/v1';
+/** The PeerConnect relay new sessions use unless the user picks another in Settings. */
+export const DEFAULT_RELAY_URL = 'wss://relay.peerconnect.dev';
 
-/** Extension display name for EIP-6963 */
-export const EXTENSION_NAME = 'WalletPair';
+/** How this extension introduces itself in walletpair_connect (spec/core.md §4.1). */
+export const DAPP_INFO = {
+  name: 'WalletPair Extension',
+  url: 'https://walletpair.org',
+  icon: 'https://walletpair.org/icon.png',
+} as const;
 
-/** Reverse domain name for EIP-6963 */
-export const EXTENSION_RDNS = 'org.walletpair.extension';
+/** The namespaces the extension asks for when it pairs. */
+export const NAMESPACES = ['eip155', 'tron', 'solana'];
 
-/** Unique UUID for EIP-6963 provider (stable across sessions) */
-export const PROVIDER_UUID = 'e3a10000-7770-4270-8000-000077700001';
-
-/** Message channel name for content script <-> injected script communication */
+/** Tags window messages between the page providers and the content script. */
 export const MSG_CHANNEL = 'walletpair-ext';
 
-/** Chrome storage keys */
+/** Reverse-DNS name in EIP-6963 and TIP-6963 announcements. */
+export const EXTENSION_RDNS = 'org.walletpair.extension';
+
+/** chrome.storage.local keys. */
 export const STORAGE_KEYS = {
-  RELAY_URL: 'relayUrl',
-  SESSION_STATE: 'sessionState',
-  CONNECTED_WALLET: 'connectedWallet',
   SETTINGS: 'settings',
-  PERMISSIONS: 'permissions',
-  CONNECTED_AT: 'connectedAt',
+  /** The PeerConnect room record: a secret (spec/core.md §2.4). */
+  ROOM: 'room',
+  /** Rooms being closed, kept until the Wallet has been told. */
+  CLOSING: 'closingRooms',
+  /** Wallet and session state, so pages get answers while reconnecting. */
+  SESSION: 'session',
+  /** Ids of calls waiting for the Wallet, cancelled after a restart (spec/core.md §5). */
+  PENDING: 'pendingIds',
+  /** Per-site approvals: origin → namespaces. */
+  SITES: 'sites',
+  ACTIVITY: 'activityLog',
 } as const;
