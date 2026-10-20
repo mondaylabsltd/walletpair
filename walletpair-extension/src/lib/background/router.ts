@@ -116,15 +116,19 @@ export class Router extends EventTarget {
 
     this.#deps.surface();
     if (session.phase === 'idle') await session.pair(origin);
-    let shownToUser = false;
     if (!session.state[namespace]) {
-      // The Wallet asks the user, showing this site's origin.
+      // The Wallet asks the user, showing this site's origin and the namespaces.
       const asked = await session.ask([namespace], origin);
-      shownToUser = asked.origin === origin;
+      if (asked.origin === origin) {
+        // What the user approved there is approved for this site.
+        for (const approved of Object.keys(asked.state)) await this.#deps.sites.grantSite(origin, approved);
+        this.dispatchEvent(new Event('sites'));
+        if (asked.state[namespace]) return asked.state[namespace];
+      }
     }
     const state = session.state[namespace];
     if (!state) throw fail(ErrorCode.UserRejected, 'Not approved in the wallet');
-    if (!granted && !shownToUser && !(await this.#askUser(origin, namespace, tabId))) {
+    if (!granted && !(await this.#askUser(origin, namespace, tabId))) {
       throw fail(ErrorCode.UserRejected, 'User rejected the request');
     }
     await this.#deps.sites.grantSite(origin, namespace);

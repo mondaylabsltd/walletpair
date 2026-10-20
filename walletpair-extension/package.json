@@ -14,7 +14,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "tsx e2e/extension.e2e.ts",
+    "test:integration": "vitest run test/peerconnect.test.ts",
+    "test:e2e": "wxt build && tsx e2e/run.ts",
     "postinstall": "wxt prepare"
   },
   "dependencies": {

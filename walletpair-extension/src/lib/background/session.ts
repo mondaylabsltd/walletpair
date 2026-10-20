@@ -193,8 +193,15 @@ export class SessionManager extends EventTarget {
       if (this.#conn !== conn) return;
       this.online = conn.state === 'connected';
       if (this.online) this.replaced = false;
-      if (conn.state === 'closed') void this.#forget();
-      else this.#changed();
+      if (conn.state !== 'closed') return this.#changed();
+      // Leaving keeps the room for later; only a close ends the session.
+      if (conn.reason === 'left') {
+        this.#conn = undefined;
+        this.#client = undefined;
+        this.#changed();
+      } else {
+        void this.#forget();
+      }
     });
     client.addEventListener('state', () => {
       if (this.#client !== client) return;
