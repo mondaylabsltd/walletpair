@@ -360,9 +360,9 @@ describe('Solana functions', () => {
     const v0 = VersionedTransaction.deserialize(base64Decode(transactions[1])!);
     const signed = await crypto.subtle.verify(
       'Ed25519',
-      await crypto.subtle.importKey('raw', new PublicKey(solana.accounts[0]).toBytes(), 'Ed25519', false, ['verify']),
-      v0.signatures[0],
-      v0.message.serialize(),
+      await crypto.subtle.importKey('raw', new PublicKey(solana.accounts[0]).toBytes() as BufferSource, 'Ed25519', false, ['verify']),
+      v0.signatures[0] as BufferSource,
+      v0.message.serialize() as BufferSource,
     );
     expect(signed).toBe(true);
   });
@@ -393,8 +393,8 @@ describe('Solana functions', () => {
     const account = solana.accounts[0];
     const text = new TextEncoder().encode('Sign in to app.example');
     const { signature } = (await client.call('solana_signMessage', { account, message: base64Encode(text) })) as { signature: string };
-    const key = await crypto.subtle.importKey('raw', new PublicKey(account).toBytes(), 'Ed25519', false, ['verify']);
-    expect(await crypto.subtle.verify('Ed25519', key, base64Decode(signature)!, text)).toBe(true);
+    const key = await crypto.subtle.importKey('raw', new PublicKey(account).toBytes() as BufferSource, 'Ed25519', false, ['verify']);
+    expect(await crypto.subtle.verify('Ed25519', key, base64Decode(signature)! as BufferSource, text)).toBe(true);
 
     const tx = transfer(account, 'legacy');
     const message = tx.subarray(1 + 64);

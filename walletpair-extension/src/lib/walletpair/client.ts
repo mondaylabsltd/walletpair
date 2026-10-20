@@ -87,8 +87,8 @@ export class WalletPairClient extends EventTarget {
   }
 
   /** Asks for the namespaces; resolves with the Wallet's current state (core §4.1). */
-  async connect(dapp: DAppInfo, namespaces: string[]): Promise<ConnectResult> {
-    const raw = await this.call('walletpair_connect', [{ ...dapp, namespaces }]);
+  async connect(dapp: DAppInfo, namespaces: string[], origin?: string): Promise<ConnectResult> {
+    const raw = await this.call('walletpair_connect', [{ ...dapp, namespaces }], origin);
     const result = parseConnectResult(raw, this.#rules);
     if (!result) throw new CallError(rpcError(ErrorCode.Internal, 'Invalid walletpair_connect result'));
     this.wallet = result.wallet;

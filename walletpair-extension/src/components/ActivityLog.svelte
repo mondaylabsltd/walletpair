@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ActivityEntry } from '@/lib/types';
   import { ChevronDown } from 'lucide-svelte';
+  import { methodName, NAMESPACE_NAMES } from '@/lib/display';
   let { entries = [], filterOrigin, onClear }: {
     entries: ActivityEntry[];
     filterOrigin?: string;
@@ -34,19 +35,6 @@
     return `${Math.floor(diff / 3600)}h ago`;
   }
 
-  function shortMethod(m: string): string {
-    return m.replace('eth_', '').replace('wallet_', '').replace('personal_', '');
-  }
-
-  function categoryLabel(c: string): string {
-    switch (c) {
-      case 'sign': return 'Sign';
-      case 'tx': return 'Tx';
-      case 'auth': return 'Auth';
-      case 'read': return 'Read';
-      default: return c;
-    }
-  }
 
   function shortOrigin(origin: string): string {
     try { return new URL(origin).hostname; } catch { return origin; }
@@ -95,7 +83,7 @@
       <div class="empty-filter">No activity from this site yet</div>
     {:else}
     <div class="activity-list">
-      {#each filteredEntries.slice(0, 20) as entry}
+      {#each filteredEntries.slice(0, 20) as entry (entry.id)}
         <div class="activity-item">
           <button
             class="activity-row"
@@ -106,8 +94,8 @@
             aria-controls={`activity-detail-${entry.id}`}
           >
             <div class="activity-left">
-              <span class="badge {entry.category}">{categoryLabel(entry.category)}</span>
-              <span class="method" title={entry.method}>{shortMethod(entry.method)}</span>
+              <span class="badge {entry.namespace}">{NAMESPACE_NAMES[entry.namespace] ?? entry.namespace}</span>
+              <span class="method" title={entry.method}>{methodName(entry.method)}</span>
             </div>
             <div class="activity-right">
               <span class="origin">{shortOrigin(entry.origin)}</span>
@@ -297,24 +285,17 @@
     flex-shrink: 0;
   }
 
-  .badge.read {
-    background: var(--neutral-dim);
-    color: var(--text-dim);
+  .badge.eip155 {
+    background: var(--accent-dim);
+    color: var(--accent);
   }
-
-  .badge.sign {
-    background: var(--orange-dim);
-    color: var(--orange);
-  }
-
-  .badge.tx {
+  .badge.tron {
     background: var(--red-dim);
     color: var(--red);
   }
-
-  .badge.auth {
-    background: var(--accent-dim);
-    color: var(--accent);
+  .badge.solana {
+    background: var(--green-dim);
+    color: var(--green);
   }
 
   .method {

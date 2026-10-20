@@ -1,8 +1,8 @@
 {
   "name": "walletpair-extension",
-  "description": "WalletPair - Bridge any dApp to your wallet via WalletPair protocol",
+  "description": "WalletPair browser extension: EVM, TRON and Solana apps with a mobile wallet",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",

@@ -1,255 +1,138 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  getSettings,
-  saveSettings,
-  getConnectedWallet,
-  saveConnectedWallet,
-  getSessionState,
-  saveSessionState,
-  grantPermission,
-  getPermissions,
   addActivityEntry,
+  clearSites,
   getActivityLog,
-  clearConnectionState,
+  getClosingRooms,
+  getPendingIds,
+  getRoom,
+  getSettings,
+  getSites,
+  grantSite,
+  isRelayUrl,
+  revokeSite,
+  saveRoom,
+  savePendingIds,
+  saveSettings,
+  setClosingRoom,
+  updateActivity,
 } from '../storage';
-
-// ── Mock chrome.storage.local ──────────────────────────────────────────
+import { DEFAULT_RELAY_URL } from '../constants';
+import type { ActivityEntry } from '../types';
 
 const store: Record<string, unknown> = {};
 
-const chromeStorageLocal = {
-  get: vi.fn(async (key: string) => {
-    return { [key]: store[key] };
-  }),
-  set: vi.fn(async (items: Record<string, unknown>) => {
-    Object.assign(store, items);
-  }),
-  remove: vi.fn(async (keys: string | string[]) => {
-    for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
-  }),
-};
-
 vi.stubGlobal('chrome', {
-  storage: { local: chromeStorageLocal },
+  storage: {
+    local: {
+      get: vi.fn(async (key: string) => ({ [key]: structuredClone(store[key]) })),
+      set: vi.fn(async (items: Record<string, unknown>) => {
+        // Writes land after a delay, as real storage does, so lost updates would show.
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        Object.assign(store, structuredClone(items));
+      }),
+      remove: vi.fn(async (keys: string | string[]) => {
+        for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
+      }),
+    },
+  },
 });
 
-// ── Tests ──────────────────────────────────────────────────────────────
+beforeEach(() => {
+  for (const key of Object.keys(store)) delete store[key];
+});
 
-describe('storage', () => {
-  beforeEach(() => {
-    // Clear the in-memory store and mocks
-    for (const key of Object.keys(store)) delete store[key];
-    vi.clearAllMocks();
+describe('settings', () => {
+  it('defaults, then merges what was saved', async () => {
+    expect(await getSettings()).toEqual({ relayUrl: DEFAULT_RELAY_URL, rpcUrls: {} });
+    await saveSettings({ relayUrl: 'wss://relay.example.com' });
+    await saveSettings({ rpcUrls: { 1: 'https://rpc.example.com' } });
+    expect(await getSettings()).toEqual({ relayUrl: 'wss://relay.example.com', rpcUrls: { 1: 'https://rpc.example.com' } });
   });
 
-  // ── getSettings ────────────────────────────────────────────────────
+  it('accepts only PeerConnect relay URLs', () => {
+    for (const ok of ['wss://relay.example.com', 'ws://127.0.0.1:8080', 'wss://example.com/peerconnect']) {
+      expect(isRelayUrl(ok), ok).toBe(true);
+    }
+    for (const bad of ['https://relay.example.com', 'wss://relay.example.com/', 'wss://relay.example.com?x=1', 'wss://a#b', 'relay.example.com', '']) {
+      expect(isRelayUrl(bad), bad).toBe(false);
+    }
+  });
+});
 
-  describe('getSettings', () => {
-    it('returns defaults when storage is empty', async () => {
-      const settings = await getSettings();
-      expect(settings.relayUrl).toBe('wss://relay.walletpair.org/v1');
-      expect(settings.autoConnect).toBe(true);
-      expect(settings.rpcUrls).toEqual({});
-    });
-
-    it('merges stored values with defaults', async () => {
-      store['settings'] = { relayUrl: 'wss://custom.relay' };
-      const settings = await getSettings();
-      expect(settings.relayUrl).toBe('wss://custom.relay');
-      // Defaults still present
-      expect(settings.autoConnect).toBe(true);
-    });
+describe('session records', () => {
+  it('saves and clears the room record', async () => {
+    await saveRoom('record');
+    expect(await getRoom()).toBe('record');
+    await saveRoom(undefined);
+    expect(await getRoom()).toBeUndefined();
   });
 
-  // ── saveSettings ───────────────────────────────────────────────────
-
-  describe('saveSettings', () => {
-    it('merges partial update with existing settings', async () => {
-      await saveSettings({ autoConnect: false });
-      const settings = await getSettings();
-      expect(settings.autoConnect).toBe(false);
-      // Other defaults preserved
-      expect(settings.relayUrl).toBe('wss://relay.walletpair.org/v1');
-    });
-
-    it('calls chrome.storage.local.set', async () => {
-      await saveSettings({ relayUrl: 'wss://new' });
-      expect(chromeStorageLocal.set).toHaveBeenCalled();
-      const arg = chromeStorageLocal.set.mock.calls[0][0] as Record<string, Record<string, unknown>>;
-      expect(arg['settings'].relayUrl).toBe('wss://new');
-    });
+  it('keeps closing rooms by id', async () => {
+    await setClosingRoom('a', { record: 'ra', since: 1 });
+    await setClosingRoom('b', { record: 'rb', since: 2 });
+    await setClosingRoom('a', undefined);
+    expect(await getClosingRooms()).toEqual({ b: { record: 'rb', since: 2 } });
+    await setClosingRoom('b', undefined);
+    expect(store.closingRooms).toBeUndefined();
   });
 
-  // ── getConnectedWallet / saveConnectedWallet ──────────────────────
+  it('stores pending ids, removing the key when there are none', async () => {
+    await savePendingIds(['1', '2']);
+    expect(await getPendingIds()).toEqual(['1', '2']);
+    await savePendingIds([]);
+    expect(store.pendingIds).toBeUndefined();
+  });
+});
 
-  describe('connectedWallet', () => {
-    it('returns null when no wallet saved', async () => {
-      const wallet = await getConnectedWallet();
-      expect(wallet).toBeNull();
-    });
-
-    it('saves and retrieves wallet', async () => {
-      const wallet = { address: '0xabc', chainId: 1, name: 'Test' };
-      await saveConnectedWallet(wallet);
-      const retrieved = await getConnectedWallet();
-      expect(retrieved).toEqual(wallet);
-    });
-
-    it('removes wallet when saving null', async () => {
-      store['connectedWallet'] = { address: '0xabc', chainId: 1 };
-      await saveConnectedWallet(null);
-      expect(chromeStorageLocal.remove).toHaveBeenCalledWith('connectedWallet');
-      const retrieved = await getConnectedWallet();
-      expect(retrieved).toBeNull();
-    });
+describe('sites', () => {
+  it('grants namespaces per origin without losing concurrent grants', async () => {
+    await Promise.all([
+      grantSite('https://a.example', 'eip155'),
+      grantSite('https://a.example', 'solana'),
+      grantSite('https://b.example', 'tron'),
+      grantSite('https://a.example', 'eip155'),
+    ]);
+    expect(await getSites()).toEqual({ 'https://a.example': ['eip155', 'solana'], 'https://b.example': ['tron'] });
   });
 
-  // ── getSessionState / saveSessionState ────────────────────────────
+  it('revokes one namespace or a whole site', async () => {
+    await grantSite('https://a.example', 'eip155');
+    await grantSite('https://a.example', 'tron');
+    await grantSite('https://b.example', 'tron');
+    await revokeSite('https://a.example', 'eip155');
+    expect(await getSites()).toEqual({ 'https://a.example': ['tron'], 'https://b.example': ['tron'] });
+    await revokeSite('https://a.example', 'tron');
+    await revokeSite('https://b.example');
+    expect(await getSites()).toEqual({});
+    await grantSite('https://c.example', 'tron');
+    await clearSites();
+    expect(await getSites()).toEqual({});
+  });
+});
 
-  describe('sessionState', () => {
-    it('returns null when no session saved', async () => {
-      const state = await getSessionState();
-      expect(state).toBeNull();
-    });
-
-    it('saves and retrieves session state string', async () => {
-      await saveSessionState('serialized-session-data');
-      const state = await getSessionState();
-      expect(state).toBe('serialized-session-data');
-    });
-
-    it('removes session state when saving null', async () => {
-      store['sessionState'] = 'old-data';
-      await saveSessionState(null);
-      expect(chromeStorageLocal.remove).toHaveBeenCalledWith('sessionState');
-      const state = await getSessionState();
-      expect(state).toBeNull();
-    });
+describe('activity', () => {
+  const entry = (id: string): ActivityEntry => ({
+    id,
+    timestamp: 1,
+    origin: 'https://a.example',
+    method: 'personal_sign',
+    namespace: 'eip155',
+    status: 'pending',
   });
 
-  describe('clearConnectionState', () => {
-    it('removes all reconnect data but retains settings and permissions', async () => {
-      store['sessionState'] = 'serialized-session-data';
-      store['connectedWallet'] = { address: '0xabc', chainId: 1 };
-      store['connectedAt'] = 123;
-      store['settings'] = { relayUrl: 'wss://custom.relay' };
-      store['permissions'] = { 'https://dapp.example': { granted: true } };
-
-      await clearConnectionState();
-
-      expect(chromeStorageLocal.remove).toHaveBeenCalledWith([
-        'sessionState',
-        'connectedWallet',
-        'connectedAt',
-      ]);
-      expect(store['sessionState']).toBeUndefined();
-      expect(store['connectedWallet']).toBeUndefined();
-      expect(store['connectedAt']).toBeUndefined();
-      expect(store['settings']).toEqual({ relayUrl: 'wss://custom.relay' });
-      expect(store['permissions']).toBeDefined();
-    });
-
-    it('runs after an older in-flight snapshot write', async () => {
-      let releaseWrite!: () => void;
-      const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
-      chromeStorageLocal.set.mockImplementationOnce(async (items: Record<string, unknown>) => {
-        await writeGate;
-        Object.assign(store, items);
-      });
-
-      const staleWrite = saveSessionState('stale-session');
-      const clear = clearConnectionState();
-      releaseWrite();
-      await Promise.all([staleWrite, clear]);
-
-      expect(store['sessionState']).toBeUndefined();
-    });
+  it('keeps the newest 50 entries, newest first', async () => {
+    for (let i = 0; i < 55; i++) await addActivityEntry(entry(String(i)));
+    const log = await getActivityLog();
+    expect(log).toHaveLength(50);
+    expect(log[0].id).toBe('54');
   });
 
-  // ── Regression: Fix #5 — Mutex for permissions ──────────────────
-
-  describe('Fix #5: concurrent grantPermission (mutex)', () => {
-    it('two concurrent grantPermission calls for different origins both succeed', async () => {
-      await Promise.all([
-        grantPermission('https://a.com'),
-        grantPermission('https://b.com'),
-      ]);
-      const perms = await getPermissions();
-      expect(perms['https://a.com']).toBeDefined();
-      expect(perms['https://a.com'].granted).toBe(true);
-      expect(perms['https://b.com']).toBeDefined();
-      expect(perms['https://b.com'].granted).toBe(true);
-    });
-
-    it('three concurrent grantPermission calls preserve all entries', async () => {
-      await Promise.all([
-        grantPermission('https://x.com'),
-        grantPermission('https://y.com'),
-        grantPermission('https://z.com'),
-      ]);
-      const perms = await getPermissions();
-      expect(Object.keys(perms)).toHaveLength(3);
-      expect(perms['https://x.com'].granted).toBe(true);
-      expect(perms['https://y.com'].granted).toBe(true);
-      expect(perms['https://z.com'].granted).toBe(true);
-    });
-  });
-
-  // ── Regression: Fix #5 — Mutex for activity log ─────────────────
-
-  describe('Fix #5: concurrent addActivityEntry (mutex)', () => {
-    it('two concurrent addActivityEntry calls both appear in the log', async () => {
-      const entry1 = {
-        id: 'e1',
-        timestamp: Date.now(),
-        origin: 'https://a.com',
-        method: 'eth_sendTransaction',
-        category: 'tx' as const,
-        status: 'pending' as const,
-      };
-      const entry2 = {
-        id: 'e2',
-        timestamp: Date.now(),
-        origin: 'https://b.com',
-        method: 'personal_sign',
-        category: 'sign' as const,
-        status: 'pending' as const,
-      };
-
-      await Promise.all([
-        addActivityEntry(entry1),
-        addActivityEntry(entry2),
-      ]);
-
-      const log = await getActivityLog();
-      expect(log).toHaveLength(2);
-      const ids = log.map((e: { id: string }) => e.id);
-      expect(ids).toContain('e1');
-      expect(ids).toContain('e2');
-    });
-
-    it('three concurrent addActivityEntry calls all appear', async () => {
-      const makeEntry = (id: string) => ({
-        id,
-        timestamp: Date.now(),
-        origin: 'https://test.com',
-        method: 'eth_call',
-        category: 'read' as const,
-        status: 'success' as const,
-      });
-
-      await Promise.all([
-        addActivityEntry(makeEntry('a')),
-        addActivityEntry(makeEntry('b')),
-        addActivityEntry(makeEntry('c')),
-      ]);
-
-      const log = await getActivityLog();
-      expect(log).toHaveLength(3);
-      const ids = log.map((e: { id: string }) => e.id);
-      expect(ids).toContain('a');
-      expect(ids).toContain('b');
-      expect(ids).toContain('c');
-    });
+  it('updates an entry by id', async () => {
+    await Promise.all([addActivityEntry(entry('a')), addActivityEntry(entry('b'))]);
+    await updateActivity('a', { status: 'success', result: '0x1' });
+    const log = await getActivityLog();
+    expect(log.find((e) => e.id === 'a')).toMatchObject({ status: 'success', result: '0x1' });
+    expect(log.find((e) => e.id === 'b')?.status).toBe('pending');
   });
 });

@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { READ_ONLY_METHODS, proxyRpcCall, DEFAULT_RPC } from '../lib/rpc-proxy';
-import { isSafeRpcUrl, __resetRpcProxyCaches } from '../lib/protocols/ethereum/rpc-proxy';
+import { READ_ONLY_METHODS } from '../lib/evm/read-methods';
+import { DEFAULT_RPC, evmProxyRpcCall, isSafeRpcUrl, __resetRpcProxyCaches } from '../lib/evm/rpc-proxy';
+import { getSettings } from '../lib/storage';
+
+/** What the background does for a page's read: user-configured endpoints first. */
+async function proxyRpcCall(chainId: number, method: string, params: unknown) {
+  return evmProxyRpcCall(String(chainId), method, params, (await getSettings()).rpcUrls);
+}
 
 // ── Mock chrome.storage.local (needed by getSettings) ──────────────────
 

@@ -2,7 +2,7 @@
   import QRCode from 'qrcode';
   import { Copy, Check, ArrowLeft } from 'lucide-svelte';
 
-  let { uri, fingerprint, onCancel }: { uri: string; fingerprint?: string; onCancel?: () => void } = $props();
+  let { uri, onCancel }: { uri: string; onCancel?: () => void } = $props();
 
   let qrDataUrl = $state('');
   let copied = $state(false);
@@ -42,17 +42,6 @@
       </div>
     {/if}
   </div>
-
-  {#if fingerprint}
-    <div class="fingerprint">
-      <span class="fingerprint-label">Session Code</span>
-      <div class="fingerprint-code">
-        {#each [fingerprint.slice(0, 2), fingerprint.slice(2, 4)] as pair}
-          <span class="fp-pair">{pair}</span>
-        {/each}
-      </div>
-    </div>
-  {/if}
 
   <div class="actions-row">
     <button class="copy-btn" onclick={copyUri}>
@@ -130,37 +119,9 @@
     justify-content: center;
   }
 
-  .fingerprint {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-  }
 
-  .fingerprint-label {
-    font-size: 10px;
-    color: var(--text-dimmer);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 600;
-  }
 
-  .fingerprint-code {
-    display: flex;
-    gap: 6px;
-  }
 
-  .fp-pair {
-    font-size: 22px;
-    font-weight: 700;
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 6px 14px;
-    color: var(--text);
-    letter-spacing: 0.05em;
-  }
 
   .copy-btn {
     display: flex;
