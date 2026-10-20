@@ -77,6 +77,14 @@
 	<a href="/docs/protocol/core">Core</a> and one document per network.
 </p>
 
+<h2>Try it</h2>
+
+<p>
+	The <a href="/demo">demo</a> runs a dApp and a test-only wallet side by side in this site, connected
+	through the extension, on all three networks. The <a href="/demo/wallet">demo wallet</a> also works
+	on its own with any dApp in another tab.
+</p>
+
 <h2>For dApp developers</h2>
 
 <p>

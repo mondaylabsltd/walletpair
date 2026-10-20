@@ -248,13 +248,13 @@ describe('EVM functions', () => {
 
   it('wallet_switchEthereumChain: 4902 for an unknown chain, then addEthereumChain', async () => {
     const { client } = await connected();
-    expect(await rejection(client.call('wallet_switchEthereumChain', [{ chainId: '0x2105' }]))).toBe(4902);
+    expect(await rejection(client.call('wallet_switchEthereumChain', [{ chainId: '0x1e240' }]))).toBe(4902);
     await client.call('wallet_addEthereumChain', [
-      { chainId: '0x2105', chainName: 'Base', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://mainnet.base.org'] },
+      { chainId: '0x1e240', chainName: 'Example', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://rpc.example'] },
     ]);
     expect(client.state.eip155.chain).toBe('eip155:1');
-    await client.call('wallet_switchEthereumChain', [{ chainId: '0x2105' }]);
-    expect(client.state.eip155.chain).toBe('eip155:8453');
+    await client.call('wallet_switchEthereumChain', [{ chainId: '0x1e240' }]);
+    expect(client.state.eip155.chain).toBe('eip155:123456');
   });
 
   it('wallet_sendCalls and wallet_getCallsStatus', async () => {

@@ -16,7 +16,9 @@
 		"gen": "wrangler types"
 	},
 	"dependencies": {
+		"@noble/curves": "^2.4.0",
 		"lucide-svelte": "^1.0.1",
+		"viem": "^2.57.7",
 		"walletpair-extension": "workspace:*"
 	},
 	"devDependencies": {

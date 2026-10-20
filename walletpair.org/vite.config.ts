@@ -7,7 +7,8 @@ export default defineConfig({
 		noExternal: ['lucide-svelte']
 	},
 	server: {
-		// The Protocol pages render ../spec, which lives outside this project.
-		fs: { allow: ['../spec'] }
+		// The Protocol pages render ../spec, and the demo wallet runs the
+		// extension's Wallet code: both live elsewhere in this workspace.
+		fs: { allow: ['..'] }
 	}
 });

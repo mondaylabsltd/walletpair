@@ -24,6 +24,7 @@
     "test:e2e": "wxt build && tsx e2e/run.ts",
     "test:e2e:firefox": "WALLETPAIR_E2E=1 wxt build -b firefox && tsx e2e/firefox.ts",
     "test:e2e:cli": "wxt build && tsx e2e/cli.ts",
+    "test:e2e:demo": "pnpm --dir ../walletpair.org build && wxt build && tsx e2e/demo.ts",
     "bench": "tsx test/bench.ts",
     "wallet": "tsx test/wallet/cli.ts",
     "postinstall": "wxt prepare"

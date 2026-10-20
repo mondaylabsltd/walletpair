@@ -3,7 +3,8 @@
 
 	const nav = [
 		{ href: '/docs', label: 'Docs' },
-		{ href: '/docs/protocol', label: 'Protocol' }
+		{ href: '/docs/protocol', label: 'Protocol' },
+		{ href: '/demo', label: 'Demo' }
 	];
 
 	let mobileOpen = $state(false);

@@ -66,6 +66,7 @@ walletpair:wss://relay.example.com#q3V0…
 		<a href="/docs/install-extension" class="btn btn-primary"
 			><Download size={16} strokeWidth={1.5} /> Install Extension</a
 		>
+		<a href="/demo" class="btn btn-ghost">Try the demo →</a>
 		<a href="/docs/protocol" class="btn btn-ghost">Read the Protocol →</a>
 	</div>
 </section>

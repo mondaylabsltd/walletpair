@@ -25,7 +25,7 @@ Wallet → DApp    {"event":"state","data":{"eip155":{"chain":"eip155:137",…},
 | --- | --- |
 | [`spec/`](./spec/) | The protocol: [core](./spec/core.md), one document per network in [`networks/`](./spec/networks/), and [test vectors](./spec/test-vectors/) |
 | [`walletpair-extension/`](./walletpair-extension/) | Browser extension (Chrome, Firefox): the DApp side for every site, so existing EVM, TRON and Solana dApps work unchanged |
-| [`walletpair.org/`](./walletpair.org/) | Website and documentation, [walletpair.org](https://walletpair.org) |
+| [`walletpair.org/`](./walletpair.org/) | Website and documentation, [walletpair.org](https://walletpair.org), with a demo dApp and a test-only demo wallet (`/demo`) |
 | [`docs/STATUS.md`](./docs/STATUS.md) | State of the project, decisions and their reasons, known limitations |
 | [`brands/`](./brands/) | Logos |
 

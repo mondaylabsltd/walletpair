@@ -50,8 +50,8 @@ export interface Signer {
 export interface Prompts {
   /** Which of the offered namespaces the user approves; none declines. */
   connect(params: ConnectParams, offered: string[], origin?: string): Promise<string[]>;
-  /** Whether the user approves a request. */
-  approve(request: Request): Promise<boolean>;
+  /** Whether the user approves a request. `cancelled` aborts if the DApp side withdraws it (core §5). */
+  approve(request: Request, cancelled: AbortSignal): Promise<boolean>;
 }
 
 /** What survives a restart (core §6). */
@@ -195,6 +195,7 @@ export class ReferenceWallet {
   /** Waits for the user; cancellation (core §5) answers false. */
   #ask(request: Request): Promise<boolean> {
     return new Promise((resolve) => {
+      const cancelled = new AbortController();
       let done = false;
       const finish = (answer: boolean) => {
         if (done) return;
@@ -202,8 +203,11 @@ export class ReferenceWallet {
         this.#waiting.delete(request.id);
         resolve(answer);
       };
-      this.#waiting.set(request.id, () => finish(false));
-      this.#options.prompts.approve(request).then(finish, () => finish(false));
+      this.#waiting.set(request.id, () => {
+        cancelled.abort();
+        finish(false);
+      });
+      this.#options.prompts.approve(request, cancelled.signal).then(finish, () => finish(false));
     });
   }
 

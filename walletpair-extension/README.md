@@ -80,6 +80,7 @@ Test keys only: they are generated and kept in plain text in `.walletpair-wallet
 | `PEERCONNECT_RELAY_BIN=… pnpm test:integration` | The extension's session and router against the reference Wallet over the real PeerConnect client and a real relay |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:e2e` | Chrome with the built extension; a test dApp using viem, TronWeb's wallet adapter and Solana's wallet adapter; the reference Wallet as the phone |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:firefox` | The same core flows in the installed Firefox |
+| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:demo` | The website's `/demo` (built site in workerd) with the extension in Chrome: pairing, approving and verifying on all three networks by clicking the page |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:cli` | Chrome and the test dApp with the CLI wallet as a separate process, its prompts answered on its stdin, on all three networks |
 | `PEERCONNECT_RELAY_BIN=… pnpm bench` | Latency and throughput of WalletPair over PeerConnect on loopback |
 | `npx tsx test/vectors/generate.ts` | Regenerates `spec/test-vectors/{evm,tron,solana}.json` with viem, TronWeb and web3.js |

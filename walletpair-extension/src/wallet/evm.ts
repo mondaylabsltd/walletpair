@@ -10,7 +10,7 @@ export const EVM_TEST_KEY: Hex = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed
 
 export function evmSigner(privateKey: Hex = EVM_TEST_KEY, chain = 'eip155:1'): Signer & { sent: Hex[] } {
   const account = privateKeyToAccount(privateKey);
-  const known = new Set(['eip155:1', 'eip155:137', 'eip155:11155111']);
+  const known = new Set(['eip155:1', 'eip155:10', 'eip155:56', 'eip155:137', 'eip155:8453', 'eip155:42161', 'eip155:11155111']);
   const bundles = new Map<string, { chainId: string }>();
   const sent: Hex[] = [];
 

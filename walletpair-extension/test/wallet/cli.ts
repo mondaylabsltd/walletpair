@@ -61,12 +61,20 @@ terminal.on('line', (line) => {
 });
 /** Questions wait their turn: one prompt on screen at a time. */
 let asking: Promise<unknown> = Promise.resolve();
-function ask(question: string): Promise<boolean> {
+function ask(question: string, cancelled?: AbortSignal): Promise<boolean> {
   const answer = asking.then(
     () =>
       new Promise<boolean>((done) => {
+        if (cancelled?.aborted) return done(false);
         console.log(`${question}\n  approve? [y/N]`);
-        lineWaiters.push((line) => done(/^y(es)?$/i.test(line)));
+        const waiter = (line: string) => done(/^y(es)?$/i.test(line));
+        lineWaiters.push(waiter);
+        cancelled?.addEventListener('abort', () => {
+          const index = lineWaiters.indexOf(waiter);
+          if (index >= 0) lineWaiters.splice(index, 1);
+          console.log('  cancelled by the dApp');
+          done(false);
+        });
       }),
   );
   asking = answer.catch(() => {});
@@ -131,13 +139,13 @@ const prompts: Prompts = {
     }
     return (await ask(question)) ? offered : [];
   },
-  approve: async (request) => {
+  approve: async (request, cancelled) => {
     const question = show(describeRequest(request));
     if (autoApprove) {
       console.log(`${question}\n  approved (--yes)`);
       return true;
     }
-    return ask(question);
+    return ask(question, cancelled);
   },
 };
 
