@@ -69,6 +69,7 @@ pnpm check               # svelte-check and TypeScript
 | `PEERCONNECT_RELAY_BIN=… pnpm test:integration` | The extension's session and router against the reference Wallet over the real PeerConnect client and a real relay |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:e2e` | Chrome with the built extension; a test dApp using viem, TronWeb's wallet adapter and Solana's wallet adapter; the reference Wallet as the phone |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:firefox` | The same core flows in the installed Firefox |
+| `PEERCONNECT_RELAY_BIN=… pnpm bench` | Latency and throughput of WalletPair over PeerConnect on loopback |
 | `npx tsx test/vectors/generate.ts` | Regenerates `spec/test-vectors/{evm,tron,solana}.json` with viem, TronWeb and web3.js |
 
 `PEERCONNECT_RELAY_BIN` is a `peerconnect-relay` binary (`cargo build --release -p peerconnect-relay` in PeerConnect); `PEERCONNECT_RELAY=ws://…` uses a running relay instead. Without either, the relay tests are skipped.

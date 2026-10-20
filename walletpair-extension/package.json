@@ -17,6 +17,7 @@
     "test:integration": "vitest run test/peerconnect.test.ts",
     "test:e2e": "wxt build && tsx e2e/run.ts",
     "test:e2e:firefox": "WALLETPAIR_E2E=1 wxt build -b firefox && tsx e2e/firefox.ts",
+    "bench": "tsx test/bench.ts",
     "postinstall": "wxt prepare"
   },
   "dependencies": {

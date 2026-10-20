@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   extension:
-    name: Extension (check + test + Chrome/Firefox builds)
+    name: Extension (check + test + vectors + Chrome/Firefox builds)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -34,8 +34,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Type / Svelte check
         run: pnpm check
-      - name: Test
+      - name: Test (unit, properties, conformance vectors)
         run: pnpm test
+      - name: Test vectors are reproducible from viem, TronWeb and web3.js
+        run: npx tsx test/vectors/generate.ts && git diff --exit-code -- ../spec/test-vectors
       - name: Build Chrome MV3
         run: pnpm build
       - name: Build Firefox
