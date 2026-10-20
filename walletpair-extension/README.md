@@ -61,6 +61,17 @@ pnpm build:firefox       # .output/firefox-mv2
 pnpm check               # svelte-check and TypeScript
 ```
 
+## Trying it by hand with the CLI wallet
+
+`pnpm wallet` is a WalletPair Wallet in the terminal, for EVM, TRON and Solana, standing in for a phone:
+
+1. `pnpm build`, then load `.output/chrome-mv3` as an unpacked extension.
+2. Open any dApp and connect; the side panel shows the pairing QR code. Click *Copy link*.
+3. `pnpm wallet "walletpair:…"`: the wallet pairs, prints its accounts, and shows each request decoded (message text, typed data, transaction fields, the TRON contract and its owner, Solana transactions). Answer `y` or `n`.
+4. While it runs: `chain eip155:137` (or `tron:728126428`, `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`, …) switches a chain, `revoke` withdraws the approval, `leave` goes offline for 5 s, `end` ends the session, `quit` exits. `pnpm wallet --resume` continues after a restart.
+
+Test keys only: they are generated and kept in plain text in `.walletpair-wallet.json`. Transactions are signed, never broadcast.
+
 ## Tests
 
 | Command | What runs |
@@ -69,6 +80,7 @@ pnpm check               # svelte-check and TypeScript
 | `PEERCONNECT_RELAY_BIN=… pnpm test:integration` | The extension's session and router against the reference Wallet over the real PeerConnect client and a real relay |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:e2e` | Chrome with the built extension; a test dApp using viem, TronWeb's wallet adapter and Solana's wallet adapter; the reference Wallet as the phone |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:firefox` | The same core flows in the installed Firefox |
+| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:cli` | Chrome and the test dApp with the CLI wallet as a separate process, its prompts answered on its stdin, on all three networks |
 | `PEERCONNECT_RELAY_BIN=… pnpm bench` | Latency and throughput of WalletPair over PeerConnect on loopback |
 | `npx tsx test/vectors/generate.ts` | Regenerates `spec/test-vectors/{evm,tron,solana}.json` with viem, TronWeb and web3.js |
 
