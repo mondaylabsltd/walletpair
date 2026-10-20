@@ -1,9 +1,5 @@
-/**
- * The PeerConnect relay new sessions use unless the user picks another in
- * Settings. Placeholder: the project has not chosen its default relay yet
- * (docs/STATUS.md, open questions).
- */
-export const DEFAULT_RELAY_URL = 'wss://relay.walletpair.org';
+/** The PeerConnect relay new sessions use unless the user picks another in Settings. */
+export const DEFAULT_RELAY_URL = 'wss://relay.peerconnect.dev';
 
 /** How this extension introduces itself in walletpair_connect (spec/core.md §4.1). */
 export const DAPP_INFO = {

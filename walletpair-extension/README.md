@@ -48,7 +48,7 @@ background         entrypoints/background.ts
 
 ## Settings
 
-The relay for new pairings is a PeerConnect relay URL (`ws://` or `wss://`). The default in `lib/constants.ts` is a placeholder until the project chooses its relay. A paired session stays on the relay it was created on.
+The relay for new pairings is a PeerConnect relay URL (`ws://` or `wss://`), by default `wss://relay.peerconnect.dev`. A paired session stays on the relay it was created on.
 
 ## Development
 
