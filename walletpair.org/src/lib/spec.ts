@@ -13,9 +13,7 @@ export interface SpecPage {
 export const specPages: SpecPage[] = [
 	{ slug: '', file: 'README.md', title: 'Overview' },
 	{ slug: 'core', file: 'core.md', title: 'Core' },
-	{ slug: 'evm', file: 'networks/evm.md', title: 'EVM' },
-	{ slug: 'tron', file: 'networks/tron.md', title: 'TRON' },
-	{ slug: 'solana', file: 'networks/solana.md', title: 'Solana' }
+	{ slug: 'evm', file: 'networks/evm.md', title: 'EVM' }
 ];
 
 const sources = import.meta.glob('../../../spec/**/*.md', {

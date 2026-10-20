@@ -6,9 +6,8 @@
 //
 // Options: --state <file> (default .walletpair-wallet.json in this directory).
 // While it runs: `chain <chain>` switches a namespace's chain (eip155:137,
-// tron:728126428, solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp, …), `revoke`
-// withdraws the approval, `leave` goes offline for 5 s, `end` ends the
-// session, `quit` exits keeping it.
+// …), `revoke` withdraws the approval, `leave` goes offline for 5 s, `end`
+// ends the session, `quit` exits keeping it.
 //
 // TEST KEYS ONLY. The keys are generated and stored in the state file in
 // plain text. Transactions are signed, never broadcast.
@@ -21,13 +20,11 @@ import { connect, Room, type Connection } from '../../vendor/peerconnect/index.j
 import type { Response } from '../../src/lib/walletpair/protocol';
 import { describeConnect, describeRequest, type Description } from '../../src/wallet/describe';
 import { evmSigner } from '../../src/wallet/evm';
-import { solanaSigner } from '../../src/wallet/solana';
-import { tronSigner } from '../../src/wallet/tron';
 import { ReferenceWallet, type Prompts, type WalletStore } from '../../src/wallet/wallet';
 
 interface SavedState {
   record: string;
-  keys: { evm: string; tron: string; solana: string };
+  keys: { evm: string };
   approved: string[];
   chains: Record<string, string>;
   records: [string, Response | null][];
@@ -88,11 +85,7 @@ if (flag('--resume') && !saved) {
   console.error(`No saved session in ${statePath}`);
   process.exit(2);
 }
-const keys = saved?.keys ?? {
-  evm: randomBytes(32).toString('hex'),
-  tron: randomBytes(32).toString('hex'),
-  solana: randomBytes(32).toString('hex'),
-};
+const keys = saved?.keys ?? { evm: randomBytes(32).toString('hex') };
 const store: WalletStore = {
   approved: saved?.approved ?? [],
   chains: saved?.chains ?? {},
@@ -116,11 +109,7 @@ function save(record = conn?.room.toString() ?? room.toString()): void {
 // A joiner saves its record before its first handshake (PeerConnect §3.4).
 save(room.toString());
 
-const signers = [
-  evmSigner(`0x${keys.evm}`, 'eip155:11155111'),
-  tronSigner(keys.tron, 'tron:3448148188'),
-  solanaSigner(keys.solana, 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'),
-];
+const signers = [evmSigner(`0x${keys.evm}`, 'eip155:11155111')];
 
 // ── What the user is asked ──
 

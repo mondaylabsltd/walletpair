@@ -9,7 +9,5 @@ export const docsNav: NavItem[] = [
 	{ title: 'Install Extension', href: '/docs/install-extension' },
 	{ title: 'Protocol', href: '/docs/protocol' },
 	{ title: 'Core', href: '/docs/protocol/core', indent: true },
-	{ title: 'EVM', href: '/docs/protocol/evm', indent: true },
-	{ title: 'TRON', href: '/docs/protocol/tron', indent: true },
-	{ title: 'Solana', href: '/docs/protocol/solana', indent: true }
+	{ title: 'EVM', href: '/docs/protocol/evm', indent: true }
 ];

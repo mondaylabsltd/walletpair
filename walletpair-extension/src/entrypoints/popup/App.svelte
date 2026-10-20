@@ -50,7 +50,7 @@
           <div class="hero-glow"></div>
           <div class="hero-text">
             <h2 class="title">Connect Your Wallet</h2>
-            <p class="subtitle">Pair with your mobile wallet to use EVM, TRON and Solana apps in this browser</p>
+            <p class="subtitle">Pair with your mobile wallet to use EVM apps in this browser</p>
           </div>
           <button class="btn-primary" onclick={() => act('pair')} disabled={busy}>
             {#if busy}<span class="spinner"></span>{:else}Pair Wallet{/if}

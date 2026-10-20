@@ -11,7 +11,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-svelte'],
   manifest: ({ browser, manifestVersion }) => ({
     name: 'WalletPair',
-    description: 'Use your mobile wallet in EVM, TRON and Solana apps, over an end-to-end encrypted link.',
+    description: 'Use your mobile wallet in EVM apps, over an end-to-end encrypted link.',
     permissions: ['storage', 'alarms', ...(browser === 'chrome' ? ['sidePanel'] : [])],
     host_permissions: ['<all_urls>'],
     content_security_policy: manifestVersion === 3 ? { extension_pages: CSP } : CSP,

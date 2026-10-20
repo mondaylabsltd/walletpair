@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { CHAINS, DemoWallet } from './wallet.svelte';
 
-	const NAMES: Record<string, string> = { eip155: 'EVM', tron: 'TRON', solana: 'Solana' };
+	const NAMES: Record<string, string> = { eip155: 'EVM' };
 
 	const wallet = new DemoWallet();
 	let link = $state('');

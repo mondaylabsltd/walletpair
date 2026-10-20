@@ -1,5 +1,5 @@
 {
-  "description": "WalletPair core (spec/core.md): how receivers classify messages. A message is given as `message` (a JSON value, sent as its UTF-8 JSON text), `text` (exact text to send, UTF-8), or `oversize` (a wallet_getCallsStatus request with id 1 whose single string parameter is padded with the letter a so that the whole message is the given number of bytes). Wallet cases give the session context: `approved` lists the approved namespaces (empty: unapproved), `recorded` lists ids the Wallet has recorded (spec/core.md §6). The Wallet in these cases supports eip155, tron and solana. Expected outcomes: ignore (no answer), error with code (the Wallet answers the request's id), repeat (send the recorded response again), connect, cancel, perform.",
+  "description": "WalletPair core (spec/core.md): how receivers classify messages. A message is given as `message` (a JSON value, sent as its UTF-8 JSON text), `text` (exact text to send, UTF-8), or `oversize` (a wallet_getCallsStatus request with id 1 whose single string parameter is padded with the letter a so that the whole message is the given number of bytes). Wallet cases give the session context: `approved` lists the approved namespaces (empty: unapproved), `recorded` lists ids the Wallet has recorded (spec/core.md §6). The Wallet in these cases supports eip155. Expected outcomes: ignore (no answer), error with code (the Wallet answers the request's id), repeat (send the recorded response again), connect, cancel, perform.",
   "wallet": [
     { "name": "not JSON", "text": "{\"id\":\"1\",", "approved": ["eip155"], "expect": { "action": "ignore" } },
     { "name": "JSON array", "message": [{ "id": "1", "method": "personal_sign" }], "approved": ["eip155"], "expect": { "action": "ignore" } },
@@ -29,7 +29,6 @@
     { "name": "unapproved: cancel", "message": { "id": "2", "method": "walletpair_cancel", "params": ["1"] }, "approved": [], "expect": { "action": "cancel" } },
     { "name": "unknown function", "message": { "id": "1", "method": "eth_unknown" }, "approved": ["eip155"], "expect": { "action": "error", "code": 4200 } },
     { "name": "deliberately unsupported: eth_sign", "message": { "id": "1", "method": "eth_sign", "params": ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045", "0x00"] }, "approved": ["eip155"], "expect": { "action": "error", "code": 4200 } },
-    { "name": "namespace not approved", "message": { "id": "1", "method": "personal_sign", "params": ["0x68656c6c6f", "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"] }, "approved": ["solana"], "expect": { "action": "error", "code": 4100 } },
     { "name": "connect without namespaces", "message": { "id": "1", "method": "walletpair_connect", "params": [{ "name": "Example DApp" }] }, "approved": [], "expect": { "action": "error", "code": -32602 } },
     { "name": "connect with duplicate namespaces", "message": { "id": "1", "method": "walletpair_connect", "params": [{ "name": "Example DApp", "namespaces": ["eip155", "eip155"] }] }, "approved": [], "expect": { "action": "error", "code": -32602 } },
     { "name": "connect with an invalid namespace", "message": { "id": "1", "method": "walletpair_connect", "params": [{ "name": "Example DApp", "namespaces": ["EIP155"] }] }, "approved": [], "expect": { "action": "error", "code": -32602 } },
@@ -62,7 +61,7 @@
   ],
   "state": [
     { "name": "empty state", "value": {}, "expect": {} },
-    { "name": "all three namespaces", "value": { "eip155": { "chain": "eip155:137", "accounts": ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"] }, "tron": { "chain": "tron:728126428", "accounts": ["TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"] }, "solana": { "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "accounts": ["7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv"] } }, "expect": "same" },
+    { "name": "EVM state", "value": { "eip155": { "chain": "eip155:137", "accounts": ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"] } }, "expect": "same" },
     { "name": "unknown namespace is dropped", "value": { "cosmos": { "chain": "cosmos:cosmoshub-4", "accounts": ["cosmos1x"] } }, "expect": {} },
     { "name": "checksummed EVM account", "value": { "eip155": { "chain": "eip155:1", "accounts": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"] } }, "expect": null },
     { "name": "EVM chain with a leading zero", "value": { "eip155": { "chain": "eip155:01", "accounts": ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"] } }, "expect": null },

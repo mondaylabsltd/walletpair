@@ -4,7 +4,7 @@ const SVG =
   '<path d="M106 42 Q106 30 94 30 L74 30 L74 54 L90 64 L74 74 L74 98 L94 98 Q106 98 106 86 Z" fill="white"/>' +
   '<rect x="52" y="52" width="24" height="24" rx="2" transform="rotate(45 64 64)" fill="#3b82f6"/></svg>';
 
-/** The WalletPair icon as a base64 data URI, the form the Wallet Standard requires. */
+/** The WalletPair icon as a data URI, the form EIP-6963 requires. */
 export const ICON = `data:image/svg+xml;base64,${btoa(SVG)}` as const;
 
 export const NAME = 'WalletPair';

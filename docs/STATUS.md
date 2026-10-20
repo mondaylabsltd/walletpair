@@ -1,8 +1,10 @@
 # WalletPair v2: status
 
-The state of the move to WalletPair v2: what the project is, what was there, what has been decided and why, how it was verified, and what remains. Branch `v2-peerconnect`; nothing has been pushed.
+The state of the move to WalletPair v2: what the project is, what was there, what has been decided and why, how it was verified, and what remains. The work was merged into `main` (`9a87a99`, pushed); later commits stay local until the owner approves a push.
 
 Owner instructions (2026-10-20): WalletPair stops running its own relay and transport and becomes a specification of DApp↔Wallet functions over PeerConnect. The repository keeps the specification, the browser extension and the website. Networks: EVM, TRON and Solana, with a directory for network specifications, in the specification and in the extension. Work to the standard of a careful protocol designer, verify for real, commit in small steps, and ask only before breaking published compatibility, changing scope, rewriting large existing work, or acting externally (push, publish, deploy).
+
+Owner decision (2026-10-21): drop TRON and Solana; EVM only. The directory for network specifications and the core's design for several namespaces stay, so a network can be added again later.
 
 ## 1. Assessment at the start (main @ 7587681)
 
@@ -41,12 +43,14 @@ Owner instructions (2026-10-20): WalletPair stops running its own relay and tran
 | `ec86bb0` | CLI wallet (`pnpm wallet`) for trying the extension by hand; tested as a separate process. |
 | `a9a6abe` | One pnpm workspace; the reference Wallet moves to `walletpair-extension/src/wallet`. |
 | `a3abafe` | Website demo: `/demo` (demo dApp and test-only demo wallet) and `/demo/wallet`. |
+| `b4ef29a` | Website build fixed: `a9a6abe`'s lockfile moved workerd, and `wrangler types --check` failed until the worker types were regenerated. |
+| (2026-10-21) | TRON and Solana removed at the owner's request: their specs and vectors, page providers, signers, tests, demo parts and dependencies (1,084 lockfile lines). The earlier work stays in git history. |
 
-**Specification** (`spec/`): `core.md` (pairing URI, messages and limits, receive procedure, `walletpair_connect`, session state and the `state` event, state tables, `walletpair_cancel`, restarts and repeated requests, errors, security, evolution); `networks/evm.md`, `networks/tron.md`, `networks/solana.md`; `test-vectors/` (core 65 cases; EVM 36, TRON 18, Solana 20 input cases plus signing vectors).
+**Specification** (`spec/`): `core.md` (pairing URI, messages and limits, receive procedure, `walletpair_connect`, session state and the `state` event, state tables, `walletpair_cancel`, restarts and repeated requests, errors, security, evolution); `networks/evm.md`; `test-vectors/` (core 64 cases; EVM 36 input cases plus signing vectors).
 
 **Extension**: background (`lib/background/session.ts`, `router.ts`), page providers (`lib/inpage/`), shared protocol code (`lib/walletpair/`), side panel (pairing, per-network state, site approvals, connected sites, pending calls, activity). Tests: `src/**/__tests__`, `test/` (reference Wallet, session, vectors, properties, providers, session manager, integration, benchmark), `e2e/` (Chrome, Firefox).
 
-**Website**: Overview, Install (Chrome and Firefox), Protocol pages rendered from `spec/` at build time, and a demo: `/demo` runs a demo dApp next to a test-only demo wallet for all three networks, connected through the extension; `/demo/wallet` is the wallet alone, for any dApp.
+**Website**: Overview, Install (Chrome and Firefox), Protocol pages rendered from `spec/` at build time, and a demo: `/demo` runs a demo dApp next to a test-only demo wallet, connected through the extension; `/demo/wallet` is the wallet alone, for any dApp.
 
 **Wallet tools**: the reference Wallet (`walletpair-extension/src/wallet/`) is the Wallet side used by the tests, the CLI wallet (`pnpm wallet`) and the website's demo wallet. It is not in the extension's bundle.
 
@@ -56,24 +60,17 @@ Owner instructions (2026-10-20): WalletPair stops running its own relay and tran
 |---|---|---|
 | WalletPair is messages only; PeerConnect is the transport. | Owner's direction. PeerConnect provides everything v1's transport did, plus exactly-once delivery while both sides run and pairing that moves rooms off the invite. | Breaks v1. Depends on a protocol that is itself a draft. |
 | No 4-digit pairing code. | v1's code tied QR fields to the page showing them; whoever can replace the QR on that page can replace the code. The extension shows its QR in its own UI, and PeerConnect pins the inviter from the invite; a lost race is visible (the Wallet never connects). | One less step; the residual race is documented (Core §8). |
-| JSON messages, at most 1 MiB. | Readable and universal; MessagePack only saved bytes. 1 MiB bounds what a phone parses, far above any function's needs. | Base64 for Solana bytes costs a third more. |
+| JSON messages, at most 1 MiB. | Readable and universal; MessagePack only saved bytes. 1 MiB bounds what a phone parses, far above any function's needs. | — |
 | Namespaces by CAIP-2; one document per network in `spec/networks/`. | Owner asked for a directory per network. The core never changes for a new network. | — |
+| EVM only; TRON and Solana removed. | Owner's decision (2026-10-21). | Their dApps are not served. The core is unchanged, and the session tests keep a test-only second network so its rules for several namespaces stay covered. |
 | Session state per namespace with CAIP-2 chain IDs, and one `state` event carrying all of it. | One rule for every network; receiving it twice is harmless; providers derive their own events by comparing. | DApp sides diff. EVM functions still use hex chain IDs (EIP-3326), mapped in evm.md. |
 | `walletpair_cancel`. | PeerConnect queues requests for an offline phone; without cancel, a request whose page closed long ago would prompt later, and a dApp that retried could make the user act twice. In-order delivery means a cancel always arrives after its request. | One more function. |
 | Wallet records effectful responses per session; the DApp side resends pending requests after a break. | Exactly-once holds only while both sides run; a restart can repeat a request or lose a response. Recording before the effect is irreversible prevents double sends. | Wallet storage grows with the session (signatures, hashes, signed transactions). |
 | `origin` on requests; per-site approval in the extension. | One extension session serves many sites; the phone must see which site asks. Approval of the session must not leak to every site. | Sites other than the one shown on the phone need *Allow* in the side panel. |
 | Sites granted what the phone approved when the phone's prompt named them. | Asking again in the extension right after the user approved on the phone is noise. | — |
 | No request timeouts in the extension; cancel on page close or navigation. | v1's 60 s timeout cut real signing short; a closed page is the real "give up". | A forgotten pending call waits until its page closes. |
-| TRON CAIP-2 in decimal (`tron:728126428`). | The CAIP-2 namespace changed its canonical form on 2026-08-24; hex is deprecated. | Some ecosystem code still uses hex; it is refused on the wire. |
-| TRON: sign `raw_data_hex` only; V2 messages only; no TIP-712; switch chain. | The bytes are what is signed, so the Wallet decodes them and never trusts JSON. V1 signs any 32-byte hash blindly. TIP-712 has few users. | Pages using V1 or TIP-712 get 4200. |
-| TRON in pages: TIP-1193 + TIP-6963 under WalletPair's own name; a signing-only `tronWeb`; `window.tron`/`tronLink`/`tronWeb` only when free; never claim to be TronLink. | Most TRON dApps reach wallets through `tronWeb.trx.sign*`; shipping TronWeb into every page is heavy; impersonating TronLink's identity is not ours to do. | See limitations: tronwallet-adapter finds WalletPair through the legacy `window.tronLink` path and labels it "TronLink". |
-| Solana: three wire functions, base64 bytes, legacy and v0 only, no `signIn`; messages must be UTF-8 and must not parse as transactions. | Matches what Wallet Standard dApps use, fewer pitfalls (SIWS domain binding), current wallet practice (Phantom, Brave) against signing transactions disguised as messages. | v1 transactions, SIWS and off-chain messages get 4200 or are refused. |
 | EVM: dropped `eth_sign`, typed data before v4, permission methods (except a local `wallet_revokePermissions`). | Blind signing and legacy formats; wagmi falls back on 4200. | Old dApps using them fail. |
-| TRON hex is lowercase when sent, either case accepted. | The vectors exposed TronWeb writing `1C`. | — |
 | Default relay `wss://relay.peerconnect.dev`. | Owner's choice; the integration suite and the full Chrome run pass against it. | — |
-| `eth_chainId` and `wallet_revokePermissions` on the TIP-1193 provider. | TIP-1193 names `eth_chainId` as the way to read the chain; revoking gives TRON sites a real disconnect, as on EVM. | — |
-| No WalletPair adapter for `@tronweb3/tronwallet-adapter`. | One was written and tested, then removed at the owner's request. That library hard-codes each wallet's name in its adapter, so without one WalletPair cannot appear there under its own name. | dApps on that library reach WalletPair through `window.tronLink` and label it "TronLink". |
-| Keep the `window.tronLink` fallback. | dApps that list only TronLinkAdapter still work with WalletPair; removing it would make WalletPair unusable there. | Those dApps label it "TronLink". |
 | Vendor the PeerConnect JS build into the extension. | PeerConnect is unpublished; a pinned, tested build works offline and in CI. | Manual updates (documented); replace with a package once published. |
 | One pnpm workspace (extension and website); the website imports the extension's protocol code and reference Wallet. | The demo wallet must run the same Wallet code as the CLI wallet and the tests, not a copy; no new top-level package. | One root lockfile. `puppeteer` pinned to 25.0.4 to keep the browser tests on the installed Chrome. |
 | Demo wallet in the page, keys in `localStorage`, one tab at a time (Web Lock). | Lets anyone try the whole flow without a phone. Two tabs on one room would evict each other. | Test keys only; labelled as such everywhere. |
@@ -84,16 +81,16 @@ Owner instructions (2026-10-20): WalletPair stops running its own relay and tran
 
 | What | Result |
 |---|---|
-| `pnpm test` (vitest) | 238 tests pass without a relay; 242 with one. |
-| Conformance vectors | Core 65 cases; EVM 36, TRON 18, Solana 20 input cases; signing vectors from viem, TronWeb 6, web3.js 1.x and Node's Ed25519, reproduced byte for byte by the reference Wallet (written on `@noble`), including a v0 transaction where it is the second signer. CI regenerates them and fails on any difference. |
-| Property tests (fast-check) | Every parser and check: never throws on arbitrary input (thousands of cases each); round trips of messages and encodings; random web3.js transactions parse with the right signers and every truncation is rejected; a client fed random messages stays consistent. |
-| Integration (real relay) | The extension's SessionManager and Router over the vendored PeerConnect and `peerconnect-relay`: pairing, sites, calls on three networks, a service-worker restart from storage, a phone away and back, chain changes, ending. 4/4. |
-| Chrome 148 end to end | Built extension, test dApp with viem, `@tronweb3` TronLinkAdapter, Solana's StandardWalletAdapter; reference Wallet as the phone over a real relay. 21 steps including site approval by clicking in the side panel, cancellation when a page closes, a real service-worker stop, Disconnect. 5 consecutive passes after the race fix (2 of 4 failed before it). Also passed in full against the live `wss://relay.peerconnect.dev`. |
-| Firefox 155 end to end | Background starts, providers injected, pairing, a signature on each network, Disconnect from the popup. 6/6. |
-| CLI wallet as a separate process | `pnpm wallet` spawned by the test, its prompts answered on its stdin, against the extension in Chrome and the test dApp: pairing, all three networks, a rejection (4001), chain switches typed in the terminal, quit and `--resume`, `end`. 11/11 with a local relay and against `wss://relay.peerconnect.dev`. |
-| Website demo | The built site in workerd and the extension in Chrome, clicked through: paste the link into the demo wallet, approve, and the demo dApp verifies every signature on all three networks; rejection, chain switch from the wallet, resume after reload, End session. 11/11 with a local relay and against the live relay. |
+| `pnpm test` (vitest) | 177 tests pass without a relay; 181 with one. |
+| Conformance vectors | Core 64 cases; EVM 36 input cases; signing vectors from viem, reproduced byte for byte by the reference Wallet. Its EVM signer is also built on viem, so for it they check the parameter handling more than the cryptography. CI regenerates them and fails on any difference. |
+| Property tests (fast-check) | Every parser and check: never throws on arbitrary input (thousands of cases each); round trips of messages and hex; a client fed random messages stays consistent. |
+| Integration (real relay) | The extension's SessionManager and Router over the vendored PeerConnect and `peerconnect-relay`: pairing, sites, calls, a service-worker restart from storage, a phone away and back, chain changes, ending. 4/4. |
+| Chrome 148 end to end | Built extension, test dApp with viem; reference Wallet as the phone over a real relay. 13 steps including site approval by clicking in the side panel, cancellation when a page closes, a real service-worker stop, Disconnect. With TRON and Solana (21 steps): 5 consecutive passes after the race fix (2 of 4 failed before it), and a full pass against the live `wss://relay.peerconnect.dev`. After the removal: 13/13. |
+| Firefox 155 end to end | Background starts, providers injected, pairing, a signature, Disconnect from the popup. 4/4. |
+| CLI wallet as a separate process | `pnpm wallet` spawned by the test, its prompts answered on its stdin, against the extension in Chrome and the test dApp: pairing, signing, a rejection (4001), chain switches typed in the terminal, quit and `--resume`, `end`. 8/8 with a local relay (with TRON and Solana: 11/11, also against `wss://relay.peerconnect.dev`). |
+| Website demo | The built site in workerd and the extension in Chrome, clicked through: paste the link into the demo wallet, approve, and the demo dApp verifies every signature; rejection, chain switch from the wallet, resume after reload, End session. 8/8 with a local relay and against the live relay. |
 | Builds | Chrome MV3 and Firefox MV2 build; svelte-check clean. |
-| Website | svelte-check clean; build; served by workerd (`wrangler dev`): all pages 200, unknown pages 404. |
+| Website | svelte-check clean; build, including `wrangler types --check`; served by workerd (`wrangler dev`): all pages 200, unknown pages 404. |
 | PeerConnect build | Its own JS suite passes on the vendored build, including interop with its Rust client. |
 
 **Performance** (`pnpm bench`): DApp-side client and reference Wallet in one Node 22.22 process, vendored PeerConnect, `peerconnect-relay` release build as a separate process, loopback, Apple M2 Pro, macOS 26, other work on the machine (load average about 10). Two runs:
@@ -114,23 +111,20 @@ Against the live `wss://relay.peerconnect.dev` (behind Cloudflare), from this ma
 - **PeerConnect** is a draft ("wire format may still change"), not independently audited, unpublished, and vendored here. The default relay is operated by PeerConnect; WalletPair depends on it staying up (users can choose another in Settings).
 - **CI** runs unit, property and conformance tests and the builds, but not the integration or browser tests: they need a PeerConnect relay, whose source is not reachable from CI.
 - **No mobile Wallet app** exists yet; only the reference Wallet used in tests.
-- **TRON:** the signing object does not build, query or broadcast, so dApps that use an injected `tronWeb` for everything (rather than their own TronWeb plus an adapter) do not work; `adapter.network()` (reads block 0) is not supported; `multiSign` needs `Permission_id` already set; TronLink's legacy `postMessage` events are not emitted; dApps that use tronwallet-adapter show WalletPair as "TronLink" (through the `window.tronLink` fallback); with TronLink installed, WalletPair leaves the TRON globals to it and is reachable through TIP-6963 and its adapter only.
-- **Solana:** no v1 transactions, `signIn`, off-chain messages or `signAndSendAllTransactions`; three clusters only.
 - **EVM:** read-only calls go to public RPC endpoints (they learn addresses and calls).
 - **Extension memory:** PeerConnect keeps unsent messages in memory; if the browser stops the service worker while the phone is away, queued calls are lost (and cancelled on restart). Chrome keeps the worker alive while the WebSocket is active.
 - **Pairing move:** when the room moves to its pair ID, the extension resends the pending `walletpair_connect` once; the Wallet answers twice and the second answer is ignored. Harmless.
 - **Firefox:** unsigned, so it installs as a temporary add-on; its e2e test reaches the popup through an iframe, which needs a test build (`WALLETPAIR_E2E=1`) that makes `popup.html` web-accessible.
 - **Demo:** the demo wallet's and the CLI wallet's keys are test keys kept in plain text (`localStorage`, `.walletpair-wallet.json`); neither broadcasts transactions. The live walletpair.org has not been deployed since v2, so the demo is not online yet.
-- **Website:** ESLint reports `svelte/no-navigation-without-resolve` on internal links (present before v2; CI does not lint).
+- **Website:** ESLint reports `svelte/no-navigation-without-resolve` on internal links (present before v2), and Prettier reports formatting in 13 files, the demo's among them. CI does not lint.
 - **Wallet storage** of responses grows for the life of a session.
 
 ## 6. For the owner to decide
 
-Decided (2026-10-20): default relay `wss://relay.peerconnect.dev`; no TRON adapter package in this repository.
+Decided: default relay `wss://relay.peerconnect.dev`; no TRON adapter package in this repository (2026-10-20); EVM only (2026-10-21).
 
 1. **Publish PeerConnect** (npm, and a reachable repository), so the vendored copy becomes a dependency and CI can run the relay tests.
 2. **v1 retirement:** what to do with `relay.walletpair.org`, the v0.1.1 extension release and the `walletpair-sdk` npm package.
-3. **Next protocol features**, if wanted: Solana `signIn` and v1 transactions, TRON TIP-712.
-4. **Release** extension 0.2.0, and **deploy** walletpair.org (the live site is still v1; the demo is not online until then).
+3. **Release** extension 0.2.0, and **deploy** walletpair.org (the live site is still v1; the demo is not online until then).
 
 One side effect to report: while testing the website I ran `pkill -f "wrangler dev"`, which matched by command line. A `workerd` of your vela-wallet project was left without its parent afterwards (PID 41802); it may have been that command. I stopped only my own processes by PID after that.

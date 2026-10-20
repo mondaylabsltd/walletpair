@@ -9,12 +9,12 @@ export const DAPP_INFO = {
 } as const;
 
 /** The namespaces the extension asks for when it pairs. */
-export const NAMESPACES = ['eip155', 'tron', 'solana'];
+export const NAMESPACES = ['eip155'];
 
 /** Tags window messages between the page providers and the content script. */
 export const MSG_CHANNEL = 'walletpair-ext';
 
-/** Reverse-DNS name in EIP-6963 and TIP-6963 announcements. */
+/** Reverse-DNS name in EIP-6963 announcements. */
 export const EXTENSION_RDNS = 'org.walletpair.extension';
 
 /** chrome.storage.local keys. */

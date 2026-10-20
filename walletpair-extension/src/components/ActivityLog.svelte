@@ -289,14 +289,6 @@
     background: var(--accent-dim);
     color: var(--accent);
   }
-  .badge.tron {
-    background: var(--red-dim);
-    color: var(--red);
-  }
-  .badge.solana {
-    background: var(--green-dim);
-    color: var(--green);
-  }
 
   .method {
     font-family: 'SF Mono', 'Fira Code', monospace;

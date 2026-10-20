@@ -1,14 +1,12 @@
 // The extension in a real Firefox: the background starts, the page providers
-// are injected, pairing works, each network signs, and Disconnect ends the
+// are injected, pairing works, the Wallet signs, and Disconnect ends the
 // session. Uses the installed Firefox (FIREFOX, default the macOS app).
 //
 //   WALLETPAIR_E2E=1 wxt build -b firefox && PEERCONNECT_RELAY_BIN=… tsx e2e/firefox.ts
 
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { PublicKey } from '@solana/web3.js';
 import puppeteer from 'puppeteer';
-import { TronWeb } from 'tronweb';
 import { verifyMessage } from 'viem';
 import { startRelay } from '../test/relay';
 import { WalletDevice } from '../test/wallet/device';
@@ -78,19 +76,6 @@ async function main(): Promise<void> {
     await step('EVM: personal_sign', async () => {
       const signature = (await page.evaluate(() => dapp.evmSign('hello firefox'))) as `0x${string}`;
       assert.ok(await verifyMessage({ address: evmAddress, message: 'hello firefox', signature }));
-    });
-    await step('TRON: TronLinkAdapter connects and signs', async () => {
-      const address = (await page.evaluate(() => dapp.tronConnect())) as string;
-      assert.equal(address, device!.tron.accounts[0]);
-      const signature = (await page.evaluate(() => dapp.tronSignMessage('hello firefox'))) as string;
-      assert.equal(await new TronWeb({ fullHost: 'http://127.0.0.1:9' }).trx.verifyMessageV2('hello firefox', signature), address);
-    });
-    await step('Solana: wallet adapter connects and signs', async () => {
-      const address = (await page.evaluate(() => dapp.solanaConnect())) as string;
-      assert.equal(address, device!.solana.accounts[0]);
-      const signature = Buffer.from((await page.evaluate(() => dapp.solanaSignMessage('hello firefox'))) as string, 'hex');
-      const key = await crypto.subtle.importKey('raw', new PublicKey(address).toBytes() as BufferSource, 'Ed25519', false, ['verify']);
-      assert.ok(await crypto.subtle.verify('Ed25519', key, signature, new TextEncoder().encode('hello firefox')));
     });
     await step('Disconnect in the popup ends the session for both', async () => {
       await host.bringToFront();

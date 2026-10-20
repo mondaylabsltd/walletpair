@@ -2,21 +2,31 @@
 // (in memory): every core rule of spec/core.md and every function of the three
 // network specifications, with signatures checked by independent libraries.
 
-import { Keypair, PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { TronWeb, utils as tronUtils } from 'tronweb';
 import { parseTransaction as parseEvmTransaction, recoverTransactionAddress, verifyMessage, verifyTypedData } from 'viem';
 import { describe, expect, it } from 'vitest';
 import { CallError, WalletPairClient } from '../src/lib/walletpair/client';
-import { base64Decode, base64Encode, bytesToHex } from '../src/lib/walletpair/codec';
-import { namespaceRules } from '../src/lib/walletpair/networks';
+import { bytesToHex } from '../src/lib/walletpair/codec';
+import { namespaceRules, type Network } from '../src/lib/walletpair/networks';
 import { memoryPair, settle, type MemoryTransport } from './memory-transport';
 import { evmSigner } from '../src/wallet/evm';
-import { solanaSigner } from '../src/wallet/solana';
-import { tronSigner } from '../src/wallet/tron';
-import { ReferenceWallet, emptyStore, type Prompts, type WalletStore } from '../src/wallet/wallet';
+import { ReferenceWallet, emptyStore, type Prompts, type Signer, type WalletStore } from '../src/wallet/wallet';
 
 const DAPP = { name: 'Test DApp', url: 'https://app.example' };
-const ALL = ['eip155', 'tron', 'solana'];
+
+/** A second network, only for the core's rules on several namespaces (core §4). */
+const example: Network = {
+  namespace: 'example',
+  isChain: (chain) => chain === 'example:1',
+  isAccount: (account) => account === 'example-account',
+  functions: { example_sign: { check: () => null } },
+};
+const exampleSigner = (): Signer => ({
+  network: example,
+  chain: 'example:1',
+  accounts: ['example-account'],
+  perform: async () => 'signed',
+});
+const ALL = ['eip155', 'example'];
 
 /** Prompts the test answers by hand: each prompt waits in `queue`. */
 function manualPrompts() {
@@ -33,9 +43,7 @@ const approveAll: Prompts = { connect: async (_, offered) => offered, approve: a
 function setup(options: { prompts?: Prompts; store?: WalletStore; maxWaiting?: number } = {}) {
   const [dappEnd, walletEnd] = memoryPair();
   const evm = evmSigner();
-  const tron = tronSigner();
-  const solana = solanaSigner();
-  const signers = [evm, tron, solana];
+  const signers = [evm, exampleSigner()];
   const makeWallet = (end: MemoryTransport, store?: WalletStore) =>
     new ReferenceWallet(end, {
       name: 'Reference Wallet',
@@ -45,8 +53,8 @@ function setup(options: { prompts?: Prompts; store?: WalletStore; maxWaiting?: n
       maxWaiting: options.maxWaiting,
     });
   const wallet = makeWallet(walletEnd, options.store);
-  const client = new WalletPairClient(dappEnd, namespaceRules);
-  return { client, wallet, dappEnd, walletEnd, evm, tron, solana, makeWallet };
+  const client = new WalletPairClient(dappEnd, { ...namespaceRules, example });
+  return { client, wallet, dappEnd, walletEnd, evm, makeWallet };
 }
 
 async function connected(options?: Parameters<typeof setup>[0]) {
@@ -67,13 +75,12 @@ async function rejection(promise: Promise<unknown>): Promise<number> {
 
 describe('session', () => {
   it('connects, and the result is the state for every approved namespace', async () => {
-    const { client, evm, tron, solana } = setup();
+    const { client, evm } = setup();
     const result = await client.connect(DAPP, ALL);
     expect(result.wallet).toEqual({ name: 'Reference Wallet' });
     expect(client.state).toEqual({
       eip155: { chain: 'eip155:1', accounts: evm.accounts },
-      tron: { chain: 'tron:3448148188', accounts: tron.accounts },
-      solana: { chain: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', accounts: solana.accounts },
+      example: { chain: 'example:1', accounts: ['example-account'] },
     });
     expect(client.approved).toBe(true);
   });
@@ -94,9 +101,9 @@ describe('session', () => {
     const { client } = setup({ prompts: { connect: async () => granted, approve: async () => true } });
     await client.connect(DAPP, ALL);
     expect(Object.keys(client.state)).toEqual(['eip155']);
-    granted = ['solana'];
-    await client.connect(DAPP, ['solana']);
-    expect(Object.keys(client.state).sort()).toEqual(['eip155', 'solana']);
+    granted = ['example'];
+    await client.connect(DAPP, ['example']);
+    expect(Object.keys(client.state).sort()).toEqual(['eip155', 'example']);
   });
 
   it('answers a repeated connect at once once approved', async () => {
@@ -127,10 +134,9 @@ describe('session', () => {
   });
 
   it('refuses a namespace that is not approved with 4100', async () => {
-    const { client, solana } = setup({ prompts: { connect: async () => ['eip155'], approve: async () => true } });
+    const { client } = setup({ prompts: { connect: async () => ['eip155'], approve: async () => true } });
     await client.connect(DAPP, ALL);
-    const message = base64Encode(new TextEncoder().encode('hi'));
-    expect(await rejection(client.call('solana_signMessage', { account: solana.accounts[0], message }))).toBe(4100);
+    expect(await rejection(client.call('example_sign'))).toBe(4100);
   });
 
   it('refuses an unknown function with 4200 and a user rejection with 4001', async () => {
@@ -177,9 +183,9 @@ describe('state event', () => {
 
   it('follows chain changes made in the Wallet', async () => {
     const { client, wallet } = await connected();
-    wallet.setChain('tron', 'tron:728126428');
+    wallet.setChain('eip155', 'eip155:137');
     await settle();
-    expect(client.state.tron.chain).toBe('tron:728126428');
+    expect(client.state.eip155.chain).toBe('eip155:137');
   });
 
   it('revoking empties the state but keeps the session', async () => {
@@ -265,144 +271,6 @@ describe('EVM functions', () => {
     const status = (await client.call('wallet_getCallsStatus', [sent.id])) as { id: string };
     expect(status.id).toBe(sent.id);
     expect(await rejection(client.call('wallet_getCallsStatus', ['0xunknown']))).toBe(5730);
-  });
-});
-
-describe('TRON functions', () => {
-  const tronWeb = new TronWeb({ fullHost: 'http://127.0.0.1:9' });
-
-  it('tron_signMessage is TronWeb’s signMessageV2', async () => {
-    const { client, tron } = await connected();
-    const message = 'Hello TRON ✓';
-    const hex = bytesToHex(new TextEncoder().encode(message));
-    const { signature } = (await client.call('tron_signMessage', { account: tron.accounts[0], message: hex })) as { signature: string };
-    expect(await tronWeb.trx.verifyMessageV2(message, `0x${signature}`)).toBe(tron.accounts[0]);
-  });
-
-  it('tron_signTransaction signs the txID that TronWeb computes', async () => {
-    const { client, tron } = await connected();
-    const tx = tronTransfer(tron.accounts[0], Date.now() + 60_000);
-    const { signature } = (await client.call('tron_signTransaction', {
-      account: tron.accounts[0],
-      transaction: tx.raw_data_hex,
-      chain: 'tron:3448148188',
-    })) as { signature: string };
-    expect(TronWeb.address.fromHex(tronUtils.crypto.ecRecover(tx.txID, signature))).toBe(tron.accounts[0]);
-  });
-
-  it('refuses expired transactions, other chains and V1-style input', async () => {
-    const { client, tron } = await connected();
-    const expired = tronTransfer(tron.accounts[0], Date.now() - 1000);
-    expect(await rejection(client.call('tron_signTransaction', { account: tron.accounts[0], transaction: expired.raw_data_hex }))).toBe(-32602);
-    const fresh = tronTransfer(tron.accounts[0], Date.now() + 60_000);
-    expect(
-      await rejection(client.call('tron_signTransaction', { account: tron.accounts[0], transaction: fresh.raw_data_hex, chain: 'tron:728126428' })),
-    ).toBe(4901);
-    expect(await rejection(client.call('tron_signTransaction', { account: tron.accounts[0], transaction: 'zz' }))).toBe(-32602);
-  });
-
-  it('tron_switchChain', async () => {
-    const { client } = await connected();
-    await client.call('tron_switchChain', { chain: 'tron:728126428' });
-    expect(client.state.tron.chain).toBe('tron:728126428');
-    expect(await rejection(client.call('tron_switchChain', { chain: 'tron:1' }))).toBe(4902);
-  });
-
-  /** A TransferContract built and encoded by TronWeb, offline. */
-  function tronTransfer(owner: string, expiration: number) {
-    const raw_data = {
-      contract: [
-        {
-          parameter: {
-            value: { amount: 1000, owner_address: TronWeb.address.toHex(owner), to_address: TronWeb.address.toHex('TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7') },
-            type_url: 'type.googleapis.com/protocol.TransferContract',
-          },
-          type: 'TransferContract',
-        },
-      ],
-      ref_block_bytes: '0a1b',
-      ref_block_hash: '0102030405060708',
-      expiration,
-      timestamp: expiration - 60_000,
-    };
-    const pb = tronUtils.transaction.txJsonToPb({ raw_data, visible: false });
-    return {
-      raw_data,
-      raw_data_hex: tronUtils.transaction.txPbToRawDataHex(pb).toLowerCase(),
-      txID: tronUtils.transaction.txPbToTxID(pb).replace(/^0x/, ''),
-    };
-  }
-});
-
-describe('Solana functions', () => {
-  const blockhash = '11111111111111111111111111111111';
-
-  function transfer(from: string, version: 'legacy' | 0): Uint8Array {
-    const payer = new PublicKey(from);
-    const instructions = [SystemProgram.transfer({ fromPubkey: payer, toPubkey: Keypair.generate().publicKey, lamports: 1 })];
-    if (version === 'legacy') {
-      const tx = new Transaction({ feePayer: payer, recentBlockhash: blockhash }).add(...instructions);
-      return tx.serialize({ requireAllSignatures: false, verifySignatures: false });
-    }
-    const message = new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions }).compileToV0Message();
-    return new VersionedTransaction(message).serialize();
-  }
-
-  it('solana_signTransactions signs legacy and v0 transactions that web3.js verifies', async () => {
-    const { client, solana } = await connected();
-    const inputs = [transfer(solana.accounts[0], 'legacy'), transfer(solana.accounts[0], 0)];
-    const { transactions } = (await client.call('solana_signTransactions', {
-      account: solana.accounts[0],
-      transactions: inputs.map(base64Encode),
-    })) as { transactions: string[] };
-    const legacy = Transaction.from(base64Decode(transactions[0])!);
-    expect(legacy.verifySignatures()).toBe(true);
-    const v0 = VersionedTransaction.deserialize(base64Decode(transactions[1])!);
-    const signed = await crypto.subtle.verify(
-      'Ed25519',
-      await crypto.subtle.importKey('raw', new PublicKey(solana.accounts[0]).toBytes() as BufferSource, 'Ed25519', false, ['verify']),
-      v0.signatures[0] as BufferSource,
-      v0.message.serialize() as BufferSource,
-    );
-    expect(signed).toBe(true);
-  });
-
-  it('solana_signAndSendTransaction returns the first signature, and needs the active chain', async () => {
-    const { client, solana } = await connected();
-    const transaction = base64Encode(transfer(solana.accounts[0], 0));
-    const account = solana.accounts[0];
-    const { signature } = (await client.call('solana_signAndSendTransaction', {
-      account,
-      transaction,
-      chain: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
-    })) as { signature: string };
-    expect(base64Decode(signature)).toEqual(VersionedTransaction.deserialize(solana.sent[0]).signatures[0]);
-    const mainnet = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
-    expect(await rejection(client.call('solana_signAndSendTransaction', { account, transaction, chain: mainnet }))).toBe(4901);
-    expect(await rejection(client.call('solana_signAndSendTransaction', { account, transaction }))).toBe(-32602);
-  });
-
-  it('refuses a transaction it does not sign', async () => {
-    const { client, solana } = await connected();
-    const other = base64Encode(transfer(Keypair.generate().publicKey.toBase58(), 'legacy'));
-    expect(await rejection(client.call('solana_signTransactions', { account: solana.accounts[0], transactions: [other] }))).toBe(-32602);
-  });
-
-  it('solana_signMessage signs text and refuses transactions in disguise', async () => {
-    const { client, solana } = await connected();
-    const account = solana.accounts[0];
-    const text = new TextEncoder().encode('Sign in to app.example');
-    const { signature } = (await client.call('solana_signMessage', { account, message: base64Encode(text) })) as { signature: string };
-    const key = await crypto.subtle.importKey('raw', new PublicKey(account).toBytes() as BufferSource, 'Ed25519', false, ['verify']);
-    expect(await crypto.subtle.verify('Ed25519', key, base64Decode(signature)! as BufferSource, text)).toBe(true);
-
-    const tx = transfer(account, 'legacy');
-    const message = tx.subarray(1 + 64);
-    for (const disguised of [tx, message]) {
-      expect(await rejection(client.call('solana_signMessage', { account, message: base64Encode(disguised) }))).toBe(-32602);
-    }
-    const binary = base64Encode(Uint8Array.of(0xff, 0xfe));
-    expect(await rejection(client.call('solana_signMessage', { account, message: binary }))).toBe(-32602);
   });
 });
 

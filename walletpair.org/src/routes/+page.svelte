@@ -11,8 +11,8 @@
 		},
 		{
 			icon: Plug,
-			title: 'EVM, TRON and Solana',
-			description: 'EIP-1193, TIP-1193 and the Wallet Standard: existing dApps work unchanged.'
+			title: 'EVM chains',
+			description: 'EIP-1193 and EIP-6963: existing dApps work unchanged.'
 		},
 		{
 			icon: ServerOff,
@@ -41,15 +41,14 @@ walletpair:wss://relay.example.com#q3V0…
 
 // Then call functions
 → {"id":"1","method":"walletpair_connect","params":[{
-     "name":"Example dApp","namespaces":["eip155","solana"]}]}
+     "name":"Example dApp","namespaces":["eip155"]}]}
 ← {"id":"1","result":{"wallet":{"name":"Example Wallet"},
-     "state":{"eip155":{"chain":"eip155:1","accounts":["0xd8da…"]},
-              "solana":{"chain":"solana:5eyk…","accounts":["7S3P…"]}}}}`;
+     "state":{"eip155":{"chain":"eip155:1","accounts":["0xd8da…"]}}}}`;
 
 	const walletCode = `// Answer each call after asking the user
-→ {"id":"2","method":"tron_signMessage",
-   "params":{"account":"TLa2…","message":"68656c6c6f"}}
-← {"id":"2","result":{"signature":"5d5f…1b"}}
+→ {"id":"2","method":"personal_sign",
+   "params":["0x68656c6c6f","0xd8da…"]}
+← {"id":"2","result":"0x5d5f…1b"}
 
 // Tell the dApp when something changes
 ← {"event":"state","data":{"eip155":{"chain":"eip155:137",…}}}`;
@@ -60,7 +59,7 @@ walletpair:wss://relay.example.com#q3V0…
 	<h1 class="hero-title">WalletPair</h1>
 	<p class="hero-sub">
 		Connect dApps to wallets.<br />
-		EVM, TRON and Solana, over an end-to-end encrypted link. No registration.
+		EVM chains, over an end-to-end encrypted link. No registration.
 	</p>
 	<div class="hero-actions">
 		<a href="/docs/install-extension" class="btn btn-primary"
@@ -98,7 +97,7 @@ walletpair:wss://relay.example.com#q3V0…
 		<div class="path-card">
 			<h3 class="path-title">For dApp Developers</h3>
 			<ul class="path-list">
-				<li>With the extension installed, EVM, TRON and Solana dApps need no changes</li>
+				<li>With the extension installed, EVM dApps need no changes</li>
 				<li>Or show the invite yourself and call the functions directly</li>
 			</ul>
 			<pre class="code-block"><code>{dappCode}</code></pre>

@@ -1,36 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import {
-		base58Encode,
-		discover,
-		discoverSolana,
-		messageHex,
-		solanaSignature,
-		solanaTransfer,
-		tronTransfer,
-		typedData,
-		verifyEd25519,
-		verifyEvmMessage,
-		verifyEvmTyped,
-		verifyTronMessage,
-		verifyTronTransaction,
-		type Eip1193,
-		type StandardWallet,
-		type TronProvider
-	} from './dapp';
+	import { discover, messageHex, typedData, verifyEvmMessage, verifyEvmTyped, type Eip1193 } from './dapp';
 
 	const MESSAGE = 'Hello from the WalletPair demo';
 
 	let evm = $state<Eip1193 | undefined>(undefined);
-	let tron = $state<TronProvider | undefined>(undefined);
-	let solana = $state<StandardWallet | undefined>(undefined);
 	let searched = $state(false);
 
 	let evmAccount = $state<string | undefined>(undefined);
 	let evmChain = $state<string | undefined>(undefined);
-	let tronAccount = $state<string | undefined>(undefined);
-	let solanaAccount = $state<{ address: string; publicKey: Uint8Array } | undefined>(undefined);
-	let cluster = $state('solana:mainnet');
 
 	interface Result {
 		id: number;
@@ -44,12 +22,10 @@
 	let busy = $state('');
 
 	onMount(async () => {
-		[evm, tron] = await Promise.all([discover<Eip1193>('eip6963'), discover<TronProvider>('TIP6963')]);
-		solana = discoverSolana();
+		evm = await discover();
 		searched = true;
 		evm?.on('chainChanged', (chainId: string) => (evmChain = chainId));
 		evm?.on('accountsChanged', (accounts: string[]) => (evmAccount = accounts[0]));
-		tron?.on('accountsChanged', (accounts: string[]) => (tronAccount = accounts[0]));
 	});
 
 	/** Runs an action and records what came back. */
@@ -101,71 +77,6 @@
 			evmChain = await evm!.request({ method: 'eth_chainId' });
 			return { detail: `now on chain ${BigInt(evmChain!)}` };
 		});
-
-	const tronConnect = () =>
-		run('TRON', 'Connect', async () => {
-			const accounts: string[] = await tron!.request({ method: 'eth_requestAccounts' });
-			tronAccount = accounts[0];
-			const chainId: string = await tron!.request({ method: 'eth_chainId' });
-			return { detail: `${tronAccount} on ${chainId}` };
-		});
-
-	const tronSigner = () => {
-		if (!tron?.tronWeb) throw new Error('Connect first');
-		return tron.tronWeb;
-	};
-
-	const tronSign = () =>
-		run('TRON', 'Sign message', async () => {
-			const signature = await tronSigner().trx.signMessageV2(MESSAGE);
-			return { detail: signature, verified: await verifyTronMessage(tronAccount!, MESSAGE, signature) };
-		});
-
-	const tronTransaction = () =>
-		run('TRON', 'Sign transaction', async () => {
-			const tx = await tronTransfer(tronAccount!);
-			const signed = await tronSigner().trx.sign(tx);
-			return { detail: `txID ${tx.txID}`, verified: await verifyTronTransaction(tronAccount!, tx.txID, signed.signature[0]) };
-		});
-
-	const tronSwitch = () =>
-		run('TRON', 'Switch network', async () => {
-			const current: string = await tron!.request({ method: 'eth_chainId' });
-			const target = current === '0xcd8690dc' ? '0x2b6653dc' : '0xcd8690dc';
-			await tron!.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: target }] });
-			return { detail: `now on ${target === '0xcd8690dc' ? 'Nile' : 'Mainnet'}` };
-		});
-
-	const feature = (name: string) => solana!.features[name];
-
-	const solanaConnect = () =>
-		run('Solana', 'Connect', async () => {
-			const { accounts } = await feature('standard:connect').connect();
-			solanaAccount = accounts[0];
-			return { detail: solanaAccount!.address };
-		});
-
-	const solanaSign = () =>
-		run('Solana', 'Sign message', async () => {
-			const message = new TextEncoder().encode(MESSAGE);
-			const [output] = await feature('solana:signMessage').signMessage({ account: solanaAccount, message });
-			return { detail: base58Encode(output.signature), verified: verifyEd25519(solanaAccount!.address, message, output.signature) };
-		});
-
-	const solanaTransaction = () =>
-		run('Solana', 'Sign transaction', async () => {
-			const transaction = solanaTransfer(solanaAccount!.address);
-			const [output] = await feature('solana:signTransaction').signTransaction({ account: solanaAccount, transaction });
-			const { signature, message } = solanaSignature(output.signedTransaction);
-			return { detail: base58Encode(signature), verified: verifyEd25519(solanaAccount!.address, message, signature) };
-		});
-
-	const solanaSend = () =>
-		run('Solana', 'Sign and send', async () => {
-			const transaction = solanaTransfer(solanaAccount!.address);
-			const [output] = await feature('solana:signAndSendTransaction').signAndSendTransaction({ account: solanaAccount, transaction, chain: cluster });
-			return { detail: `${base58Encode(output.signature)} (the demo wallet signs, it does not broadcast)` };
-		});
 </script>
 
 <div class="dapp">
@@ -174,7 +85,7 @@
 		<span class="hint">uses the WalletPair extension</span>
 	</header>
 
-	{#if searched && !evm && !tron && !solana}
+	{#if searched && !evm}
 		<p class="notice">
 			The WalletPair extension was not found in this browser. <a href="/docs/install-extension">Install it</a>, then
 			reload this page.
@@ -190,33 +101,6 @@
 			<button disabled={!evmAccount || !!busy} onclick={evmTyped}>Sign typed data</button>
 			<button disabled={!evmAccount || !!busy} onclick={evmSend}>Send transaction</button>
 			<button disabled={!evmAccount || !!busy} onclick={evmSwitch}>Switch network</button>
-		</div>
-	</section>
-
-	<section class="network">
-		<h3>TRON</h3>
-		<p class="who">{tronAccount ?? 'not connected'}</p>
-		<div class="row">
-			<button class="primary" disabled={!tron || !!busy} onclick={tronConnect}>Connect</button>
-			<button disabled={!tronAccount || !!busy} onclick={tronSign}>Sign message</button>
-			<button disabled={!tronAccount || !!busy} onclick={tronTransaction}>Sign transaction</button>
-			<button disabled={!tronAccount || !!busy} onclick={tronSwitch}>Switch network</button>
-		</div>
-	</section>
-
-	<section class="network">
-		<h3>Solana</h3>
-		<p class="who">{solanaAccount?.address ?? 'not connected'}</p>
-		<div class="row">
-			<button class="primary" disabled={!solana || !!busy} onclick={solanaConnect}>Connect</button>
-			<button disabled={!solanaAccount || !!busy} onclick={solanaSign}>Sign message</button>
-			<button disabled={!solanaAccount || !!busy} onclick={solanaTransaction}>Sign transaction</button>
-			<button disabled={!solanaAccount || !!busy} onclick={solanaSend}>Sign and send</button>
-			<select aria-label="Solana cluster" bind:value={cluster}>
-				<option value="solana:mainnet">Mainnet</option>
-				<option value="solana:devnet">Devnet</option>
-				<option value="solana:testnet">Testnet</option>
-			</select>
 		</div>
 	</section>
 
@@ -288,8 +172,7 @@
 		gap: var(--space-2);
 	}
 
-	button,
-	select {
+	button {
 		background: var(--color-surface-2);
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);

@@ -57,18 +57,16 @@ describe.skipIf(!relayAvailable)('over a real PeerConnect relay', { timeout: 60_
   });
   afterAll(() => relay?.stop());
 
-  it('the client pairs, connects and calls all three networks', async () => {
+  it('the client pairs, connects and calls', async () => {
     const room = Room.create(relay.url);
     const conn = connect(room);
     const client = new WalletPairClient(conn, namespaceRules);
     const device = new WalletDevice(`walletpair:${room.invite}`, approveAll);
-    const result = await client.connect({ name: 'Integration DApp' }, ['eip155', 'tron', 'solana']);
-    expect(Object.keys(result.state).sort()).toEqual(['eip155', 'solana', 'tron']);
+    const result = await client.connect({ name: 'Integration DApp' }, ['eip155']);
+    expect(Object.keys(result.state)).toEqual(['eip155']);
     const address = result.state.eip155.accounts[0] as `0x${string}`;
     const signature = (await client.call('personal_sign', ['0x6869', address])) as `0x${string}`;
     expect(await verifyMessage({ address, message: 'hi', signature })).toBe(true);
-    await client.call('tron_signMessage', { account: result.state.tron.accounts[0], message: '6869' });
-    await client.call('solana_signMessage', { account: result.state.solana.accounts[0], message: 'aGk=' });
     conn.close();
     await until(device.conn, ['state'], () => device.conn.state === 'closed');
     expect(device.conn.reason).toBe('closed-by-peer');
@@ -124,8 +122,8 @@ describe.skipIf(!relayAvailable)('over a real PeerConnect relay', { timeout: 60_
     expect(origins).toEqual([ORIGIN]);
     expect(session.phase).toBe('ready');
     // The Wallet's prompt named this site, so everything approved there is granted to it.
-    expect(Object.keys(await router.siteState(ORIGIN)).sort()).toEqual(['eip155', 'solana', 'tron']);
-    expect(await router.handle({ op: 'connect', namespace: 'tron' }, ORIGIN, 1)).toMatchObject({ chain: 'tron:3448148188' });
+    expect(Object.keys(await router.siteState(ORIGIN))).toEqual(['eip155']);
+    expect(await router.handle({ op: 'connect', namespace: 'eip155' }, ORIGIN, 1)).toMatchObject({ chain: 'eip155:1' });
     expect(router.approvals).toEqual([]);
 
     const address = evmState.accounts[0] as `0x${string}`;
@@ -135,10 +133,10 @@ describe.skipIf(!relayAvailable)('over a real PeerConnect relay', { timeout: 60_
     // Another site needs the user's approval in the extension.
     const other = 'https://other.example';
     await expect(router.handle({ op: 'call', method: 'personal_sign', params: ['0x6869', address] }, other, 2)).rejects.toMatchObject({ code: 4100 });
-    const otherConnect = router.handle({ op: 'connect', namespace: 'solana' }, other, 2);
+    const otherConnect = router.handle({ op: 'connect', namespace: 'eip155' }, other, 2);
     await until(router, ['change'], () => router.approvals.length === 1);
     router.approve(router.approvals[0].id, true);
-    expect(await otherConnect).toMatchObject({ chain: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1' });
+    expect(await otherConnect).toMatchObject({ chain: 'eip155:1' });
 
     // The service worker stops and starts again from storage.
     connections.at(-1)!.leave();
@@ -187,7 +185,7 @@ describe.skipIf(!relayAvailable)('over a real PeerConnect relay', { timeout: 60_
       rpc: async () => null,
       surface: () => {},
     });
-    const connecting = router.handle({ op: 'connect', namespace: 'tron' }, ORIGIN, 1);
+    const connecting = router.handle({ op: 'connect', namespace: 'eip155' }, ORIGIN, 1);
     await until(session, ['change'], () => Boolean(session.uri));
     const device = new WalletDevice(session.uri!, { connect: async () => [], approve: async () => true });
     await expect(connecting).rejects.toBeInstanceOf(CallError);

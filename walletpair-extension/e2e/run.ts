@@ -1,7 +1,6 @@
 // End to end in a real browser: Chrome runs the built extension, a test dApp
-// (e2e/dapp.ts) uses it through viem, TronWeb's wallet adapter and Solana's
-// wallet adapter, and the reference Wallet answers over a real PeerConnect
-// relay. The test plays the phone, the side panel and the dApp.
+// (e2e/dapp.ts) uses it through viem, and the reference Wallet answers over a
+// real PeerConnect relay. The test plays the phone, the side panel and the dApp.
 //
 //   PEERCONNECT_RELAY_BIN=…/peerconnect-relay pnpm test:e2e
 //
@@ -9,11 +8,8 @@
 
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
 import puppeteer, { type Browser, type Page } from 'puppeteer';
-import { TronWeb, utils as tronUtils } from 'tronweb';
 import { keccak256, verifyMessage, verifyTypedData } from 'viem';
-import { base58Encode } from '../src/lib/walletpair/codec';
 import { startRelay } from '../test/relay';
 import { WalletDevice } from '../test/wallet/device';
 import { here, phone, results, serveDapp, step, waitFor, type Dapp } from './harness';
@@ -128,78 +124,6 @@ async function main(): Promise<void> {
         }
         return times;
       })) as number[];
-    });
-
-    console.log('TRON (TronLinkAdapter)');
-    const tronAddress = await step('adapter connects; granted by the phone prompt', async () => {
-      const address = (await pageA.evaluate(() => dapp.tronConnect())) as string;
-      assert.equal(address, device!.tron.accounts[0]);
-      assert.deepEqual((await extState()).approvals, []);
-      return address;
-    });
-    await step('signMessage (TronWeb verifies V2)', async () => {
-      const signature = (await pageA.evaluate(() => dapp.tronSignMessage('hello tron'))) as string;
-      const tronWeb = new TronWeb({ fullHost: 'http://127.0.0.1:9' });
-      assert.equal(await tronWeb.trx.verifyMessageV2('hello tron', signature), tronAddress);
-    });
-    const tronTransfer = () => {
-      const raw_data = {
-        contract: [
-          {
-            parameter: {
-              value: { amount: 1, owner_address: TronWeb.address.toHex(tronAddress), to_address: TronWeb.address.toHex('TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7') },
-              type_url: 'type.googleapis.com/protocol.TransferContract',
-            },
-            type: 'TransferContract',
-          },
-        ],
-        ref_block_bytes: '0a1b',
-        ref_block_hash: '0102030405060708',
-        expiration: Date.now() + 60_000,
-        timestamp: Date.now(),
-      };
-      const pb = tronUtils.transaction.txJsonToPb({ raw_data, visible: false });
-      return {
-        visible: false,
-        txID: tronUtils.transaction.txPbToTxID(pb).replace(/^0x/, ''),
-        raw_data,
-        raw_data_hex: tronUtils.transaction.txPbToRawDataHex(pb).toLowerCase(),
-      };
-    };
-    const signedByOwner = (signed: { signature: string[]; txID: string }) => {
-      assert.equal(signed.signature.length, 1);
-      assert.equal(TronWeb.address.fromHex(tronUtils.crypto.ecRecover(signed.txID, signed.signature[0])), tronAddress);
-    };
-    await step('signTransaction (TronWeb-built transfer, signature recovers the owner)', async () => {
-      signedByOwner((await pageA.evaluate((t) => dapp.tronSignTransaction(t), tronTransfer())) as { signature: string[]; txID: string });
-    });
-
-    console.log('Solana (wallet adapter over the Wallet Standard)');
-    const solanaAddress = await step('adapter connects', async () => {
-      const address = (await pageA.evaluate(() => dapp.solanaConnect())) as string;
-      assert.equal(address, device!.solana.accounts[0]);
-      return address;
-    });
-    await step('signTransaction (web3.js verifies)', async () => {
-      const signed = Transaction.from(Buffer.from((await pageA.evaluate(() => dapp.solanaSign())) as string, 'base64'));
-      assert.ok(signed.verifySignatures());
-    });
-    await step('signAllTransactions: one Wallet call', async () => {
-      const before = device!.wallet.received.length;
-      const signed = (await pageA.evaluate(() => dapp.solanaSignAll())) as string[];
-      assert.equal(signed.length, 2);
-      for (const tx of signed) assert.ok(Transaction.from(Buffer.from(tx, 'base64')).verifySignatures());
-      assert.equal(device!.wallet.received.length - before, 1);
-    });
-    await step('signMessage (Ed25519 verifies)', async () => {
-      const signature = Buffer.from((await pageA.evaluate(() => dapp.solanaSignMessage('hello solana'))) as string, 'hex');
-      const key = await crypto.subtle.importKey('raw', new PublicKey(solanaAddress).toBytes() as BufferSource, 'Ed25519', false, ['verify']);
-      assert.ok(await crypto.subtle.verify('Ed25519', key, signature, new TextEncoder().encode('hello solana')));
-    });
-    await step('sendTransaction through signAndSendTransaction on devnet', async () => {
-      const signature = await pageA.evaluate(() => dapp.solanaSend());
-      const sent = VersionedTransaction.deserialize(device!.solana.sent.at(-1)!);
-      assert.equal(signature, base58Encode(sent.signatures[0]));
     });
 
     console.log('Sites, cancellation, restarts');

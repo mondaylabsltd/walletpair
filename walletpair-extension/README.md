@@ -1,17 +1,15 @@
 # WalletPair browser extension
 
-The DApp side of [WalletPair](../spec/README.md) for every site in the browser: EVM, TRON and Solana dApps use the wallet on your phone, unchanged, over an end-to-end encrypted [PeerConnect](./vendor/peerconnect/README.md) link. Chrome (MV3) and Firefox 128+ (MV2).
+The DApp side of [WalletPair](../spec/README.md) for every site in the browser: Ethereum and other EVM dApps use the wallet on your phone, unchanged, over an end-to-end encrypted [PeerConnect](./vendor/peerconnect/README.md) link. Chrome (MV3) and Firefox 128+ (MV2).
 
 | Network | What pages see | Specification |
 |---|---|---|
 | EVM | EIP-1193 provider, announced with EIP-6963; `window.ethereum` when no other wallet took it | [evm.md](../spec/networks/evm.md) §3 |
-| TRON | TIP-1193 provider announced with TIP-6963, a `tronWeb` signing object; `window.tron`, `window.tronLink`, `window.tronWeb` when no other wallet took them. | [tron.md](../spec/networks/tron.md) §3 |
-| Solana | A Wallet Standard wallet | [solana.md](../spec/networks/solana.md) §3 |
 
 ## Architecture
 
 ```text
-page (MAIN world)  lib/inpage/   evm.ts · tron.ts · solana.ts
+page (MAIN world)  lib/inpage/   evm.ts
                                        │ bridge.ts: window messages
 content script     entrypoints/content.ts
                                        │ runtime port (the browser supplies the page's origin)
@@ -63,12 +61,12 @@ pnpm check               # svelte-check and TypeScript
 
 ## Trying it by hand with the CLI wallet
 
-`pnpm wallet` is a WalletPair Wallet in the terminal, for EVM, TRON and Solana, standing in for a phone:
+`pnpm wallet` is a WalletPair Wallet in the terminal, standing in for a phone:
 
 1. `pnpm build`, then load `.output/chrome-mv3` as an unpacked extension.
 2. Open any dApp and connect; the side panel shows the pairing QR code. Click *Copy link*.
-3. `pnpm wallet "walletpair:…"`: the wallet pairs, prints its accounts, and shows each request decoded (message text, typed data, transaction fields, the TRON contract and its owner, Solana transactions). Answer `y` or `n`.
-4. While it runs: `chain eip155:137` (or `tron:728126428`, `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`, …) switches a chain, `revoke` withdraws the approval, `leave` goes offline for 5 s, `end` ends the session, `quit` exits. `pnpm wallet --resume` continues after a restart.
+3. `pnpm wallet "walletpair:…"`: the wallet pairs, prints its accounts, and shows each request decoded (message text, typed data, transaction fields). Answer `y` or `n`.
+4. While it runs: `chain eip155:137` switches the chain, `revoke` withdraws the approval, `leave` goes offline for 5 s, `end` ends the session, `quit` exits. `pnpm wallet --resume` continues after a restart.
 
 Test keys only: they are generated and kept in plain text in `.walletpair-wallet.json`. Transactions are signed, never broadcast.
 
@@ -78,12 +76,12 @@ Test keys only: they are generated and kept in plain text in `.walletpair-wallet
 |---|---|
 | `pnpm test` | Unit, property and conformance tests (vitest): the spec's test vectors, the client against the reference Wallet (`test/wallet/`) in memory, the page providers, fast-check properties of every parser and check |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:integration` | The extension's session and router against the reference Wallet over the real PeerConnect client and a real relay |
-| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e` | Chrome with the built extension; a test dApp using viem, TronWeb's wallet adapter and Solana's wallet adapter; the reference Wallet as the phone |
+| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e` | Chrome with the built extension; a test dApp using viem; the reference Wallet as the phone |
 | `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:firefox` | The same core flows in the installed Firefox |
-| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:demo` | The website's `/demo` (built site in workerd) with the extension in Chrome: pairing, approving and verifying on all three networks by clicking the page |
-| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:cli` | Chrome and the test dApp with the CLI wallet as a separate process, its prompts answered on its stdin, on all three networks |
+| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:demo` | The website's `/demo` (built site in workerd) with the extension in Chrome: pairing, approving and verifying by clicking the page |
+| `PEERCONNECT_RELAY_BIN=… pnpm test:e2e:cli` | Chrome and the test dApp with the CLI wallet as a separate process, its prompts answered on its stdin |
 | `PEERCONNECT_RELAY_BIN=… pnpm bench` | Latency and throughput of WalletPair over PeerConnect on loopback |
-| `npx tsx test/vectors/generate.ts` | Regenerates `spec/test-vectors/{evm,tron,solana}.json` with viem, TronWeb and web3.js |
+| `npx tsx test/vectors/generate.ts` | Regenerates `spec/test-vectors/evm.json` with viem |
 
 `PEERCONNECT_RELAY_BIN` is a `peerconnect-relay` binary (`cargo build --release -p peerconnect-relay` in PeerConnect); `PEERCONNECT_RELAY=ws://…` uses a running relay instead. Without either, the relay tests are skipped.
 

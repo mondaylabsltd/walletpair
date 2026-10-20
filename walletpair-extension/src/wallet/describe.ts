@@ -3,10 +3,7 @@
 // website's demo wallet.
 
 import { methodName, NAMESPACE_NAMES } from '../lib/display';
-import { base64Decode, bytesToHex, hexToBytes, isUtf8 } from '../lib/walletpair/codec';
-import { parseTransaction } from '../lib/walletpair/networks/solana-transaction';
-import { tronAccount } from '../lib/walletpair/networks/tron';
-import { parseTronRaw } from '../lib/walletpair/networks/tron-transaction';
+import { bytesToHex, hexToBytes, isUtf8 } from '../lib/walletpair/codec';
 import type { ConnectParams, Request } from '../lib/walletpair/protocol';
 
 export interface Description {
@@ -20,12 +17,6 @@ export interface Description {
 export function showBytes(bytes: Uint8Array): string {
   return isUtf8(bytes) ? new TextDecoder().decode(bytes) : `0x${bytesToHex(bytes)}`;
 }
-
-const TRON_CONTRACTS: Record<number, string> = {
-  1: 'TRX transfer (TransferContract)',
-  2: 'TRC-10 transfer (TransferAssetContract)',
-  31: 'Contract call (TriggerSmartContract)',
-};
 
 export function describeConnect(params: ConnectParams, offered: string[], origin?: string): Description {
   const fields: [string, string][] = [['DApp', params.name]];
@@ -68,39 +59,6 @@ export function describeRequest(request: Request): Description {
       case 'wallet_switchEthereumChain':
       case 'wallet_addEthereumChain':
         add('Chain', `eip155:${BigInt(p[0].chainId)}${p[0].chainName ? ` (${p[0].chainName})` : ''}`);
-        break;
-      case 'tron_signMessage':
-        add('Account', p.account);
-        add('Message', showBytes(hexToBytes(p.message)!));
-        break;
-      case 'tron_signTransaction': {
-        const tx = parseTronRaw(hexToBytes(p.transaction)!);
-        const owner = tx?.contract.owner ? tronAccount(tx.contract.owner) : 'unknown';
-        add('Account', p.account);
-        add('Contract', TRON_CONTRACTS[tx?.contract.type ?? -1] ?? `Contract type ${tx?.contract.type}`);
-        add('Owner', owner === p.account ? owner : `${owner} (signing for another account: multi-signature)`);
-        if (tx?.expiration) add('Expires', new Date(Number(tx.expiration)).toISOString());
-        break;
-      }
-      case 'tron_switchChain':
-        add('Chain', p.chain);
-        break;
-      case 'solana_signTransactions':
-      case 'solana_signAndSendTransaction': {
-        const list: string[] = p.transactions ?? [p.transaction];
-        const parsed = list.map((t) => parseTransaction(base64Decode(t)!));
-        add('Account', p.account);
-        if (p.chain) add('Chain', p.chain);
-        add(
-          'Transactions',
-          parsed.map((t) => `${t?.version === 0 ? 'v0' : t?.version}, ${t?.numRequiredSignatures} signer(s)`).join('; '),
-        );
-        if (request.method === 'solana_signAndSendTransaction') add('Sent', 'after signing');
-        break;
-      }
-      case 'solana_signMessage':
-        add('Account', p.account);
-        add('Message', showBytes(base64Decode(p.message)!));
         break;
       default:
         add('Params', JSON.stringify(p));

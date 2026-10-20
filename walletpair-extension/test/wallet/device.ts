@@ -3,8 +3,6 @@
 
 import { connect, Room, type Connection } from '../../vendor/peerconnect/index.js';
 import { evmSigner } from '../../src/wallet/evm';
-import { solanaSigner } from '../../src/wallet/solana';
-import { tronSigner } from '../../src/wallet/tron';
 import { ReferenceWallet, emptyStore, type Prompts, type WalletStore } from '../../src/wallet/wallet';
 
 export class WalletDevice {
@@ -13,8 +11,6 @@ export class WalletDevice {
   conn!: Connection;
   wallet!: ReferenceWallet;
   readonly evm = evmSigner();
-  readonly tron = tronSigner();
-  readonly solana = solanaSigner();
 
   constructor(
     uri: string,
@@ -34,7 +30,7 @@ export class WalletDevice {
     this.conn.addEventListener('paired', () => (this.record = this.conn.room.toString()));
     this.wallet = new ReferenceWallet(this.conn, {
       name: 'Reference Wallet',
-      signers: [this.evm, this.tron, this.solana],
+      signers: [this.evm],
       prompts: this.prompts,
       store: this.store,
     });

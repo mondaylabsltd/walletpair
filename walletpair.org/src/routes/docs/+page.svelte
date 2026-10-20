@@ -7,8 +7,7 @@
 <p>
 	WalletPair lets a dApp use a Wallet on another device. It is a short list of functions, each with
 	a name, an input and an output, that a dApp calls on a Wallet, and one event the Wallet sends
-	back. It covers EVM chains, TRON and Solana; each network is one document, so others can be added
-	without changing the rest.
+	back. It supports Ethereum and other EVM chains only.
 </p>
 
 <p>
@@ -29,8 +28,8 @@
 		the Wallet, and the dApp receives the accounts and active chain of each approved network.
 	</li>
 	<li>
-		The dApp calls functions such as <code>personal_sign</code>, <code>tron_signTransaction</code> or
-		<code>solana_signTransactions</code>. The Wallet asks the user, then answers.
+		The dApp calls functions such as <code>personal_sign</code> or
+		<code>eth_sendTransaction</code>. The Wallet asks the user, then answers.
 	</li>
 	<li>Whenever accounts or chains change, the Wallet sends a <code>state</code> event.</li>
 	<li>Either side ends the session by closing the room.</li>
@@ -56,19 +55,6 @@
 				<code>wallet_switchEthereumChain</code>, <code>wallet_addEthereumChain</code>
 			</td>
 		</tr>
-		<tr>
-			<td>TRON</td>
-			<td>
-				<code>tron_signTransaction</code>, <code>tron_signMessage</code>, <code>tron_switchChain</code>
-			</td>
-		</tr>
-		<tr>
-			<td>Solana</td>
-			<td>
-				<code>solana_signTransactions</code>, <code>solana_signAndSendTransaction</code>,
-				<code>solana_signMessage</code>
-			</td>
-		</tr>
 	</tbody>
 </table>
 
@@ -89,10 +75,8 @@
 
 <p>
 	With the <a href="/docs/install-extension">browser extension</a> installed, your dApp needs no
-	changes. The extension offers each network the way its applications look for wallets: an EIP-1193
-	provider announced through EIP-6963 for EVM chains, a TIP-1193 provider and <code>tronWeb</code> for
-	TRON, and a Wallet Standard wallet for Solana. wagmi, viem, ethers, TRON's wallet adapters and
-	Solana's wallet adapter find it like any installed wallet.
+	changes. The extension offers an EIP-1193 provider announced through EIP-6963, the way EVM
+	applications look for wallets. wagmi, viem and ethers find it like any installed wallet.
 </p>
 
 <h2>For Wallet developers</h2>

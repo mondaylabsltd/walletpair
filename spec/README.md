@@ -27,8 +27,6 @@ Each network specification adds one CAIP-2 namespace: its chains and accounts, i
 | Namespace | Specification | DApp-facing interface |
 |---|---|---|
 | `eip155` | [EVM](./networks/evm.md) | EIP-1193 provider, EIP-6963 discovery |
-| `tron` | [TRON](./networks/tron.md) | TIP-1193 provider, TIP-6963 discovery, TronLink compatibility |
-| `solana` | [Solana](./networks/solana.md) | Wallet Standard |
 
 A new network is a new document in `networks/`; the core does not change.
 

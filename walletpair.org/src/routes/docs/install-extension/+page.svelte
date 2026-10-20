@@ -15,7 +15,7 @@ pnpm build`;
 <h1>Install the Browser Extension</h1>
 
 <p>
-	The WalletPair extension lets EVM, TRON and Solana dApps in your browser use the wallet on your
+	The WalletPair extension lets EVM dApps in your browser use the wallet on your
 	phone. It is not yet available in the Chrome Web Store or from Mozilla, so install it from GitHub.
 </p>
 

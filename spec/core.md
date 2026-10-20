@@ -1,6 +1,6 @@
 # WalletPair Core, version 2
 
-WalletPair lets a DApp use a Wallet on another device. It defines the functions a DApp calls on a Wallet, each with a name, an input and an output, and one event a Wallet sends back. This document defines what every network shares. Each network (EVM, TRON, Solana) adds its own functions in a [network specification](./README.md#networks).
+WalletPair lets a DApp use a Wallet on another device. It defines the functions a DApp calls on a Wallet, each with a name, an input and an output, and one event a Wallet sends back. This document defines what every network shares. Each network adds its own functions in a [network specification](./README.md#networks).
 
 WalletPair is carried by **PeerConnect** (protocol version 1). PeerConnect provides the relay, pairing, end-to-end encryption, reconnection and reliable, ordered delivery. WalletPair defines only the messages inside it, and runs no servers.
 
@@ -13,7 +13,7 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are to be interpreted a
 | DApp side | The peer that asks: a web application, or a browser extension acting for web applications. PeerConnect inviter. |
 | Wallet | The peer that holds keys and answers. PeerConnect joiner. |
 | Session | A PeerConnect room between one DApp side and one Wallet. |
-| Namespace | A family of networks, named as in CAIP-2: `eip155` (EVM), `tron`, `solana`. |
+| Namespace | A family of networks, named as in CAIP-2, such as `eip155` (EVM). |
 | Chain | One network in a namespace, as a CAIP-2 chain ID such as `eip155:1`. |
 | Session state | What the DApp side may use: for each approved namespace, the active chain and the approved accounts (§4.2). |
 
@@ -118,7 +118,7 @@ Starts the session: the DApp side introduces itself and asks for namespaces. The
 Input:
 
 ```json
-[{ "name": "Example DApp", "url": "https://app.example", "icon": "https://app.example/icon.png", "namespaces": ["eip155", "solana"] }]
+[{ "name": "Example DApp", "url": "https://app.example", "icon": "https://app.example/icon.png", "namespaces": ["eip155"] }]
 ```
 
 | Member | Rules |
@@ -134,8 +134,7 @@ Output:
 {
   "wallet": { "name": "Example Wallet", "icon": "https://wallet.example/icon.png" },
   "state": {
-    "eip155": { "chain": "eip155:1", "accounts": ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"] },
-    "solana": { "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "accounts": ["7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv"] }
+    "eip155": { "chain": "eip155:1", "accounts": ["0xd8da6bf26964af9d7eed9e03e53415d37aa96045"] }
   }
 }
 ```

@@ -28,11 +28,6 @@ function bytesOf(c: MessageCase): Uint8Array {
 
 const SAMPLE: SessionState = {
   eip155: { chain: 'eip155:1', accounts: ['0xd8da6bf26964af9d7eed9e03e53415d37aa96045'] },
-  tron: { chain: 'tron:728126428', accounts: ['TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7'] },
-  solana: {
-    chain: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
-    accounts: ['7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv'],
-  },
 };
 
 describe('core vectors: Wallet receives', () => {

@@ -9,7 +9,7 @@
 <section class="demo">
 	<h1>Demo wallet</h1>
 	<p class="intro">
-		A WalletPair wallet for EVM, TRON and Solana that runs in this page, standing in for the wallet on your phone.
+		A WalletPair wallet for EVM chains that runs in this page, standing in for the wallet on your phone.
 		Connect any dApp in another tab with the <a href="/docs/install-extension">WalletPair extension</a>, copy the
 		pairing link from the extension's panel, and paste it here. Test keys only: they are made in this browser, and
 		transactions are signed, never sent.

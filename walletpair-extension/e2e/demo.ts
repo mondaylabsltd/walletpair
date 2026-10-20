@@ -1,8 +1,7 @@
 // The website's demo in a real browser: walletpair.org's /demo page served by
 // workerd (the built site), the built extension in Chrome, and a PeerConnect
 // relay. The test clicks through it as a visitor would: Connect in the demo
-// dApp, paste the extension's link into the demo wallet, approve there, on
-// all three networks.
+// dApp, paste the extension's link into the demo wallet, approve there.
 //
 //   pnpm --dir ../walletpair.org build && pnpm build
 //   PEERCONNECT_RELAY_BIN=… tsx e2e/demo.ts
@@ -128,38 +127,6 @@ async function main(): Promise<void> {
     await step('Switching the network in the demo wallet reaches the dApp', async () => {
       await page.select('select[aria-label="EVM network"]', 'eip155:8453');
       await page.waitForFunction(() => document.querySelector('section.network .who')?.textContent?.includes('chain 8453'));
-    });
-
-    console.log('TRON');
-    await step('Connect (already approved), Sign message, Sign transaction: verified', async () => {
-      await clickDapp(page, 'TRON', 'Connect');
-      assert.match((await result(page, ++n)).text, /TRON · Connect T[1-9A-HJ-NP-Za-km-z]{33} on 0x2b6653dc/);
-      await clickDapp(page, 'TRON', 'Sign message');
-      await answer(page, 'Sign message');
-      assert.equal((await result(page, ++n)).verified, true);
-      await clickDapp(page, 'TRON', 'Sign transaction');
-      await answer(page, 'Sign transaction');
-      assert.equal((await result(page, ++n)).verified, true);
-    });
-    await step('Switch network (TIP-3326)', async () => {
-      await clickDapp(page, 'TRON', 'Switch network');
-      await answer(page, 'Switch network');
-      assert.match((await result(page, ++n)).text, /now on Nile/);
-    });
-
-    console.log('Solana');
-    await step('Connect, Sign message, Sign transaction: verified; Sign and send', async () => {
-      await clickDapp(page, 'Solana', 'Connect');
-      await result(page, ++n);
-      await clickDapp(page, 'Solana', 'Sign message');
-      await answer(page, 'Sign message');
-      assert.equal((await result(page, ++n)).verified, true);
-      await clickDapp(page, 'Solana', 'Sign transaction');
-      await answer(page, 'Sign transaction');
-      assert.equal((await result(page, ++n)).verified, true);
-      await clickDapp(page, 'Solana', 'Sign and send');
-      await answer(page, 'Send transaction');
-      assert.match((await result(page, ++n)).text, /Solana · Sign and send [1-9A-HJ-NP-Za-km-z]{64,88}/);
     });
 
     if (process.env.SCREENSHOT) {

@@ -92,23 +92,23 @@ describe('sites', () => {
   it('grants namespaces per origin without losing concurrent grants', async () => {
     await Promise.all([
       grantSite('https://a.example', 'eip155'),
-      grantSite('https://a.example', 'solana'),
-      grantSite('https://b.example', 'tron'),
+      grantSite('https://a.example', 'example'),
+      grantSite('https://b.example', 'example'),
       grantSite('https://a.example', 'eip155'),
     ]);
-    expect(await getSites()).toEqual({ 'https://a.example': ['eip155', 'solana'], 'https://b.example': ['tron'] });
+    expect(await getSites()).toEqual({ 'https://a.example': ['eip155', 'example'], 'https://b.example': ['example'] });
   });
 
   it('revokes one namespace or a whole site', async () => {
     await grantSite('https://a.example', 'eip155');
-    await grantSite('https://a.example', 'tron');
-    await grantSite('https://b.example', 'tron');
+    await grantSite('https://a.example', 'example');
+    await grantSite('https://b.example', 'example');
     await revokeSite('https://a.example', 'eip155');
-    expect(await getSites()).toEqual({ 'https://a.example': ['tron'], 'https://b.example': ['tron'] });
-    await revokeSite('https://a.example', 'tron');
+    expect(await getSites()).toEqual({ 'https://a.example': ['example'], 'https://b.example': ['example'] });
+    await revokeSite('https://a.example', 'example');
     await revokeSite('https://b.example');
     expect(await getSites()).toEqual({});
-    await grantSite('https://c.example', 'tron');
+    await grantSite('https://c.example', 'example');
     await clearSites();
     expect(await getSites()).toEqual({});
   });

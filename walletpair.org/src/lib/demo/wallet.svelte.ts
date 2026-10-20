@@ -8,8 +8,6 @@
 import { connect, Room, type Connection } from 'walletpair-extension/peerconnect';
 import { describeConnect, describeRequest, type Description } from 'walletpair-extension/wallet/describe';
 import { evmSigner } from 'walletpair-extension/wallet/evm';
-import { solanaSigner } from 'walletpair-extension/wallet/solana';
-import { tronSigner } from 'walletpair-extension/wallet/tron';
 import { ReferenceWallet, type Prompts, type Signer, type WalletStore } from 'walletpair-extension/wallet/wallet';
 import type { Response } from 'walletpair-extension/walletpair/protocol';
 
@@ -23,21 +21,11 @@ export const CHAINS: Record<string, [chain: string, name: string][]> = {
 		['eip155:8453', 'Base'],
 		['eip155:42161', 'Arbitrum'],
 		['eip155:11155111', 'Sepolia']
-	],
-	tron: [
-		['tron:728126428', 'Mainnet'],
-		['tron:3448148188', 'Nile'],
-		['tron:2494104990', 'Shasta']
-	],
-	solana: [
-		['solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'Mainnet'],
-		['solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', 'Devnet'],
-		['solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z', 'Testnet']
 	]
 };
 
 interface Saved {
-	keys: { evm: string; tron: string; solana: string };
+	keys: { evm: string };
 	record?: string;
 	approved: string[];
 	chains: Record<string, string>;
@@ -93,7 +81,7 @@ export class DemoWallet {
 	constructor() {
 		const saved = load();
 		this.#saved = saved ?? {
-			keys: { evm: randomKey(), tron: randomKey(), solana: randomKey() },
+			keys: { evm: randomKey() },
 			approved: [],
 			chains: {},
 			records: []
@@ -177,7 +165,7 @@ export class DemoWallet {
 	/** New test keys, when no session is open. */
 	newKeys(): void {
 		if (this.paired) return;
-		this.#saved.keys = { evm: randomKey(), tron: randomKey(), solana: randomKey() };
+		this.#saved.keys = { evm: randomKey() };
 		this.#makeSigners();
 		this.#save();
 		this.#refresh();
@@ -186,11 +174,7 @@ export class DemoWallet {
 
 	#makeSigners(): void {
 		const { keys } = this.#saved;
-		this.#signers = [
-			evmSigner(`0x${keys.evm}`, 'eip155:1'),
-			tronSigner(keys.tron, 'tron:728126428'),
-			solanaSigner(keys.solana, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp')
-		];
+		this.#signers = [evmSigner(`0x${keys.evm}`, 'eip155:1')];
 		for (const signer of this.#signers) this.#store.chains[signer.network.namespace] ??= signer.chain;
 	}
 
