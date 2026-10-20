@@ -55,6 +55,7 @@ A DApp side exposes this namespace as an EIP-1193 provider and SHOULD announce i
 | `eth_accounts` | The approved accounts, or `[]`. Answered locally. |
 | `eth_chainId` | The active chain's EIP-155 chain ID as a quantity (`eip155:137` → `0x89`). Answered locally. |
 | `net_version` | The active chain's EIP-155 chain ID in decimal. Answered locally. |
+| `wallet_revokePermissions` | Locally: the site stops seeing `eip155` accounts until it asks again; the session is unchanged. Answers `null`. |
 | The functions in §2 | Forwarded to the Wallet. |
 | Read-only node methods (`eth_call`, `eth_getBalance`, `eth_blockNumber`, …) | The DApp side's own RPC endpoint for the active chain. They never cross WalletPair. |
 | Anything else | `4200` |

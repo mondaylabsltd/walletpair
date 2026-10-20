@@ -179,13 +179,19 @@ export function createTron(bridge: Bridge) {
     request: (args: { method: string; params?: unknown }) => provider.request(args),
   };
 
+  const updateAddress = () => {
+    const current = state();
+    tronWeb.defaultAddress = current
+      ? { base58: current.accounts[0], hex: tronHexAddress(current.accounts[0]) ?? false }
+      : { base58: false, hex: false };
+  };
+  updateAddress();
+
   bridge.subscribe((previous, wasLive) => {
     const before = previous.tron;
     const after = state();
     // defaultAddress first: adapters re-read it when they hear an event.
-    tronWeb.defaultAddress = after
-      ? { base58: after.accounts[0], hex: tronHexAddress(after.accounts[0]) ?? false }
-      : { base58: false, hex: false };
+    updateAddress();
     if (!before && after) emit('connect', { chainId: tronChainId(after.chain) });
     if (before && after && before.chain !== after.chain) emit('chainChanged', { chainId: tronChainId(after.chain) });
     if ((before?.accounts ?? []).join() !== (after?.accounts ?? []).join()) emit('accountsChanged', [...(after?.accounts ?? [])]);

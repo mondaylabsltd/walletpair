@@ -83,9 +83,10 @@ Its events follow TIP-1193: `connect` with `{ chainId }`, `chainChanged` with `{
 |---|---|
 | `defaultAddress` | `{ base58, hex }` of the first approved account; updated before `accountsChanged` is emitted |
 | `ready` | Whether the site is approved |
+| `fullNode`, `solidityNode`, `eventServer` | `{ host }`: the active network's public TronGrid endpoint, for applications that tell networks apart this way. The signing object never contacts them. |
 | `trx.sign(transaction)`, `trx.signTransaction`, `trx.multiSign(transaction, _, permissionId)` | `tron_signTransaction` with the transaction's `raw_data_hex`, after checking that its `txID` is SHA-256 of it. Resolves with the transaction and the signature appended. `multiSign` requires the transaction to already carry its `Permission_id`. |
 | `trx.signMessageV2(message)` | `tron_signMessage` with the UTF-8 bytes of the string. Resolves with the signature, `0x`-prefixed. |
-| `trx.sign(string)`, `trx.signMessage(string)`, `trx._signTypedData`, `trx.signTypedData` | Refused (§2.2) |
+| `trx.sign(string)`, `trx.signMessage(string)`, `trx._signTypedData`, `trx.signTypedData` | Refused with code `4200` (§2.2) |
 
 A user rejection rejects these promises with the string `Confirmation declined by user`, as TRON applications expect. The signing object does not query or broadcast to nodes: applications build and broadcast transactions with their own TronWeb instance.
 

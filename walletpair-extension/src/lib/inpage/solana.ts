@@ -151,6 +151,7 @@ export function createSolanaWallet(bridge: Bridge) {
     }),
   };
 
+  refresh();
   bridge.subscribe(() => {
     if (!refresh()) return;
     for (const listener of [...listeners]) {
