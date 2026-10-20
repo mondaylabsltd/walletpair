@@ -73,6 +73,8 @@ TRON web applications reach wallets in two ways, and a DApp side offers both.
 |---|---|
 | `eth_requestAccounts` (TIP-1102) | `walletpair_connect` with `tron` among its namespaces, unless `tron` is already approved; then the approved accounts |
 | `wallet_switchEthereumChain` (TIP-3326) with `[{ chainId }]` | `tron_switchChain` with the corresponding chain |
+| `eth_chainId` | The active chain's TIP-1193 `chainId`, answered locally (`0x2b6653dc` until `tron` is approved) |
+| `wallet_revokePermissions` | Locally: the site stops seeing `tron` accounts until it asks again; the session is unchanged. Answers `null`. |
 | Anything else | `4200` |
 
 Its events follow TIP-1193: `connect` with `{ chainId }`, `chainChanged` with `{ chainId }` (an object, unlike EIP-1193), `accountsChanged` with the account list (empty when `tron` leaves the state), and `disconnect` with code `4900` when the session ends. Its `tronWeb` property is `false` until the site is approved, then the signing object below.

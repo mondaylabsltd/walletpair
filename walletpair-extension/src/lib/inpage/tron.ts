@@ -137,6 +137,11 @@ export function createTron(bridge: Bridge) {
           return requestAccounts();
         case 'tron_requestAccounts':
           return legacyRequestAccounts();
+        case 'eth_chainId':
+          return tronChainId(state()?.chain ?? 'tron:728126428');
+        case 'wallet_revokePermissions':
+          await bridge.call({ op: 'disconnect', namespace: 'tron' });
+          return null;
         case 'wallet_switchEthereumChain': {
           const target = Array.isArray(args.params) ? (args.params[0] as { chainId?: unknown })?.chainId : undefined;
           const chain = typeof target === 'string' ? tronChainOf(target) : null;

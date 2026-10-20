@@ -186,6 +186,9 @@ describe('TRON', () => {
     expect(calls.at(-1)).toEqual({ op: 'call', method: 'tron_switchChain', params: { chain: 'tron:3448148188' } });
     await expect(provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: 'nile' }] })).rejects.toMatchObject({ code: -32602 });
     await expect(provider.request({ method: 'tron_signMessage' })).rejects.toMatchObject({ code: 4200 });
+    expect(await provider.request({ method: 'eth_chainId' })).toBe('0x2b6653dc');
+    expect(await provider.request({ method: 'wallet_revokePermissions' })).toBeNull();
+    expect(calls.at(-1)).toEqual({ op: 'disconnect', namespace: 'tron' });
     set({ tron: TRON });
     set({ tron: { ...TRON, chain: 'tron:3448148188' } });
     expect(events).toEqual([

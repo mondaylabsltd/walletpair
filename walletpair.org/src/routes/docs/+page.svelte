@@ -83,8 +83,10 @@
 	With the <a href="/docs/install-extension">browser extension</a> installed, your dApp needs no
 	changes. The extension offers each network the way its applications look for wallets: an EIP-1193
 	provider announced through EIP-6963 for EVM chains, a TIP-1193 provider and <code>tronWeb</code> for
-	TRON, and a Wallet Standard wallet for Solana. wagmi, viem, ethers, TRON's wallet adapters and
-	Solana's wallet adapter find it like any installed wallet.
+	TRON, and a Wallet Standard wallet for Solana. wagmi, viem, ethers and Solana's wallet adapter find
+	it like any installed wallet. TRON dApps built on <code>@tronweb3/tronwallet-adapter</code> add
+	<code>WalletPairAdapter</code> (<code>@walletpair/tronwallet-adapter</code>) to their adapter list
+	to show WalletPair under its own name.
 </p>
 
 <h2>For Wallet developers</h2>

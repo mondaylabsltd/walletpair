@@ -5,6 +5,7 @@
 import { PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { StandardWalletAdapter } from '@solana/wallet-standard-wallet-adapter-base';
 import { TronLinkAdapter } from '@tronweb3/tronwallet-adapter-tronlink';
+import { WalletPairAdapter } from '../../walletpair-tron-adapter/src/index';
 import { getWallets } from '@wallet-standard/app';
 import { createWalletClient, custom, type EIP1193Provider } from 'viem';
 import { mainnet, polygon } from 'viem/chains';
@@ -32,6 +33,7 @@ let evmAccount: `0x${string}` | undefined;
 // ── TRON ──
 
 const tronAdapter = new TronLinkAdapter({ checkTimeout: 300, openTronLinkAppOnMobile: false, openUrlWhenWalletNotFound: false });
+const walletPairTron = new WalletPairAdapter({ checkTimeout: 1000, openUrlWhenWalletNotFound: false });
 
 // ── Solana ──
 
@@ -97,6 +99,14 @@ const dapp = {
   },
   tronSignMessage: (message: string) => tronAdapter.signMessage(message),
   tronSignTransaction: (transaction: unknown) => tronAdapter.signTransaction(transaction as never),
+
+  /** The WalletPair adapter: the name a TRON dApp's wallet list shows. */
+  async walletPairTronConnect(): Promise<{ name: string; address: string; network: unknown }> {
+    await walletPairTron.connect();
+    return { name: walletPairTron.name, address: walletPairTron.address!, network: await walletPairTron.network() };
+  },
+  walletPairTronSignMessage: (message: string) => walletPairTron.signMessage(message),
+  walletPairTronSignTransaction: (transaction: unknown) => walletPairTron.signTransaction(transaction as never),
 
   async solanaConnect(): Promise<string> {
     solana = solanaAdapter();

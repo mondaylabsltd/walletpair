@@ -5,7 +5,7 @@ The DApp side of [WalletPair](../spec/README.md) for every site in the browser: 
 | Network | What pages see | Specification |
 |---|---|---|
 | EVM | EIP-1193 provider, announced with EIP-6963; `window.ethereum` when no other wallet took it | [evm.md](../spec/networks/evm.md) §3 |
-| TRON | TIP-1193 provider announced with TIP-6963, a `tronWeb` signing object; `window.tron`, `window.tronLink`, `window.tronWeb` when no other wallet took them | [tron.md](../spec/networks/tron.md) §3 |
+| TRON | TIP-1193 provider announced with TIP-6963, a `tronWeb` signing object; `window.tron`, `window.tronLink`, `window.tronWeb` when no other wallet took them. dApps using TRON's wallet adapters list it as WalletPair with [`WalletPairAdapter`](../walletpair-tron-adapter/) | [tron.md](../spec/networks/tron.md) §3 |
 | Solana | A Wallet Standard wallet | [solana.md](../spec/networks/solana.md) §3 |
 
 ## Architecture
