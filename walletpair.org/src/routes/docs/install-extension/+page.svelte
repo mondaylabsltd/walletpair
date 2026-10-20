@@ -15,8 +15,8 @@ pnpm build`;
 <h1>Install the Browser Extension</h1>
 
 <p>
-	The WalletPair extension bridges any dApp to your wallet through the WalletPair protocol. It is
-	not yet available on the Chrome Web Store — you'll need to install it manually from GitHub.
+	The WalletPair extension lets EVM, TRON and Solana dApps in your browser use the wallet on your
+	phone. It is not yet available in the Chrome Web Store or from Mozilla, so install it from GitHub.
 </p>
 
 <h2 id="option-a">Option A: Download the Pre-built Release</h2>
@@ -73,6 +73,16 @@ pnpm build`;
 <p>
 	After building, the extension will be in <code>.output/chrome-mv3/</code>. Load that folder as an
 	unpacked extension following the same steps above (starting from step 3).
+</p>
+
+<h2 id="firefox">Firefox</h2>
+
+<p>
+	Download <code>walletpair-extension-firefox.zip</code> from the same release (or run
+	<code>pnpm build:firefox</code>) and unzip it. Open <code>about:debugging#/runtime/this-firefox</code>,
+	choose <strong>Load Temporary Add-on</strong> and select the <code>manifest.json</code> inside.
+	Firefox 128 or later is required. Firefox keeps an unsigned add-on only until it restarts; a signed
+	release is not available yet.
 </p>
 
 <h2 id="update">Updating</h2>

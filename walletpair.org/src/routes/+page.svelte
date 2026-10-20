@@ -7,7 +7,12 @@
 		{
 			icon: Braces,
 			title: 'Just Functions',
-			description: 'Nine functions and two events, each with a name, an input and an output.'
+			description: 'A short list of functions per network, each with a name, an input and an output.'
+		},
+		{
+			icon: Plug,
+			title: 'EVM, TRON and Solana',
+			description: 'EIP-1193, TIP-1193 and the Wallet Standard: existing dApps work unchanged.'
 		},
 		{
 			icon: ServerOff,
@@ -22,17 +27,12 @@
 		{
 			icon: Inbox,
 			title: 'Nothing Lost',
-			description: 'Requests wait while the Wallet is offline and arrive once, in order.'
+			description: 'Requests wait while the phone is offline and arrive once, in order.'
 		},
 		{
 			icon: KeyRound,
 			title: 'Zero Registration',
 			description: 'No API keys, project IDs or accounts. Scan a QR code and go.'
-		},
-		{
-			icon: Plug,
-			title: 'Works with Any dApp',
-			description: 'The extension is a standard EIP-1193 provider, discovered through EIP-6963.'
 		}
 	];
 
@@ -40,18 +40,19 @@
 walletpair:wss://relay.example.com#q3V0…
 
 // Then call functions
-→ {"id":"1","method":"walletpair_connect",
-   "params":[{"name":"Example dApp"}]}
+→ {"id":"1","method":"walletpair_connect","params":[{
+     "name":"Example dApp","namespaces":["eip155","solana"]}]}
 ← {"id":"1","result":{"wallet":{"name":"Example Wallet"},
-   "eip155":{"accounts":["0xd8da…6045"],"chainId":"0x1"}}}`;
+     "state":{"eip155":{"chain":"eip155:1","accounts":["0xd8da…"]},
+              "solana":{"chain":"solana:5eyk…","accounts":["7S3P…"]}}}}`;
 
 	const walletCode = `// Answer each call after asking the user
-→ {"id":"2","method":"personal_sign",
-   "params":["0x68656c6c6f","0xd8da…6045"]}
-← {"id":"2","result":"0x5d5f…1b"}
+→ {"id":"2","method":"tron_signMessage",
+   "params":{"account":"TLa2…","message":"68656c6c6f"}}
+← {"id":"2","result":{"signature":"5d5f…1b"}}
 
 // Tell the dApp when something changes
-← {"event":"chainChanged","data":"0x89"}`;
+← {"event":"state","data":{"eip155":{"chain":"eip155:137",…}}}`;
 </script>
 
 <!-- Hero -->
@@ -59,7 +60,7 @@ walletpair:wss://relay.example.com#q3V0…
 	<h1 class="hero-title">WalletPair</h1>
 	<p class="hero-sub">
 		Connect dApps to wallets.<br />
-		A few functions over an end-to-end encrypted link. No registration.
+		EVM, TRON and Solana, over an end-to-end encrypted link. No registration.
 	</p>
 	<div class="hero-actions">
 		<a href="/docs/install-extension" class="btn btn-primary"
@@ -96,7 +97,7 @@ walletpair:wss://relay.example.com#q3V0…
 		<div class="path-card">
 			<h3 class="path-title">For dApp Developers</h3>
 			<ul class="path-list">
-				<li>With the extension installed, your dApp needs no changes</li>
+				<li>With the extension installed, EVM, TRON and Solana dApps need no changes</li>
 				<li>Or show the invite yourself and call the functions directly</li>
 			</ul>
 			<pre class="code-block"><code>{dappCode}</code></pre>
@@ -106,7 +107,7 @@ walletpair:wss://relay.example.com#q3V0…
 			<h3 class="path-title">For Wallet Developers</h3>
 			<ul class="path-list">
 				<li>Scan the QR code and join the room with PeerConnect</li>
-				<li>Answer nine functions and send two events</li>
+				<li>Answer the functions of the networks you support, and send one event</li>
 			</ul>
 			<pre class="code-block"><code>{walletCode}</code></pre>
 			<a href="/docs/protocol" class="path-link">Read the protocol →</a>
